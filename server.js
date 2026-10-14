@@ -1,205 +1,126 @@
 const express = require('express');
-const Airtable = require('airtable');
 const { createClient } = require('@supabase/supabase-js');
-const { GoogleGenAI } = require('@google/genai');
+const axios = require('axios');
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
+const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID; // Add your Base ID in Render if using Airtable REST API
+const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'Messages';
 
-// ==========================================
-// 1. INITIALIZATION & CREDENTIAL CHECKS
-// ==========================================
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Initialize Airtable safely
-const airtableApiKey = process.env.AIRTABLE_API_KEY;
-const airtableBaseId = process.env.AIRTABLE_BASE_ID;
-let base = null;
-
-if (airtableApiKey && airtableBaseId) {
-  base = new Airtable({ apiKey: airtableApiKey }).base(airtableBaseId);
-  console.log('Airtable initialized successfully.');
-} else {
-  console.log('Airtable credentials missing. Running without Airtable client.');
-}
-
-// Initialize Supabase conditionally
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
-let supabase = null;
-
-if (supabaseUrl && supabaseKey) {
-  supabase = createClient(supabaseUrl, supabaseKey);
-  console.log('Supabase initialized successfully.');
-} else {
-  console.log('Supabase credentials missing. Running without Supabase client.');
-}
-
-// Initialize Google Gen AI Client
-const ai = new GoogleGenAI();
-
-// WhatsApp Configuration
-const whatsappToken = process.env.WHATSAPP_TOKEN;
-const whatsappPhoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-const whatsappVerifyToken = process.env.WHATSAPP_VERIFY_TOKEN || 'titan_os_secret_token';
-
-if (whatsappToken) {
-  console.log('WhatsApp token loaded successfully.');
-} else {
-  console.log('WhatsApp token missing.');
-}
-
-// ==========================================
-// 2. CORE & SYSTEM ROUTES
-// ==========================================
-
-// Root endpoint
-app.get('/', (req, res) => {
-  res.send('Titan OS Backend is running live!');
-});
-
-// Health check endpoint
+// Health Check Endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date() });
+  res.json({
+    status: 'ok',
+    model: GEMINI_MODEL
+  });
 });
 
-// ==========================================
-// 3. AI ENDPOINT (GEMINI)
-// ==========================================
-
-app.post('/api/generate', async (req, res) => {
-  try {
-    const { prompt } = req.body;
-    if (!prompt) {
-      return res.status(400).json({ error: 'Prompt is required' });
-    }
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-    });
-
-    res.json({ text: response.text });
-  } catch (error) {
-    console.error('Error generating content:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ==========================================
-// 4. AIRTABLE ENDPOINTS
-// ==========================================
-
-// Fetch records from any Airtable table
-app.get('/api/airtable/:tableName', async (req, res) => {
-  if (!base) {
-    return res.status(500).json({ error: 'Airtable client is not configured' });
-  }
-
-  try {
-    const { tableName } = req.params;
-    const records = await base(tableName).select({ maxRecords: 100 }).firstPage();
-    const formattedRecords = records.map((record) => ({
-      id: record.id,
-      fields: record.fields,
-    }));
-
-    res.json({ success: true, records: formattedRecords });
-  } catch (error) {
-    console.error('Airtable fetch error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Create a new record in an Airtable table
-app.post('/api/airtable/:tableName', async (req, res) => {
-  if (!base) {
-    return res.status(500).json({ error: 'Airtable client is not configured' });
-  }
-
-  try {
-    const { tableName } = req.params;
-    const { fields } = req.body;
-
-    if (!fields) {
-      return res.status(400).json({ error: 'Record fields object is required' });
-    }
-
-    const createdRecords = await base(tableName).create([{ fields }]);
-    res.json({ success: true, id: createdRecords[0].id, fields: createdRecords[0].fields });
-  } catch (error) {
-    console.error('Airtable create record error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ==========================================
-// 5. WHATSAPP CLOUD API ENDPOINTS
-// ==========================================
-
-// Webhook Verification (Required when setting up Meta Developer Portal)
-app.get('/webhook/whatsapp', (req, res) => {
+// Meta Webhook Verification (GET)
+app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode === 'subscribe' && token === whatsappVerifyToken) {
-    console.log('WhatsApp Webhook Verified!');
+  if (mode === 'subscribe' && token === WHATSAPP_VERIFY_TOKEN) {
+    console.log('Webhook verified successfully!');
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
   }
 });
 
-// Webhook Receiver (Receives incoming WhatsApp messages)
-app.post('/webhook/whatsapp', (req, res) => {
-  console.log('Incoming WhatsApp Webhook Payload:', JSON.stringify(req.body, null, 2));
-  res.sendStatus(200);
-});
-
-// Send WhatsApp Outbound Message
-app.post('/api/whatsapp/send', async (req, res) => {
-  const { recipientPhone, messageText } = req.body;
-
-  if (!recipientPhone || !messageText) {
-    return res.status(400).json({ error: 'recipientPhone and messageText are required' });
-  }
-
-  if (!whatsappToken || !whatsappPhoneId) {
-    return res.status(500).json({ error: 'WHATSAPP_TOKEN or WHATSAPP_PHONE_NUMBER_ID missing on server' });
-  }
+// Meta Webhook Inbound Handler (POST)
+app.post('/webhook', async (req, res) => {
+  res.status(200).send('EVENT_RECEIVED');
 
   try {
-    const response = await fetch(
-      `https://graph.facebook.com/v18.0/${whatsappPhoneId}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${whatsappToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: recipientPhone,
-          type: 'text',
-          text: { body: messageText },
-        }),
-      }
-    );
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
 
-    const data = await response.json();
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error('WhatsApp send error:', error);
-    res.status(500).json({ error: error.message });
+    if (!message) return;
+
+    const senderPhone = message.from;
+    const messageType = message.type;
+    console.log(`Received ${messageType} message from ${senderPhone}`);
+
+    let mediaUrl = null;
+    let textContent = '';
+
+    if (messageType === 'text') {
+      textContent = message.text?.body || '';
+    } else if (['image', 'audio', 'document'].includes(messageType)) {
+      const mediaId = message[messageType]?.id;
+      if (mediaId) {
+        const mediaRes = await axios.get(
+          `https://graph.facebook.com/v18.0/${mediaId}`,
+          { headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
+        );
+        mediaUrl = mediaRes.data?.url;
+      }
+    }
+
+    // 1. Insert into Supabase
+    const { error: dbError } = await supabase
+      .from('site_media')
+      .insert([
+        {
+          sender_phone: senderPhone,
+          media_type: messageType,
+          media_url: mediaUrl,
+          content: textContent,
+          created_at: new Date().toISOString()
+        }
+      ]);
+
+    if (dbError) {
+      console.error('Supabase storage error:', dbError.message);
+    } else {
+      console.log('Successfully logged event to Supabase');
+    }
+
+    // 2. Insert into Airtable (if Base ID is provided)
+    if (AIRTABLE_BASE_ID && AIRTABLE_API_KEY) {
+      try {
+        await axios.post(
+          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+          {
+            fields: {
+              'Sender Phone': senderPhone,
+              'Media Type': messageType,
+              'Content': textContent,
+              'Media URL': mediaUrl || ''
+            }
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        console.log('Successfully logged event to Airtable');
+      } catch (atErr) {
+        console.error('Airtable storage error:', atErr.response?.data || atErr.message);
+      }
+    }
+
+  } catch (err) {
+    console.error('Error handling webhook payload:', err.message);
   }
 });
 
-// ==========================================
-// 6. SERVER STARTUP
-// ==========================================
-
 app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT} using model gemini-2.5-flash`);
+  console.log(`Server listening on port ${PORT}`);
 });
