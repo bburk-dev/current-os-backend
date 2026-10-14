@@ -1,15 +1,13 @@
 {
-  "name": "current-os-backend",
+  "name": "my-render-app",
   "version": "1.0.0",
-  "description": "WhatsApp & Gemini integration backend",
+  "description": "",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
-    "@supabase/supabase-js": "^2.39.0",
-    "axios": "^1.6.2",
+    "@google/genai": "^0.1.1",
     "express": "^4.18.2"
   }
 }
