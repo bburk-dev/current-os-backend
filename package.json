@@ -1,15 +1,14 @@
 {
-  "name": "titan-os-backend",
+  "name": "current-os-backend",
   "version": "1.0.0",
-  "description": "Titan OS Middleware Service",
+  "description": "WhatsApp & Gemini integration backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@google/genai": "*",
-    "@supabase/supabase-js": "*",
-    "airtable": "*",
+    "@supabase/supabase-js": "^2.39.0",
+    "axios": "^1.6.2",
     "express": "^4.18.2"
   }
 }
