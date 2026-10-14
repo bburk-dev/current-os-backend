@@ -1,143 +1,155 @@
-const express = require('express');
-const { createClient } = require('@supabase/supabase-js');
-const axios = require('axios');
+import express from 'express';
+import fetch from 'node-fetch';
+import { createClient } from '@supabase/supabase-js';
 
 const app = express();
 app.use(express.json());
 
+// Configuration & Environment Variables
 const PORT = process.env.PORT || 3000;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
+const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || 'v21.0';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP';
-const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'tbl7kkVoyUVpKTdDS';
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
+const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'Inbound Messages';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'inbound-media';
 
+// Initialize Supabase Client
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Health Check Endpoint
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    model: GEMINI_MODEL
-  });
-});
+// Ensure Storage Bucket Exists and is Private
+async function initStorageBucket() {
+  try {
+    const { data: buckets, error: getError } = await supabase.storage.listBuckets();
+    if (getError) throw getError;
 
-// Meta Webhook Verification (GET)
+    const existingBucket = buckets.find((b) => b.name === STORAGE_BUCKET);
+
+    if (!existingBucket) {
+      const { error: createError } = await supabase.storage.createBucket(STORAGE_BUCKET, {
+        public: false,
+      });
+      if (createError) throw createError;
+      console.log(`[Storage] created private bucket ${STORAGE_BUCKET}`);
+    } else if (existingBucket.public) {
+      const { error: updateError } = await supabase.storage.updateBucket(STORAGE_BUCKET, {
+        public: false,
+      });
+      if (updateError) throw updateError;
+      console.log(`[Storage] bucket ${STORAGE_BUCKET} was PUBLIC; set to private`);
+    } else {
+      console.log(`[Storage] bucket ${STORAGE_BUCKET} confirmed private`);
+    }
+  } catch (err) {
+    console.error(`[Storage Error] Initialization failed: ${err.message}`);
+  }
+}
+
+// WhatsApp Webhook Verification Endpoint
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode === 'subscribe' && token === WHATSAPP_VERIFY_TOKEN) {
-    console.log('Webhook verified successfully!');
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
+  const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'titan_secret_token';
+
+  if (mode && token === VERIFY_TOKEN) {
+    console.log('[Webhook] Verification successful');
+    return res.status(200).send(challenge);
   }
+  return res.sendStatus(403);
 });
 
-// Meta Webhook Inbound Handler (POST)
+// WhatsApp Inbound Webhook Handler
 app.post('/webhook', async (req, res) => {
+  // Acknowledge Meta immediately with HTTP 200 to prevent retry loops
   res.status(200).send('EVENT_RECEIVED');
 
   try {
-    const entry = req.body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const message = value?.messages?.[0];
+    const body = req.body;
+    if (!body.entry || !body.entry[0].changes || !body.entry[0].changes[0].value.messages) {
+      return;
+    }
 
-    if (!message) return;
-
-    const senderPhone = message.from;
+    const message = body.entry[0].changes[0].value.messages[0];
+    const fromNumber = message.from;
+    const wamid = message.id;
     const messageType = message.type;
-    const messageId = message.id || `msg_${Date.now()}`;
-    console.log(`Received ${messageType} message (${messageId}) from ${senderPhone}`);
+
+    console.log(`[Webhook] Inbound ${messageType} message received from ${fromNumber} (wamid: ${wamid})`);
 
     let mediaUrl = null;
-    let mimeType = '';
-    let textContent = '';
-    let captionText = '';
 
-    if (messageType === 'text') {
-      textContent = message.text?.body || '';
-    } else if (['image', 'audio', 'document', 'voice'].includes(messageType)) {
-      const mediaObject = message[messageType];
-      captionText = mediaObject?.caption || '';
-      mimeType = mediaObject?.mime_type || '';
-      
-      const mediaId = mediaObject?.id;
-      if (mediaId) {
-        try {
-          const mediaRes = await axios.get(
-            `https://graph.facebook.com/v18.0/${mediaId}`,
-            { headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
-          );
-          mediaUrl = mediaRes.data?.url || null;
-        } catch (mediaErr) {
-          console.error('Failed to fetch Meta media URL:', mediaErr.message);
+    // Process Media Types (video, image, audio)
+    if (['video', 'image', 'audio'].includes(messageType)) {
+      const mediaId = message[messageType].id;
+      const mimeType = message[messageType].mime_type || '';
+      const extension = messageType === 'video' ? 'mp4' : messageType === 'image' ? 'jpg' : 'm4a';
+
+      // 1. Fetch Media URL from Meta Graph API
+      const metaRes = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${mediaId}`, {
+        headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
+      });
+      const metaData = await metaRes.json();
+
+      if (metaData.url) {
+        // 2. Download binary media stream from Meta
+        const binaryRes = await fetch(metaData.url, {
+          headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
+        });
+        const arrayBuffer = await binaryRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        // 3. Upload to Supabase Storage Bucket
+        const filePath = `${fromNumber}/${Date.now()}_${wamid}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .upload(filePath, buffer, { contentType: mimeType, upsert: true });
+
+        if (uploadError) {
+          console.error(`[Storage Error] Upload failed for ${filePath}:`, uploadError.message);
+        } else {
+          mediaUrl = `${SUPABASE_URL}/storage/v1/object/authenticated/${STORAGE_BUCKET}/${filePath}`;
+          console.log(`[Media] stored ${filePath}`);
         }
       }
     }
 
-    // 1. Dual-log to Supabase
-    const { error: dbError } = await supabase
-      .from('site_media')
-      .insert([
-        {
-          sender_phone: senderPhone,
-          media_type: messageType,
-          media_url: mediaUrl,
-          content: textContent || captionText,
-          created_at: new Date().toISOString()
-        }
-      ]);
+    // 4. Log payload to Airtable
+    const airtableFields = {
+      'Phone Number': fromNumber,
+      'Message Type': messageType,
+      'Message ID': wamid,
+      Timestamp: new Date().toISOString(),
+    };
 
-    if (dbError) {
-      console.error('Supabase storage error:', dbError.message);
-    } else {
-      console.log('Successfully logged event to Supabase');
+    if (mediaUrl) {
+      airtableFields['Media URL'] = mediaUrl;
     }
 
-    // 2. Dual-log to Airtable (Titan V4.3 Inbound Messages 2 Schema)
-    if (AIRTABLE_BASE_ID && AIRTABLE_API_KEY) {
-      try {
-        await axios.post(
-          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`,
-          {
-            fields: {
-              'Message ID': messageId,
-              'Whapi Chat ID': `${senderPhone}@s.whatsapp.net`,
-              'Whapi Message ID': messageId,
-              'Worker Phone Raw': senderPhone,
-              'Message Type': messageType,
-              'Mime Type': mimeType,
-              'Media URL': mediaUrl || '',
-              'Text Body': textContent,
-              'Caption Text': captionText,
-              'Raw Payload JSON': JSON.stringify(req.body)
-            }
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        console.log('Successfully logged event to Airtable');
-      } catch (atErr) {
-        console.error('Airtable storage error:', atErr.response?.data || atErr.message);
-      }
+    if (messageType === 'text' && message.text) {
+      airtableFields['Text Body'] = message.text.body;
     }
 
+    await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields: airtableFields }),
+    });
+
+    console.log(`[Airtable] Successfully logged message ${wamid}`);
   } catch (err) {
-    console.error('Error handling webhook payload:', err.message);
+    console.error('[Pipeline Error]', err.message);
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+// Start Server & Initialize Bucket
+app.listen(PORT, async () => {
+  console.log(`[Titan V4.3] listening on ${PORT} | graph=${GRAPH_API_VERSION}`);
+  await initStorageBucket();
 });
