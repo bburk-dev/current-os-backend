@@ -1,7 +1,7 @@
 {
-  "name": "my-render-app",
+  "name": "titan-os-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "Titan OS Middleware Service",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,6 +9,7 @@
   "dependencies": {
     "@google/genai": "*",
     "@supabase/supabase-js": "*",
+    "airtable": "*",
     "express": "^4.18.2"
   }
 }
