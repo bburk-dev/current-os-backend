@@ -12,8 +12,8 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID; // Add your Base ID in Render if using Airtable REST API
-const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'Messages';
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP';
+const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'tbl7kkVoyUVpKTdDS';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -53,25 +53,36 @@ app.post('/webhook', async (req, res) => {
 
     const senderPhone = message.from;
     const messageType = message.type;
-    console.log(`Received ${messageType} message from ${senderPhone}`);
+    const messageId = message.id || `msg_${Date.now()}`;
+    console.log(`Received ${messageType} message (${messageId}) from ${senderPhone}`);
 
     let mediaUrl = null;
+    let mimeType = '';
     let textContent = '';
+    let captionText = '';
 
     if (messageType === 'text') {
       textContent = message.text?.body || '';
-    } else if (['image', 'audio', 'document'].includes(messageType)) {
-      const mediaId = message[messageType]?.id;
+    } else if (['image', 'audio', 'document', 'voice'].includes(messageType)) {
+      const mediaObject = message[messageType];
+      captionText = mediaObject?.caption || '';
+      mimeType = mediaObject?.mime_type || '';
+      
+      const mediaId = mediaObject?.id;
       if (mediaId) {
-        const mediaRes = await axios.get(
-          `https://graph.facebook.com/v18.0/${mediaId}`,
-          { headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
-        );
-        mediaUrl = mediaRes.data?.url;
+        try {
+          const mediaRes = await axios.get(
+            `https://graph.facebook.com/v18.0/${mediaId}`,
+            { headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
+          );
+          mediaUrl = mediaRes.data?.url || null;
+        } catch (mediaErr) {
+          console.error('Failed to fetch Meta media URL:', mediaErr.message);
+        }
       }
     }
 
-    // 1. Insert into Supabase
+    // 1. Dual-log to Supabase
     const { error: dbError } = await supabase
       .from('site_media')
       .insert([
@@ -79,7 +90,7 @@ app.post('/webhook', async (req, res) => {
           sender_phone: senderPhone,
           media_type: messageType,
           media_url: mediaUrl,
-          content: textContent,
+          content: textContent || captionText,
           created_at: new Date().toISOString()
         }
       ]);
@@ -90,17 +101,23 @@ app.post('/webhook', async (req, res) => {
       console.log('Successfully logged event to Supabase');
     }
 
-    // 2. Insert into Airtable (if Base ID is provided)
+    // 2. Dual-log to Airtable (Titan V4.3 Inbound Messages 2 Schema)
     if (AIRTABLE_BASE_ID && AIRTABLE_API_KEY) {
       try {
         await axios.post(
-          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`,
           {
             fields: {
-              'Sender Phone': senderPhone,
-              'Media Type': messageType,
-              'Content': textContent,
-              'Media URL': mediaUrl || ''
+              'Message ID': messageId,
+              'Whapi Chat ID': `${senderPhone}@s.whatsapp.net`,
+              'Whapi Message ID': messageId,
+              'Worker Phone Raw': senderPhone,
+              'Message Type': messageType,
+              'Mime Type': mimeType,
+              'Media URL': mediaUrl || '',
+              'Text Body': textContent,
+              'Caption Text': captionText,
+              'Raw Payload JSON': JSON.stringify(req.body)
             }
           },
           {
