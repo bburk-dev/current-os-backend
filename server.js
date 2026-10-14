@@ -5,28 +5,30 @@ const { GoogleGenAI } = require('@google/genai');
 const app = express();
 app.use(express.json());
 
-// Set port dynamically for Render with fallback to 3000 locally
 const PORT = process.env.PORT || 3000;
 
-// Initialize Supabase Client (uses environment variables if present)
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Initialize Supabase conditionally so it won't crash if keys are missing
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
+let supabase = null;
 
-// Initialize Google Gen AI Client (uses process.env.GEMINI_API_KEY by default)
+if (supabaseUrl && supabaseKey) {
+  supabase = createClient(supabaseUrl, supabaseKey);
+} else {
+  console.log('Supabase credentials missing. Running without Supabase client.');
+}
+
+// Initialize Google Gen AI Client
 const ai = new GoogleGenAI();
 
-// Root route so visiting the base URL works
 app.get('/', (req, res) => {
   res.send('Titan OS Backend is running live!');
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date() });
 });
 
-// Example Gemini API endpoint
 app.post('/api/generate', async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -46,7 +48,6 @@ app.post('/api/generate', async (req, res) => {
   }
 });
 
-// Start the server
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT} using model gemini-2.5-flash`);
 });
