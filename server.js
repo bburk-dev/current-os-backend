@@ -34,7 +34,7 @@ async function initStorageBucket() {
   }
 }
 
-// Fetch actual field names from Airtable
+// Fetch actual field names from Airtable Meta API
 async function getAirtableFields() {
   try {
     const res = await fetch(`https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}/tables`, {
@@ -110,7 +110,7 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // Map of logical keys to all possible header variations in your table
+    // Map of logical keys to header variations
     const targetMappings = {
       phone: ['Wa Phone', 'Wa Phone Number', 'Phone Number', 'Phone', 'From'],
       media: ['Inbound Media URL', 'Media URL', 'Media', 'Attachment'],
@@ -139,4 +139,32 @@ app.post('/webhook', async (req, res) => {
     if (mediaUrl && mediaCol) airtablePayload[mediaCol] = mediaUrl;
     if (messageType === 'text' && message.text && bodyCol) airtablePayload[bodyCol] = message.text.body;
 
-    console.log(`[Airtable] Posting payload with detected columns:`, Object.keys(airtable
+    console.log(`[Airtable] Posting payload with detected columns:`, Object.keys(airtablePayload));
+
+    const airtableRes = await fetch(
+      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ fields: airtablePayload }),
+      }
+    );
+
+    const airtableData = await airtableRes.json();
+    if (airtableData.error) {
+      console.error(`[Airtable API Error] ${JSON.stringify(airtableData.error)}`);
+    } else {
+      console.log(`[Airtable] Successfully logged message ${wamid}`);
+    }
+  } catch (err) {
+    console.error('[Pipeline Error]', err.message);
+  }
+});
+
+app.listen(PORT, async () => {
+  console.log(`[Titan V4.3] listening on ${PORT} | graph=${GRAPH_API_VERSION}`);
+  await initStorageBucket();
+});
