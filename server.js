@@ -386,3 +386,131 @@ async function sendReply(to, r, worker) {
   }
   try {
     const verifiedList = r.verified_items.length > 0 ? r.verified_items.join(', ') : 'None explicitly confirmed';
+    const text =
+      `🤖 *Titan OS Update*\n` +
+      `*Worker:* ${worker ? worker.name : 'Team Member'}\n` +
+      `*Court/Project:* ${r.court_id}\n\n` +
+      `*Verified Milestones:* ${verifiedList}\n\n` +
+      `*Field Feedback:* ${r.field_feedback}`;
+
+    await axios.post(
+      `${GRAPH}/${WA_PHONE_ID}/messages`,
+      { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } },
+      { headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' } }
+    );
+    console.log('[Reply] sent intelligent feedback to WhatsApp');
+  } catch (err) {
+    console.error('[Reply] failed:', err.response?.data || err.message);
+  }
+}
+
+// ---------- Job Queue & Processing ----------
+let chain = Promise.resolve();
+const enqueue = (fn) => {
+  chain = chain.then(fn).catch((e) => console.error('[Job] unhandled:', e.message));
+};
+
+const seen = new Set();
+function remember(id) {
+  seen.add(id);
+  if (seen.size > 2000) seen.delete(seen.values().next().value);
+}
+
+async function processMessage(message, fullPayload) {
+  const messageId = message.id;
+  const sender = message.from;
+  const type = message.type;
+
+  if (seen.has(messageId) || (await inboundExists(messageId))) {
+    console.log(`[Dedup] skipping ${messageId}`);
+    return;
+  }
+  remember(messageId);
+
+  // 1. BOUNCER SECURITY GATE
+  const worker = await lookupWorker(sender);
+  if (!worker || !worker.active) {
+    console.warn(`[Bouncer] Rejected unauthorized/inactive sender: ${maskPhone(sender)}`);
+    return;
+  }
+  console.log(`[Bouncer] Authorized worker: ${worker.name} (${worker.role})`);
+
+  const media = ['audio', 'image', 'video'].includes(type) ? message[type] : null;
+  const caption = message.text?.body || media?.caption || '';
+  const mime = media ? baseMime(media.mime_type) : null;
+
+  // 2. Claim Inbound Message
+  const inboundId = await createInboundRow(
+    {
+      'Message ID': messageId,
+      'Caption Text': caption,
+      'Raw Payload JSON': JSON.stringify(fullPayload),
+    },
+    { 'Sender Phone': sender, 'Message Type': type }
+  );
+  if (!inboundId) return;
+
+  // 3. Media Upload
+  let buffer = null;
+  let storagePath = null;
+  if (media?.id) {
+    if (WA_TOKEN) {
+      try {
+        buffer = await downloadMedia(media.id);
+        console.log(`[Media] downloaded ${buffer.length} bytes`);
+        storagePath = await uploadToSupabase(buffer, mime, messageId);
+      } catch (err) {
+        console.error('[Media] download failed:', err.response?.data || err.message);
+      }
+    }
+    if (storagePath) await patchInbound(inboundId, { 'Media Path': storagePath });
+  }
+
+  // 4. Gemini Evaluation & Outbound Feedback
+  if (buffer || caption) {
+    const result = await evaluateWithGemini(buffer, mime, caption, worker);
+    if (result) {
+      await saveReport(inboundId, result);
+      await sendReply(sender, result, worker);
+    }
+  }
+
+  buffer = null; // Memory management
+}
+
+// ---------- Routes ----------
+app.get('/webhook', (req, res) => {
+  const ok =
+    WEBHOOK_VERIFY_TOKEN &&
+    req.query['hub.mode'] === 'subscribe' &&
+    req.query['hub.verify_token'] === WEBHOOK_VERIFY_TOKEN;
+  if (ok) return res.status(200).send(req.query['hub.challenge']);
+  return res.sendStatus(403);
+});
+
+app.post('/webhook', (req, res) => {
+  if (!validSignature(req)) {
+    console.warn('[Security] rejected POST with missing/invalid signature');
+    return res.sendStatus(401);
+  }
+  res.status(200).send('EVENT_RECEIVED');
+
+  for (const entry of req.body?.entry || []) {
+    for (const change of entry.changes || []) {
+      for (const message of change.value?.messages || []) {
+        enqueue(() => processMessage(message, req.body));
+      }
+    }
+  }
+});
+
+app.get('/', (_req, res) => res.status(200).send('Titan OS V4.3 Active'));
+
+// ---------- Start ----------
+app.listen(PORT, async () => {
+  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
+  if (!META_APP_SECRET) console.error('[Security] META_APP_SECRET missing');
+  if (!WEBHOOK_VERIFY_TOKEN) console.error('[Security] WEBHOOK_VERIFY_TOKEN missing');
+  console.log(`[Config] model=${GEMINI_MODEL} | autoReply=${AUTO_REPLY}`);
+  await ensurePrivateBucket();
+});
