@@ -1,12 +1,16 @@
-// Add this near the top of server.js with your other require statements
+const express = require('express');
+const axios = require('axios');
+const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenAI } = require('@google/genai');
 
-// Initialize Gemini client (uses GEMINI_API_KEY from Render environment)
+const app = express();
+app.use(express.json());
+
+// Initialize Gemini SDK (reads process.env.GEMINI_API_KEY automatically)
 const ai = new GoogleGenAI({});
 
 /**
  * Asynchronous Multimodal Evaluation Function
- * Runs in the background after sending 200 OK to Meta
  */
 async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') {
   try {
