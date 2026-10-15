@@ -1,298 +1,452 @@
+'use strict';
+
+const crypto = require('crypto');
 const express = require('express');
 const axios = require('axios');
 const { GoogleGenAI } = require('@google/genai');
 
+// ---------- Config (all from environment, no hardcoded IDs) ----------
+const GRAPH = 'https://graph.facebook.com/v21.0';
+const PORT = process.env.PORT || 3000;
+
+const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || '';
+const META_APP_SECRET = process.env.META_APP_SECRET || '';
+const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
+const WA_PHONE_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+
+const AIRTABLE_KEY = process.env.AIRTABLE_API_KEY || '';
+const AIRTABLE_BASE = process.env.AIRTABLE_BASE_ID || '';
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const BUCKET = process.env.SUPABASE_BUCKET || 'inbound-media';
+
+// Replies are OFF until worker lookup (Bouncer) exists. Set AUTO_REPLY=true to enable.
+const AUTO_REPLY = process.env.AUTO_REPLY === 'true';
+
+const MAX_MEDIA_BYTES = 40 * 1024 * 1024; // refuse anything bigger (RAM safety)
+const INLINE_LIMIT_BYTES = 10 * 1024 * 1024; // above this, use Gemini Files API
+
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
 const app = express();
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
+// ---------- Helpers ----------
+const maskPhone = (p) => (p ? `***${String(p).slice(-4)}` : 'unknown');
+const baseMime = (m) => String(m || '').split(';')[0].trim().toLowerCase();
+const safeKey = (s) => String(s).replace(/[^A-Za-z0-9._-]/g, '_');
 
-// Initialize Gemini SDK with Environment Variable
-const ai = new GoogleGenAI({ 
-  apiKey: process.env.GEMINI_API_KEY || '' 
+const EXT = {
+  'audio/ogg': 'ogg',
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/aac': 'aac',
+  'audio/amr': 'amr',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'video/mp4': 'mp4',
+  'video/3gpp': '3gp',
+};
+
+const ITEMS = [
+  'Foundation',
+  'Steel Frame - Bottom',
+  'Steel Frame - Top',
+  'Lower Mesh',
+  'Upper Mesh',
+  'Glass',
+  'Silicone',
+  'Turf',
+  'Sand',
+  'Net Posts',
+  'Net',
+  'Site Cleanliness & Final Walkthrough',
+];
+
+// ---------- Signature verification (Meta X-Hub-Signature-256) ----------
+function validSignature(req) {
+  if (!META_APP_SECRET) return false; // fail closed
+  const header = req.get('x-hub-signature-256') || '';
+  if (!header.startsWith('sha256=') || !req.rawBody) return false;
+  const expected = crypto
+    .createHmac('sha256', META_APP_SECRET)
+    .update(req.rawBody)
+    .digest('hex');
+  const got = header.slice('sha256='.length);
+  const a = Buffer.from(got, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// ---------- Supabase private storage (REST, no extra SDK) ----------
+const sbHeaders = () => ({
+  Authorization: `Bearer ${SUPABASE_KEY}`,
+  apikey: SUPABASE_KEY,
 });
 
-/**
- * Send Automated Outbound WhatsApp Message to Worker
- */
-async function sendWhatsAppReply(recipientPhone, aiResult) {
+async function ensurePrivateBucket() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.error('[Storage] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing: media will NOT be stored');
+    return false;
+  }
   try {
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '1099852093201368';
-    const token = process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
-
-    if (!token || !phoneNumberId) {
-      console.warn('[WhatsApp Reply Skipped]: Missing token or WHATSAPP_PHONE_NUMBER_ID');
-      return;
+    let bucket = null;
+    try {
+      const r = await axios.get(`${SUPABASE_URL}/storage/v1/bucket/${BUCKET}`, { headers: sbHeaders() });
+      bucket = r.data;
+    } catch (e) {
+      if (e.response && (e.response.status === 404 || e.response.status === 400)) bucket = null;
+      else throw e;
     }
-
-    const verifiedList = aiResult?.verified_items?.length > 0 
-      ? aiResult.verified_items.join(', ') 
-      : 'General media update';
-
-    const unverifiedList = aiResult?.unverified_items?.length > 0 
-      ? aiResult.unverified_items.join(', ') 
-      : 'None';
-
-    const messageText = `🤖 *Titan OS Logged*\n\n` +
-      `*Court:* ${aiResult?.court_id || 'General'}\n` +
-      `*Summary:* ${aiResult?.summary || 'Submission processed successfully'}\n\n` +
-      `*Verified in Media:* ${verifiedList}\n` +
-      `*Still Unverified:* ${unverifiedList}\n\n` +
-      `_(Logged automatically into Titan OS. Keep up the good work!)_`;
-
-    const payload = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: recipientPhone,
-      type: 'text',
-      text: { body: messageText }
-    };
-
-    await axios.post(
-      `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log('[WhatsApp Reply Sent Successfully]');
+    if (!bucket) {
+      await axios.post(
+        `${SUPABASE_URL}/storage/v1/bucket`,
+        { id: BUCKET, name: BUCKET, public: false },
+        { headers: sbHeaders() }
+      );
+      console.log(`[Storage] created private bucket "${BUCKET}"`);
+    } else if (bucket.public) {
+      await axios.put(
+        `${SUPABASE_URL}/storage/v1/bucket/${BUCKET}`,
+        { public: false },
+        { headers: sbHeaders() }
+      );
+      console.log(`[Storage] bucket "${BUCKET}" was public; set to private`);
+    }
+    console.log(`[Storage] bucket "${BUCKET}" ready (private)`);
+    return true;
   } catch (err) {
-    console.error('[WhatsApp Reply Error]:', err.response?.data || err.message);
+    console.error('[Storage] bucket check failed:', err.response?.data || err.message);
+    return false;
   }
 }
 
-/**
- * Asynchronous Multimodal Evaluation Function
- */
-async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') {
+async function uploadToSupabase(buffer, mime, messageId) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  const d = new Date();
+  const ext = EXT[mime] || 'bin';
+  const path = `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${safeKey(messageId)}.${ext}`;
   try {
-    if (!process.env.GEMINI_API_KEY) {
-      console.error('[Gemini Evaluation Error]: GEMINI_API_KEY missing from environment variables');
-      return null;
-    }
+    await axios.post(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, buffer, {
+      headers: { ...sbHeaders(), 'Content-Type': mime || 'application/octet-stream', 'x-upsert': 'true' },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    });
+    console.log(`[Storage] uploaded ${path} (${buffer.length} bytes)`);
+    return path;
+  } catch (err) {
+    console.error('[Storage] upload failed:', err.response?.data || err.message);
+    return null;
+  }
+}
 
-    const prompt = `
-You are Titan OS, an automated field operations AI for Padel court facilities.
-Analyze incoming worker media/audio/video/text (English, Spanish, Swahili, or Hindi).
+// ---------- WhatsApp media download ----------
+async function downloadMedia(mediaId) {
+  const meta = await axios.get(`${GRAPH}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${WA_TOKEN}` },
+  });
+  const size = Number(meta.data.file_size || 0);
+  if (size > MAX_MEDIA_BYTES) throw new Error(`media too large (${size} bytes)`);
+  const bin = await axios.get(meta.data.url, {
+    headers: { Authorization: `Bearer ${WA_TOKEN}` },
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_MEDIA_BYTES,
+  });
+  return Buffer.from(bin.data);
+}
 
-Evaluate the submission against these 12 Installation Items IN PARALLEL (items do NOT need to occur sequentially):
-1. Foundation (Poured, level, cured, good condition)
-2. Steel Frame - Bottom (Anchored, aligned)
-3. Steel Frame - Top (Superstructure secured)
-4. Lower Mesh (Panels mounted)
-5. Upper Mesh (Extensions/framing secured)
-6. Glass (Panes mounted safely, aligned)
-7. Silicone (Joints caulked/sealed)
-8. Turf (Carpet laid & seams glued flat)
-9. Sand (Infill spread evenly across turf)
-10. Net Posts (Plumb and anchored)
-11. Net (Strung & tensioned)
-12. Site Cleanliness & Final Walkthrough (Debris cleared)
+// ---------- Gemini evaluation ----------
+function buildPrompt(caption) {
+  return `
+You are Titan OS, a field-operations assistant for padel court installation.
+The submission may be a photo, a video, a voice note, or text, in English, Spanish, Swahili, or Hindi.
 
-IMPORTANT OPERATIONAL RULES:
-- Evaluate each item independently based on what is visually or audibly verified in the submission.
-- Capture all ambient worksite chatter, background conversations, voice audio, worker statements, or operational context in the summary.
-- Do NOT enforce a rigid step-by-step sequence or reject a submission because items were completed out of order.
-- Do NOT mention locks, latches, or generic hardware unless relevant to the 12 gates above.
+Evaluate ONLY what is clearly shown or said in this submission against these 12 items.
+Items may be reported in any order; do not require sequence.
+${ITEMS.map((n, i) => `${i + 1}.${n}`).join('\n')}
 
-Worker Caption/Text: "${captionText}"
+Rules:
+- Put an item in "verified_items" only if it is clearly visible or explicitly stated by the worker.
+- If you are unsure, leave the item out of "verified_items". Do not guess.
+- Analyze only the worker's submission and operational content. Do not transcribe or summarize unrelated background conversations.
+- "court_id": use a court number only if it is stated in the caption/speech or visible on signage; otherwise "Unknown".
+- If the submission is unclear, unrelated, or too poor to judge, use "NEEDS_REVIEW".
 
-Output ONLY valid JSON matching this schema:
+Worker caption: ${JSON.stringify(caption || '')}
+
+Return ONLY JSON:
 {
   "detected_language": "en | es | sw | hi",
-  "summary": "1-2 sentence executive summary including verified progress and ambient worksite details/chatter",
-  "verified_items": ["List of verified item names from the 12 items above"],
-  "unverified_items": ["List of remaining item names from the 12 items above"],
+  "summary": "1-2 sentences on the verified progress",
+  "verified_items": ["names from the 12 items"],
+  "unverified_items": ["remaining names from the 12 items"],
   "compliance_status": "PASSED | NEEDS_REVIEW",
   "court_id": "Court 1 | Court 2 | General | Unknown",
   "action_required": false
+}`;
 }
-`;
 
-    const contents = [];
+function cleanResult(raw) {
+  const pick = (arr) => (Array.isArray(arr) ? arr.filter((x) => ITEMS.includes(x)) : []);
+  const verified = pick(raw.verified_items);
+  return {
+    detected_language: raw.detected_language || 'unknown',
+    summary: String(raw.summary || '').slice(0, 1000),
+    verified_items: verified,
+    unverified_items: ITEMS.filter((i) => !verified.includes(i)),
+    compliance_status: raw.compliance_status === 'PASSED' ? 'PASSED' : 'NEEDS_REVIEW',
+    court_id: raw.court_id || 'Unknown',
+    action_required: raw.action_required === true,
+  };
+}
 
-    if (mediaBuffer && mimeType) {
-      contents.push({
-        inlineData: {
-          data: mediaBuffer.toString('base64'),
-          mimeType: mimeType
+async function evaluateWithGemini(buffer, mime, caption) {
+  if (!GEMINI_API_KEY) {
+    console.error('[Gemini] GEMINI_API_KEY missing');
+    return null;
+  }
+  let uploaded = null;
+  try {
+    const parts = [];
+    if (buffer && mime) {
+      if (buffer.length <= INLINE_LIMIT_BYTES) {
+        parts.push({ inlineData: { data: buffer.toString('base64'), mimeType: mime } });
+      } else {
+        uploaded = await ai.files.upload({
+          file: new Blob([buffer], { type: mime }),
+          config: { mimeType: mime },
+        });
+        let tries = 0;
+        while (uploaded.state && uploaded.state !== 'ACTIVE' && tries < 30) {
+          if (uploaded.state === 'FAILED') throw new Error('Gemini file processing failed');
+          await new Promise((r) => setTimeout(r, 2000));
+          uploaded = await ai.files.get({ name: uploaded.name });
+          tries++;
         }
-      });
+        if (uploaded.state && uploaded.state !== 'ACTIVE') throw new Error('Gemini file not ready in time');
+        parts.push({ fileData: { fileUri: uploaded.uri, mimeType: uploaded.mimeType || mime } });
+      }
     }
-
-    contents.push(prompt);
+    parts.push({ text: buildPrompt(caption) });
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: contents,
-      config: {
-        responseMimeType: 'application/json'
-      }
+      model: GEMINI_MODEL,
+      contents: [{ role: 'user', parts }],
+      config: { responseMimeType: 'application/json' },
     });
-
-    const result = JSON.parse(response.text);
-    console.log('[Gemini Evaluation Success]:', result);
+    const result = cleanResult(JSON.parse(response.text));
+    console.log('[Gemini] ok:', result.compliance_status, '| verified:', result.verified_items.length);
     return result;
-
   } catch (err) {
-    console.error('[Gemini Evaluation Error]:', err.message);
+    console.error('[Gemini] error:', err.message);
     return null;
-  }
-}
-
-/**
- * Save Record to Airtable "Inbound Messages 2"
- */
-async function saveToInboundMessages2(senderPhone, messageType, captionText, aiResult, rawPayload = {}, messageId = '') {
-  try {
-    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
-      console.error('[Airtable Error]: Missing AIRTABLE_API_KEY or AIRTABLE_BASE_ID');
-      return null;
+  } finally {
+    if (uploaded?.name) {
+      ai.files.delete({ name: uploaded.name }).catch(() => {});
     }
+  }
+}
 
-    const fields = {
-      'Message ID': messageId || `msg_${Date.now()}`,
-      'Caption Text': captionText || aiResult?.summary || '',
-      'Raw Payload JSON': JSON.stringify(rawPayload)
-    };
+// ---------- Airtable ----------
+const atHeaders = () => ({
+  Authorization: `Bearer ${AIRTABLE_KEY}`,
+  'Content-Type': 'application/json',
+});
+const atUrl = (table) => `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(table)}`;
 
-    const response = await axios.post(
-      `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/Inbound%20Messages%202`,
-      { fields: fields },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log('[Inbound Messages 2 Saved Successfully]: Record ID', response.data.id);
-    return response.data.id;
+async function inboundExists(messageId) {
+  try {
+    const formula = `{Message ID}="${String(messageId).replace(/"/g, '')}"`;
+    const r = await axios.get(atUrl('Inbound Messages 2'), {
+      headers: atHeaders(),
+      params: { filterByFormula: formula, maxRecords: 1 },
+    });
+    return (r.data.records || []).length > 0;
   } catch (err) {
-    console.error('[Inbound Messages 2 Error]:', err.response?.data || err.message);
+    console.error('[Airtable] dedup lookup failed (processing anyway):', err.response?.data || err.message);
+    return false;
+  }
+}
+
+async function createInboundRow(base, optional) {
+  try {
+    const r = await axios.post(
+      atUrl('Inbound Messages 2'),
+      { fields: { ...base, ...optional } },
+      { headers: atHeaders() }
+    );
+    return r.data.id;
+  } catch (err) {
+    const type = err.response?.data?.error?.type;
+    if (err.response?.status === 422 && type === 'UNKNOWN_FIELD_NAME') {
+      console.warn('[Airtable] optional column missing in Inbound Messages 2; saving core fields only');
+      try {
+        const r = await axios.post(atUrl('Inbound Messages 2'), { fields: base }, { headers: atHeaders() });
+        return r.data.id;
+      } catch (e2) {
+        console.error('[Airtable] inbound save failed:', e2.response?.data || e2.message);
+        return null;
+      }
+    }
+    console.error('[Airtable] inbound save failed:', err.response?.data || err.message);
     return null;
   }
 }
 
-/**
- * Save Record to Airtable "Reports 2"
- */
-async function saveToReports2(inboundRecordId, aiResult) {
+async function patchInbound(recordId, fields) {
   try {
-    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) return;
-
-    const fields = {
-      'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
-      'Worker Summary': aiResult?.summary || '',
-      'Action Required': aiResult?.action_required || false,
-      'Asset Identifier': aiResult?.court_id || 'General'
-    };
-
-    const response = await axios.post(
-      `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/Reports%202`,
-      { fields: fields },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log('[Reports 2 Saved Successfully]: Record ID', response.data.id);
+    await axios.patch(`${atUrl('Inbound Messages 2')}/${recordId}`, { fields }, { headers: atHeaders() });
   } catch (err) {
-    console.error('[Reports 2 Error]:', err.response?.data || err.message);
+    console.warn('[Airtable] inbound update skipped:', err.response?.data?.error?.type || err.message);
   }
 }
 
-// 1. Meta Webhook Verification (GET)
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode && token === process.env.WEBHOOK_VERIFY_TOKEN) {
-    console.log('[Webhook Verification]: Verified successfully!');
-    return res.status(200).send(challenge);
+async function saveReport(inboundId, ai_) {
+  try {
+    await axios.post(
+      atUrl('Reports 2'),
+      {
+        fields: {
+          'Inbound Messages 2': [inboundId],
+          'Worker Summary': ai_.summary,
+          'Action Required': ai_.action_required || ai_.compliance_status === 'NEEDS_REVIEW',
+          'Asset Identifier': ai_.court_id,
+        },
+      },
+      { headers: atHeaders() }
+    );
+    console.log('[Airtable] report saved');
+  } catch (err) {
+    console.error('[Airtable] report save failed:', err.response?.data || err.message);
   }
+}
+
+// ---------- Optional WhatsApp reply (OFF by default) ----------
+async function sendReply(to, r) {
+  if (!AUTO_REPLY || !r || !WA_TOKEN || !WA_PHONE_ID) return;
+  try {
+    const text =
+      `Titan OS logged your update.\n` +
+      `Court: ${r.court_id}\n` +
+      `Verified: ${r.verified_items.join(', ') || 'none'}`;
+    await axios.post(
+      `${GRAPH}/${WA_PHONE_ID}/messages`,
+      { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } },
+      { headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    console.error('[Reply] failed:', err.response?.data || err.message);
+  }
+}
+
+// ---------- Job queue: one message at a time (RAM safety) ----------
+let chain = Promise.resolve();
+const enqueue = (fn) => {
+  chain = chain.then(fn).catch((e) => console.error('[Job] unhandled:', e.message));
+};
+
+const seen = new Set(); // quick in-memory dedup on top of the Airtable check
+function remember(id) {
+  seen.add(id);
+  if (seen.size > 2000) seen.delete(seen.values().next().value);
+}
+
+async function processMessage(message, fullPayload) {
+  const messageId = message.id;
+  const sender = message.from;
+  const type = message.type;
+
+  if (seen.has(messageId) || (await inboundExists(messageId))) {
+    console.log(`[Dedup] skipping ${messageId}`);
+    return;
+  }
+  remember(messageId);
+
+  const media = ['audio', 'image', 'video'].includes(type) ? message[type] : null;
+  const caption = message.text?.body || media?.caption || '';
+  const mime = media ? baseMime(media.mime_type) : null;
+
+  console.log(`[Message] from ${maskPhone(sender)} | type ${type}`);
+
+  // 1. Claim the message first (this row is also the dedup marker).
+  const inboundId = await createInboundRow(
+    {
+      'Message ID': messageId,
+      'Caption Text': caption,
+      'Raw Payload JSON': JSON.stringify(fullPayload),
+    },
+    { 'Sender Phone': sender, 'Message Type': type }
+  );
+  if (!inboundId) return;
+
+  // 2. Download + store media privately.
+  let buffer = null;
+  let storagePath = null;
+  if (media?.id) {
+    if (!WA_TOKEN) {
+      console.error('[Media] WHATSAPP_ACCESS_TOKEN missing');
+    } else {
+      try {
+        buffer = await downloadMedia(media.id);
+        console.log(`[Media] downloaded ${buffer.length} bytes`);
+        storagePath = await uploadToSupabase(buffer, mime, messageId);
+      } catch (err) {
+        console.error('[Media] download failed:', err.response?.data || err.message);
+      }
+    }
+    if (storagePath) await patchInbound(inboundId, { 'Media Path': storagePath });
+  }
+
+  // 3. Evaluate (only if there is something to evaluate).
+  if (buffer || caption) {
+    const result = await evaluateWithGemini(buffer, mime, caption);
+    if (result) {
+      await saveReport(inboundId, result);
+      await sendReply(sender, result);
+    }
+  }
+
+  buffer = null; // release RAM
+}
+
+// ---------- Routes ----------
+app.get('/webhook', (req, res) => {
+  const ok =
+    WEBHOOK_VERIFY_TOKEN &&
+    req.query['hub.mode'] === 'subscribe' &&
+    req.query['hub.verify_token'] === WEBHOOK_VERIFY_TOKEN;
+  if (ok) return res.status(200).send(req.query['hub.challenge']);
   return res.sendStatus(403);
 });
 
-// 2. Inbound WhatsApp Message Ingestion (POST)
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', (req, res) => {
+  if (!validSignature(req)) {
+    console.warn('[Security] rejected POST with missing/invalid signature');
+    return res.sendStatus(401);
+  }
   res.status(200).send('EVENT_RECEIVED');
 
-  try {
-    const entry = req.body?.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const message = value?.messages?.[0];
-
-    if (!message) return;
-
-    const senderPhone = message.from;
-    const messageType = message.type;
-    const messageId = message.id;
-
-    console.log(`[Message Received]: From ${senderPhone} | Type: ${messageType}`);
-
-    let captionText = message.text?.body || message.caption || '';
-    let mediaBuffer = null;
-    let mimeType = null;
-
-    if (messageType === 'audio' || messageType === 'image' || messageType === 'video') {
-      const mediaId = message[messageType]?.id;
-      mimeType = message[messageType]?.mime_type || (messageType === 'video' ? 'video/mp4' : 'audio/ogg');
-
-      const token = process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
-
-      if (mediaId && token) {
-        console.log(`[Downloading Media]: ID ${mediaId} (${mimeType})`);
-        
-        const mediaRes = await axios.get(`https://graph.facebook.com/v21.0/${mediaId}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-
-        const binaryRes = await axios.get(mediaRes.data.url, {
-          headers: { Authorization: `Bearer ${token}` },
-          responseType: 'arraybuffer'
-        });
-
-        mediaBuffer = Buffer.from(binaryRes.data);
-        console.log(`[Media Downloaded Successfully]: Buffer size ${mediaBuffer.length} bytes`);
+  for (const entry of req.body?.entry || []) {
+    for (const change of entry.changes || []) {
+      for (const message of change.value?.messages || []) {
+        enqueue(() => processMessage(message, req.body));
       }
     }
-
-    const aiResult = await evaluateMediaWithGemini(mediaBuffer, mimeType, captionText);
-
-    const inboundRecordId = await saveToInboundMessages2(senderPhone, messageType, captionText, aiResult, req.body, messageId);
-
-    if (inboundRecordId) {
-      await saveToReports2(inboundRecordId, aiResult);
-    }
-
-    await sendWhatsAppReply(senderPhone, aiResult);
-
-  } catch (err) {
-    console.error('[Webhook Processing Error]:', err.message);
   }
 });
 
-// Root Health Check Route
-app.get('/', (req, res) => {
-  res.status(200).send('Titan OS V4.3 Active');
-});
+app.get('/', (_req, res) => res.status(200).send('Titan OS V4.3 Active'));
 
-// Start Server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
-});
+// ---------- Start ----------
+app.listen(PORT, async () => {
