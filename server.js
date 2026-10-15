@@ -87,13 +87,19 @@ app.post('/webhook', async (req, res) => {
       const mimeType = message[messageType].mime_type || '';
       const extension = messageType === 'video' ? 'mp4' : messageType === 'image' ? 'jpg' : 'm4a';
 
+      console.log(`[Media Processing] Fetching URL from Meta for Media ID: ${mediaId}`);
+
       // 1. Fetch Media URL from Meta Graph API
       const metaRes = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${mediaId}`, {
         headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
       });
       const metaData = await metaRes.json();
 
-      if (metaData.url) {
+      if (metaData.error) {
+        console.error(`[Meta API Error] ${JSON.stringify(metaData.error)}`);
+      } else if (metaData.url) {
+        console.log(`[Meta Success] Got download URL. Downloading binary stream...`);
+        
         // 2. Download binary media stream from Meta
         const binaryRes = await fetch(metaData.url, {
           headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
@@ -108,11 +114,13 @@ app.post('/webhook', async (req, res) => {
           .upload(filePath, buffer, { contentType: mimeType, upsert: true });
 
         if (uploadError) {
-          console.error(`[Storage Error] Upload failed for ${filePath}:`, uploadError.message);
+          console.error(`[Supabase Storage Error] ${uploadError.message}`);
         } else {
           mediaUrl = `${SUPABASE_URL}/storage/v1/object/authenticated/${STORAGE_BUCKET}/${filePath}`;
-          console.log(`[Media] stored ${filePath}`);
+          console.log(`[Media] successfully stored in Supabase: ${filePath}`);
         }
+      } else {
+        console.error(`[Meta Error] No URL returned in response: ${JSON.stringify(metaData)}`);
       }
     }
 
@@ -132,7 +140,7 @@ app.post('/webhook', async (req, res) => {
       airtableFields['Text Body'] = message.text.body;
     }
 
-    await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`, {
+    const airtableRes = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${AIRTABLE_API_KEY}`,
@@ -141,7 +149,12 @@ app.post('/webhook', async (req, res) => {
       body: JSON.stringify({ fields: airtableFields }),
     });
 
-    console.log(`[Airtable] Successfully logged message ${wamid}`);
+    const airtableData = await airtableRes.json();
+    if (airtableData.error) {
+      console.error(`[Airtable API Error] ${JSON.stringify(airtableData.error)}`);
+    } else {
+      console.log(`[Airtable] Successfully logged message ${wamid}`);
+    }
   } catch (err) {
     console.error('[Pipeline Error]', err.message);
   }
