@@ -1,15 +1,16 @@
 {
   "name": "titan-os-backend",
   "version": "4.3.0",
-  "description": "Titan OS Webhook Backend",
+  "description": "Titan OS Headless WhatsApp ERP Engine",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.7.9",
-    "express": "^4.21.2",
-    "@supabase/supabase-js": "^2.48.1"
+    "@google/genai": "^0.1.1",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   },
   "engines": {
     "node": ">=18.0.0"
