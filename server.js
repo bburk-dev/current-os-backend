@@ -28,13 +28,20 @@ async function sendWhatsAppReply(recipientPhone, aiResult) {
       return;
     }
 
-    let messageText = '';
+    const verifiedList = aiResult?.verified_items?.length > 0 
+      ? aiResult.verified_items.join(', ') 
+      : 'General media update';
 
-    if (aiResult?.compliance_status === 'NEEDS_REVIEW' || aiResult?.action_required) {
-      messageText = `🤖 *Titan OS Update*\n\nWe received your submission, but require additional verification.\n\n*Summary:* ${aiResult?.summary || 'Submission received'}\n\n👉 *Action Required:* Please send a clear photo or close-up video of the court gate/latch to complete this report.`;
-    } else {
-      messageText = `✅ *Titan OS Logged*\n\n*Court:* ${aiResult?.court_id || 'General'}\n*Summary:* ${aiResult?.summary || 'Report logged successfully'}\n\nNo further photos needed. Thank you!`;
-    }
+    const unverifiedList = aiResult?.unverified_items?.length > 0 
+      ? aiResult.unverified_items.join(', ') 
+      : 'None';
+
+    const messageText = `🤖 *Titan OS Logged*\n\n` +
+      `*Court:* ${aiResult?.court_id || 'General'}\n` +
+      `*Summary:* ${aiResult?.summary || 'Submission processed successfully'}\n\n` +
+      `*Verified in Media:* ${verifiedList}\n` +
+      `*Still Unverified:* ${unverifiedList}\n\n` +
+      `_(Logged automatically into Titan OS. Keep up the good work!)_`;
 
     const payload = {
       messaging_product: 'whatsapp',
@@ -73,20 +80,40 @@ async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') 
 
     const prompt = `
 You are Titan OS, an automated field operations AI for Padel court facilities.
-Analyze the incoming worker media/audio/video/text (English, Spanish, Swahili, or Hindi).
-If a video or audio file is attached, analyze its visual and audio content thoroughly.
-Extract operational context and output ONLY valid JSON matching this schema:
+Analyze incoming worker media/audio/video/text (English, Spanish, Swahili, or Hindi).
 
-{
-  "detected_language": "en | es | sw | hi",
-  "summary": "1-sentence executive summary of the submission",
-  "compliance_status": "PASSED | FAILED | NEEDS_REVIEW",
-  "court_id": "Court 1 | Court 2 | General | Unknown",
-  "action_required": true,
-  "issues_detected": ["List of hazards or issues if any"]
-}
+Evaluate the submission against these 12 Installation Items IN PARALLEL (items do NOT need to occur sequentially):
+1. Foundation (Poured, level, cured, good condition)
+2. Steel Frame - Bottom (Anchored, aligned)
+3. Steel Frame - Top (Superstructure secured)
+4. Lower Mesh (Panels mounted)
+5. Upper Mesh (Extensions/framing secured)
+6. Glass (Panes mounted safely, aligned)
+7. Silicone (Joints caulked/sealed)
+8. Turf (Carpet laid & seams glued flat)
+9. Sand (Infill spread evenly across turf)
+10. Net Posts (Plumb and anchored)
+11. Net (Strung & tensioned)
+12. Site Cleanliness & Final Walkthrough (Debris cleared)
+
+IMPORTANT OPERATIONAL RULES:
+- Evaluate each item independently based on what is visually or audibly verified in the submission.
+- Capture all ambient worksite chatter, background conversations, voice audio, worker statements, or operational context in the summary.
+- Do NOT enforce a rigid step-by-step sequence or reject a submission because items were completed out of order.
+- Do NOT mention locks, latches, or generic hardware unless relevant to the 12 gates above.
 
 Worker Caption/Text: "${captionText}"
+
+Output ONLY valid JSON matching this schema:
+{
+  "detected_language": "en | es | sw | hi",
+  "summary": "1-2 sentence executive summary including verified progress and ambient worksite details/chatter",
+  "verified_items": ["List of verified item names from the 12 items above"],
+  "unverified_items": ["List of remaining item names from the 12 items above"],
+  "compliance_status": "PASSED | NEEDS_REVIEW",
+  "court_id": "Court 1 | Court 2 | General | Unknown",
+  "action_required": false
+}
 `;
 
     const contents = [];
@@ -255,24 +282,4 @@ app.post('/webhook', async (req, res) => {
     const inboundRecordId = await saveToInboundMessages2(senderPhone, messageType, captionText, aiResult, req.body, messageId);
 
     if (inboundRecordId) {
-      await saveToReports2(inboundRecordId, aiResult);
-    }
-
-    // 3. Send WhatsApp auto-reply back to worker
-    await sendWhatsAppReply(senderPhone, aiResult);
-
-  } catch (err) {
-    console.error('[Webhook Processing Error]:', err.message);
-  }
-});
-
-// Root Health Check Route
-app.get('/', (req, res) => {
-  res.status(200).send('Titan OS V4.3 Active');
-});
-
-// Start Server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
-});
+      await saveToReports
