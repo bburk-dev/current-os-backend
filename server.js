@@ -24,7 +24,7 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const BUCKET = process.env.SUPABASE_BUCKET || 'inbound-media';
 
-// Replies are OFF until worker lookup (Bouncer) exists. Set AUTO_REPLY=true to enable.
+// Set AUTO_REPLY=true in Render environment to enable Titan responses
 const AUTO_REPLY = process.env.AUTO_REPLY === 'true';
 
 const MAX_MEDIA_BYTES = 40 * 1024 * 1024; // refuse anything bigger (RAM safety)
@@ -169,31 +169,38 @@ async function downloadMedia(mediaId) {
 // ---------- Gemini evaluation ----------
 function buildPrompt(caption) {
   return `
-You are Titan OS, a field-operations assistant for padel court installation.
-The submission may be a photo, a video, a voice note, or text, in English, Spanish, Swahili, or Hindi.
+You are Titan OS, an intelligent, conversational field-operations AI partner for padel court construction.
+The submission may be a photo, video, voice note, or text in English, Spanish, Swahili, or Hindi.
 
-Evaluate ONLY what is clearly shown or said in this submission against these 12 items.
-Items may be reported in any order; do not require sequence.
+Core Tasks:
+1. Evaluate visible physical progress and audio voiceovers against these 12 milestones:
 ${ITEMS.map((n, i) => `${i + 1}.${n}`).join('\n')}
 
-Rules:
-- Put an item in "verified_items" only if it is clearly visible or explicitly stated by the worker.
-- If you are unsure, leave the item out of "verified_items". Do not guess.
-- Analyze only the worker's submission and operational content. Do not transcribe or summarize unrelated background conversations.
-- "court_id": use a court number only if it is stated in the caption/speech or visible on signage; otherwise "Unknown".
-- If the submission is unclear, unrelated, or too poor to judge, use "NEEDS_REVIEW".
+2. Analyze Audio & Context:
+   - Listen to site speech/commentary in audio/video submissions.
+   - Extract operational updates, technical questions, or installation descriptions.
+   - Ignore unrelated casual chatter (e.g., lunch, coffee, social banter).
+
+3. Intent & Response Gating ("should_reply"):
+   - Set "should_reply": true IF the submission contains construction media, a site progress update, or an installation question.
+   - Set "should_reply": false IF the submission is strictly non-operational casual banter or chatter with no media/installation relevance.
+
+4. Installation Feedback ("field_feedback"):
+   - Provide concise, encouraging, and expert installation feedback confirming what was seen/heard and offering constructive next steps or quality tips.
 
 Worker caption: ${JSON.stringify(caption || '')}
 
-Return ONLY JSON:
+Return ONLY valid JSON:
 {
   "detected_language": "en | es | sw | hi",
-  "summary": "1-2 sentences on the verified progress",
+  "summary": "1-2 sentences on verified physical progress and key speech content",
   "verified_items": ["names from the 12 items"],
   "unverified_items": ["remaining names from the 12 items"],
   "compliance_status": "PASSED | NEEDS_REVIEW",
   "court_id": "Court 1 | Court 2 | General | Unknown",
-  "action_required": false
+  "action_required": false,
+  "should_reply": true,
+  "field_feedback": "Short expert feedback confirming visual findings and offering next-step guidance"
 }`;
 }
 
@@ -208,6 +215,8 @@ function cleanResult(raw) {
     compliance_status: raw.compliance_status === 'PASSED' ? 'PASSED' : 'NEEDS_REVIEW',
     court_id: raw.court_id || 'Unknown',
     action_required: raw.action_required === true,
+    should_reply: raw.should_reply !== false, // default true unless explicitly non-operational
+    field_feedback: String(raw.field_feedback || raw.summary || '').slice(0, 1000),
   };
 }
 
@@ -246,7 +255,7 @@ async function evaluateWithGemini(buffer, mime, caption) {
       config: { responseMimeType: 'application/json' },
     });
     const result = cleanResult(JSON.parse(response.text));
-    console.log('[Gemini] ok:', result.compliance_status, '| verified:', result.verified_items.length);
+    console.log('[Gemini] ok:', result.compliance_status, '| verified:', result.verified_items.length, '| reply:', result.should_reply);
     return result;
   } catch (err) {
     console.error('[Gemini] error:', err.message);
@@ -319,7 +328,7 @@ async function saveReport(inboundId, ai_) {
       {
         fields: {
           'Inbound Messages 2': [inboundId],
-          'Worker Summary': ai_.summary,
+          'Worker Summary': ai_.field_feedback || ai_.summary,
           'Action Required': ai_.action_required || ai_.compliance_status === 'NEEDS_REVIEW',
           'Asset Identifier': ai_.court_id,
         },
@@ -332,19 +341,26 @@ async function saveReport(inboundId, ai_) {
   }
 }
 
-// ---------- Optional WhatsApp reply (OFF by default) ----------
+// ---------- Intelligent WhatsApp Reply ----------
 async function sendReply(to, r) {
-  if (!AUTO_REPLY || !r || !WA_TOKEN || !WA_PHONE_ID) return;
+  if (!AUTO_REPLY || !r?.should_reply || !WA_TOKEN || !WA_PHONE_ID) {
+    if (r && !r.should_reply) console.log('[Reply] skipped non-operational chatter');
+    return;
+  }
   try {
+    const verifiedList = r.verified_items.length > 0 ? r.verified_items.join(', ') : 'None explicitly confirmed';
     const text =
-      `Titan OS logged your update.\n` +
-      `Court: ${r.court_id}\n` +
-      `Verified: ${r.verified_items.join(', ') || 'none'}`;
+      `🤖 *Titan OS Update*\n` +
+      `*Court:* ${r.court_id}\n\n` +
+      `*Verified Milestones:* ${verifiedList}\n\n` +
+      `*Field Feedback:* ${r.field_feedback}`;
+
     await axios.post(
       `${GRAPH}/${WA_PHONE_ID}/messages`,
       { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } },
       { headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' } }
     );
+    console.log('[Reply] sent intelligent feedback to WhatsApp');
   } catch (err) {
     console.error('[Reply] failed:', err.response?.data || err.message);
   }
