@@ -278,7 +278,7 @@ async function saveReport(inboundId, ai_) {
 // ---------- Gemini evaluation ----------
 function buildPrompt(caption, worker) {
   const workerContext = worker 
-    ? `Sender Identity: ${worker.name} (Role: ${worker.role}, Default Project:${worker.defaultProject})` 
+    ? `Sender Identity: ${worker.name} (Role: ${worker.role}, Default Project: ${worker.defaultProject})` 
     : `Sender Identity: Unregistered Worker`;
 
   return `
@@ -287,7 +287,7 @@ ${workerContext}
 
 Core Tasks:
 1. Evaluate visible physical progress and audio voiceovers against these 12 milestones:
-${ITEMS.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+${ITEMS.map((n, i) => `${i + 1}.${n}`).join('\n')}
 
 2. Context & Assigned Project:
    - Default to "court_id": "${worker ? worker.defaultProject : 'Court 1'}" unless speech or caption explicitly mentions a different court number.
@@ -310,4 +310,79 @@ Return ONLY valid JSON:
   "compliance_status": "PASSED | NEEDS_REVIEW",
   "court_id": "Court 1 | Court 2 | General | Unknown",
   "action_required": false,
-  "should_
+  "should_reply": true,
+  "field_feedback": "Short expert feedback confirming visual findings and offering next-step guidance"
+}`;
+}
+
+function cleanResult(raw, worker) {
+  const pick = (arr) => (Array.isArray(arr) ? arr.filter((x) => ITEMS.includes(x)) : []);
+  const verified = pick(raw.verified_items);
+  return {
+    detected_language: raw.detected_language || 'unknown',
+    summary: String(raw.summary || '').slice(0, 1000),
+    verified_items: verified,
+    unverified_items: ITEMS.filter((i) => !verified.includes(i)),
+    compliance_status: raw.compliance_status === 'PASSED' ? 'PASSED' : 'NEEDS_REVIEW',
+    court_id: raw.court_id || worker?.defaultProject || 'Court 1',
+    action_required: raw.action_required === true,
+    should_reply: raw.should_reply !== false,
+    field_feedback: String(raw.field_feedback || raw.summary || '').slice(0, 1000),
+  };
+}
+
+async function evaluateWithGemini(buffer, mime, caption, worker) {
+  if (!GEMINI_API_KEY) {
+    console.error('[Gemini] GEMINI_API_KEY missing');
+    return null;
+  }
+  let uploaded = null;
+  try {
+    const parts = [];
+    if (buffer && mime) {
+      if (buffer.length <= INLINE_LIMIT_BYTES) {
+        parts.push({ inlineData: { data: buffer.toString('base64'), mimeType: mime } });
+      } else {
+        uploaded = await ai.files.upload({
+          file: new Blob([buffer], { type: mime }),
+          config: { mimeType: mime },
+        });
+        let tries = 0;
+        while (uploaded.state && uploaded.state !== 'ACTIVE' && tries < 30) {
+          if (uploaded.state === 'FAILED') throw new Error('Gemini file processing failed');
+          await new Promise((r) => setTimeout(r, 2000));
+          uploaded = await ai.files.get({ name: uploaded.name });
+          tries++;
+        }
+        if (uploaded.state && uploaded.state !== 'ACTIVE') throw new Error('Gemini file not ready in time');
+        parts.push({ fileData: { fileUri: uploaded.uri, mimeType: uploaded.mimeType || mime } });
+      }
+    }
+    parts.push({ text: buildPrompt(caption, worker) });
+
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [{ role: 'user', parts }],
+      config: { responseMimeType: 'application/json' },
+    });
+    const result = cleanResult(JSON.parse(response.text), worker);
+    console.log('[Gemini] ok:', result.compliance_status, '| verified:', result.verified_items.length, '| worker:', worker?.name);
+    return result;
+  } catch (err) {
+    console.error('[Gemini] error:', err.message);
+    return null;
+  } finally {
+    if (uploaded?.name) {
+      ai.files.delete({ name: uploaded.name }).catch(() => {});
+    }
+  }
+}
+
+// ---------- Intelligent WhatsApp Reply ----------
+async function sendReply(to, r, worker) {
+  if (!AUTO_REPLY || !r?.should_reply || !WA_TOKEN || !WA_PHONE_ID) {
+    if (r && !r.should_reply) console.log('[Reply] skipped non-operational chatter');
+    return;
+  }
+  try {
+    const verifiedList = r.verified_items.length > 0 ? r.verified_items.join(', ') : 'None explicitly confirmed';
