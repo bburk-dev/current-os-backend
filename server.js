@@ -10,7 +10,6 @@ app.use(express.json({
   }
 }));
 
-// Initialize Gemini SDK with Environment Variable
 const ai = new GoogleGenAI({ 
   apiKey: process.env.GEMINI_API_KEY || '' 
 });
@@ -21,7 +20,7 @@ const ai = new GoogleGenAI({
 async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') {
   try {
     if (!process.env.GEMINI_API_KEY) {
-      console.error('[Gemini Evaluation Error]: GEMINI_API_KEY missing from environment variables');
+      console.error('[Gemini Evaluation Error]: GEMINI_API_KEY missing');
       return null;
     }
 
@@ -45,7 +44,6 @@ Worker Caption/Text: "${captionText}"
 
     const contents = [];
 
-    // Attach inline video, audio, or image binary buffer for Gemini 2.5 Flash
     if (mediaBuffer && mimeType) {
       contents.push({
         inlineData: {
@@ -76,25 +74,22 @@ Worker Caption/Text: "${captionText}"
 }
 
 /**
- * Helper Function: Save Record to Airtable "Inbound Messages 2"
+ * Save Record to Airtable "Inbound Messages 2"
  */
-async function saveToAirtable(senderPhone, messageType, captionText, aiResult) {
+async function saveToInboundMessages2(senderPhone, messageType, captionText, aiResult, rawPayload = {}, messageId = '') {
   try {
     if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
-      console.error('[Airtable Error]: Missing AIRTABLE_API_KEY or AIRTABLE_BASE_ID in environment variables');
-      return;
+      console.error('[Airtable Error]: Missing AIRTABLE_API_KEY or AIRTABLE_BASE_ID');
+      return null;
     }
 
+    // Exact fields for "Inbound Messages 2"
     const fields = {
-      'Worker Phone': senderPhone,
-      'Message Type': messageType,
-      'Caption': captionText || '',
-      'Language': aiResult?.detected_language || 'en',
-      'Summary': aiResult?.summary || '',
-      'Compliance Status': aiResult?.compliance_status || 'NEEDS_REVIEW',
-      'Court ID': aiResult?.court_id || 'Unknown',
-      'Action Required': aiResult?.action_required || false,
-      'Issues Detected': (aiResult?.issues_detected || []).join(', ')
+      'Message ID': messageId || `msg_${Date.now()}`,
+      'Caption Text': captionText || aiResult?.summary || '',
+      'Language Detected': aiResult?.detected_language || 'en',
+      'Raw Payload JSON': JSON.stringify(rawPayload),
+      'Phone E164': senderPhone
     };
 
     const response = await axios.post(
@@ -108,9 +103,44 @@ async function saveToAirtable(senderPhone, messageType, captionText, aiResult) {
       }
     );
 
-    console.log('[Airtable Saved Successfully]: Record ID', response.data.id);
+    console.log('[Inbound Messages 2 Saved]: Record ID', response.data.id);
+    return response.data.id;
   } catch (err) {
-    console.error('[Airtable Save Error]:', err.response?.data || err.message);
+    console.error('[Inbound Messages 2 Error]:', err.response?.data || err.message);
+    return null;
+  }
+}
+
+/**
+ * Save Record to Airtable "Reports 2"
+ */
+async function saveToReports2(inboundRecordId, aiResult) {
+  try {
+    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) return;
+
+    // Exact fields for "Reports 2"
+    const fields = {
+      'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
+      'Worker Summary': aiResult?.summary || '',
+      'Action Required': aiResult?.action_required || false,
+      'Asset Identifier': aiResult?.court_id || 'General',
+      'Issue Severity': aiResult?.compliance_status === 'FAILED' ? 'HIGH' : 'NONE'
+    };
+
+    const response = await axios.post(
+      `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/Reports%202`,
+      { fields: fields },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log('[Reports 2 Saved]: Record ID', response.data.id);
+  } catch (err) {
+    console.error('[Reports 2 Error]:', err.response?.data || err.message);
   }
 }
 
@@ -120,7 +150,7 @@ app.get('/webhook', (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode && token === process.env.WEBHOOK_VERIFY_TOKEN) {
+  if (mode && token === process.env.WEBHOOK_VERHOOK_VERIFY_TOKEN) {
     console.log('[Webhook Verification]: Verified successfully!');
     return res.status(200).send(challenge);
   }
@@ -146,13 +176,14 @@ app.post('/webhook', async (req, res) => {
 
     const senderPhone = message.from;
     const messageType = message.type;
+    const messageId = message.id;
+
     console.log(`[Message Received]: From ${senderPhone} | Type: ${messageType}`);
 
     let captionText = message.text?.body || message.caption || '';
     let mediaBuffer = null;
     let mimeType = null;
 
-    // Process media attachments (audio, video, image)
     if (messageType === 'audio' || messageType === 'image' || messageType === 'video') {
       const mediaId = message[messageType]?.id;
       mimeType = message[messageType]?.mime_type || (messageType === 'video' ? 'video/mp4' : 'audio/ogg');
@@ -173,28 +204,29 @@ app.post('/webhook', async (req, res) => {
 
         mediaBuffer = Buffer.from(binaryRes.data);
         console.log(`[Media Downloaded Successfully]: Buffer size ${mediaBuffer.length} bytes`);
-      } else {
-        console.warn('[Media Download Skipped]: Missing WHATSAPP_TOKEN in environment variables');
       }
     }
 
-    // Evaluate media/text with Gemini 2.5 Flash
+    // 1. Evaluate with Gemini 2.5 Flash
     const aiResult = await evaluateMediaWithGemini(mediaBuffer, mimeType, captionText);
 
-    // Save result to Airtable
-    await saveToAirtable(senderPhone, messageType, captionText, aiResult);
+    // 2. Save to "Inbound Messages 2"
+    const inboundRecordId = await saveToInboundMessages2(senderPhone, messageType, captionText, aiResult, req.body, messageId);
+
+    // 3. Save connected report in "Reports 2"
+    if (inboundRecordId) {
+      await saveToReports2(inboundRecordId, aiResult);
+    }
 
   } catch (err) {
     console.error('[Webhook Processing Error]:', err.message);
   }
 });
 
-// Root Health Check Route
 app.get('/', (req, res) => {
   res.status(200).send('Titan OS V4.3 Active');
 });
 
-// Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
