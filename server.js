@@ -63,7 +63,6 @@ app.get('/webhook', (req, res) => {
 
 // WhatsApp Inbound Webhook Handler
 app.post('/webhook', async (req, res) => {
-  // Acknowledge Meta immediately with HTTP 200 to prevent retry loops
   res.status(200).send('EVENT_RECEIVED');
 
   try {
@@ -89,7 +88,6 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Media Processing] Fetching URL from Meta for Media ID: ${mediaId}`);
 
-      // 1. Fetch Media URL from Meta Graph API
       const metaRes = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${mediaId}`, {
         headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
       });
@@ -100,14 +98,12 @@ app.post('/webhook', async (req, res) => {
       } else if (metaData.url) {
         console.log(`[Meta Success] Got download URL. Downloading binary stream...`);
 
-        // 2. Download binary media stream from Meta
         const binaryRes = await fetch(metaData.url, {
           headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
         });
         const arrayBuffer = await binaryRes.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
-        // 3. Upload to Supabase Storage Bucket
         const filePath = `${fromNumber}/${Date.now()}_${wamid}.${extension}`;
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from(STORAGE_BUCKET)
@@ -124,38 +120,65 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // 4. Log payload to Airtable matching exact schema headers
-    const airtableFields = {
-      'Wa Phone': fromNumber,
+    // 4. Multi-Field Airtable Payload Injection
+    const baseFields = {
       'Message Type': messageType,
       'Message ID': wamid,
     };
 
     if (mediaUrl) {
-      airtableFields['Inbound Media URL'] = mediaUrl;
+      baseFields['Inbound Media URL'] = mediaUrl;
     }
 
     if (messageType === 'text' && message.text) {
-      airtableFields['Text Body'] = message.text.body;
+      baseFields['Text Body'] = message.text.body;
     }
 
-    const airtableRes = await fetch(
-      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ fields: airtableFields }),
-      }
-    );
+    // Attempt insertion across all common field title variants
+    const candidatePhoneFields = ['Wa Phone Number', 'Wa Phone ', 'Phone Number', 'Phone', 'From'];
+    let logged = false;
 
-    const airtableData = await airtableRes.json();
-    if (airtableData.error) {
-      console.error(`[Airtable Error] ${JSON.stringify(airtableData.error)}`);
-    } else {
-      console.log(`[Airtable] Successfully logged message ${wamid}`);
+    for (const fieldKey of candidatePhoneFields) {
+      const payload = { fields: { ...baseFields, [fieldKey]: fromNumber } };
+      const airtableRes = await fetch(
+        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      const airtableData = await airtableRes.json();
+      if (!airtableData.error) {
+        console.log(`[Airtable] Successfully logged message ${wamid} using column "${fieldKey}"`);
+        logged = true;
+        break;
+      }
+    }
+
+    // Fallback: Post record without phone field if all phone key attempts fail
+    if (!logged) {
+      const fallbackRes = await fetch(
+        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ fields: baseFields }),
+        }
+      );
+      const fallbackData = await fallbackRes.json();
+      if (!fallbackData.error) {
+        console.log(`[Airtable] Logged record ${wamid} (base fields only)`);
+      } else {
+        console.error(`[Airtable Error] ${JSON.stringify(fallbackData.error)}`);
+      }
     }
   } catch (err) {
     console.error('[Pipeline Error]', err.message);
