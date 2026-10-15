@@ -1,7 +1,5 @@
 const express = require('express');
 const axios = require('axios');
-const crypto = require('crypto');
-const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
@@ -28,13 +26,13 @@ async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') 
 
     const prompt = `
 You are Titan OS, an automated field operations AI for Padel court facilities.
-Analyze the incoming worker media/audio/text (English, Spanish, Swahili, or Hindi).
-If an audio file is provided, transcribe and evaluate its spoken content thoroughly.
+Analyze the incoming worker media/audio/video/text (English, Spanish, Swahili, or Hindi).
+If a video or audio file is attached, analyze its visual and audio content thoroughly.
 Extract operational context and output ONLY valid JSON matching this schema:
 
 {
   "detected_language": "en | es | sw | hi",
-  "summary": "1-sentence executive summary of the submission or transcribed speech",
+  "summary": "1-sentence executive summary of the submission",
   "compliance_status": "PASSED | FAILED | NEEDS_REVIEW",
   "court_id": "Court 1 | Court 2 | General | Unknown",
   "action_required": true,
@@ -46,7 +44,7 @@ Worker Caption/Text: "${captionText}"
 
     const contents = [];
 
-    // Pass inline media binary (Audio, Image, Video) to Gemini
+    // Attach inline video/audio/image binary buffer for Gemini 2.5 Flash
     if (mediaBuffer && mimeType) {
       contents.push({
         inlineData: {
@@ -82,20 +80,21 @@ Worker Caption/Text: "${captionText}"
 async function saveToAirtable(senderPhone, messageType, captionText, aiResult) {
   try {
     if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
-      console.error('[Airtable Error]: Missing AIRTABLE_API_KEY or AIRTABLE_BASE_ID');
+      console.error('[Airtable Error]: Missing AIRTABLE_API_KEY or AIRTABLE_BASE_ID in environment variables');
       return;
     }
 
+    // Standardized Airtable field payload matching base column conventions
     const fields = {
-      'Sender Phone': senderPhone,
-      'Message Type': messageType,
-      'Raw Text / Caption': captionText || '',
+      'Phone': senderPhone,
+      'Type': messageType,
+      'Text': captionText || '',
       'Language': aiResult?.detected_language || 'en',
-      'AI Summary': aiResult?.summary || '',
+      'Summary': aiResult?.summary || '',
       'Compliance Status': aiResult?.compliance_status || 'NEEDS_REVIEW',
-      'Court ID': aiResult?.court_id || 'Unknown',
+      'Court': aiResult?.court_id || 'Unknown',
       'Action Required': aiResult?.action_required || false,
-      'Issues Detected': (aiResult?.issues_detected || []).join(', ')
+      'Issues': (aiResult?.issues_detected || []).join(', ')
     };
 
     const response = await axios.post(
@@ -153,30 +152,36 @@ app.post('/webhook', async (req, res) => {
     let mediaBuffer = null;
     let mimeType = null;
 
+    // Process media attachments (audio, video, image)
     if (messageType === 'audio' || messageType === 'image' || messageType === 'video') {
       const mediaId = message[messageType]?.id;
-      mimeType = message[messageType]?.mime_type || (messageType === 'audio' ? 'audio/ogg' : 'image/jpeg');
+      mimeType = message[messageType]?.mime_type || (messageType === 'video' ? 'video/mp4' : 'audio/ogg');
 
-      if (mediaId && process.env.WHATSAPP_TOKEN) {
+      const token = process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
+
+      if (mediaId && token) {
         console.log(`[Downloading Media]: ID ${mediaId} (${mimeType})`);
         
         const mediaRes = await axios.get(`https://graph.facebook.com/v21.0/${mediaId}`, {
-          headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` }
+          headers: { Authorization: `Bearer ${token}` }
         });
 
         const binaryRes = await axios.get(mediaRes.data.url, {
-          headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+          headers: { Authorization: `Bearer ${token}` },
           responseType: 'arraybuffer'
         });
 
         mediaBuffer = Buffer.from(binaryRes.data);
+        console.log(`[Media Downloaded Successfully]: Buffer size ${mediaBuffer.length} bytes`);
+      } else {
+        console.warn('[Media Download Skipped]: Missing WHATSAPP_TOKEN in environment variables');
       }
     }
 
-    // 1. Evaluate audio/image/text with Gemini 2.5 Flash
+    // 1. Send media buffer & prompt to Gemini 2.5 Flash
     const aiResult = await evaluateMediaWithGemini(mediaBuffer, mimeType, captionText);
 
-    // 2. Save result to Airtable
+    // 2. Save result directly into Airtable
     await saveToAirtable(senderPhone, messageType, captionText, aiResult);
 
   } catch (err) {
