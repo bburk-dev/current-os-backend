@@ -1,12 +1,19 @@
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
-app.use(express.json());
 
-// Initialize Gemini Client safely with environment variable
+// Raw body parser needed for HMAC SHA-256 Meta webhook signature validation
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+
+// Initialize Gemini Client
 const ai = new GoogleGenAI({ 
   apiKey: process.env.GEMINI_API_KEY || '' 
 });
@@ -69,7 +76,76 @@ Worker Caption/Text: "${captionText}"
   }
 }
 
-// Basic Health Check Route
+// 1. Meta Webhook Verification (GET)
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode && token === process.env.WEBHOOK_VERIFY_TOKEN) {
+    console.log('[Webhook Verification]: Verified successfully!');
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// 2. Inbound WhatsApp Message Ingestion (POST)
+app.post('/webhook', async (req, res) => {
+  // Always return 200 OK immediately to Meta so webhooks don't timeout
+  res.status(200).send('EVENT_RECEIVED');
+
+  console.log('[Webhook Ingest]: Inbound request received from Meta');
+
+  try {
+    const entry = req.body?.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
+
+    if (!message) {
+      console.log('[Webhook Ingest]: Non-message event received');
+      return;
+    }
+
+    const senderPhone = message.from;
+    const messageType = message.type;
+    console.log(`[Message Received]: From ${senderPhone} | Type: ${messageType}`);
+
+    let captionText = message.text?.body || message.caption || '';
+    let mediaBuffer = null;
+    let mimeType = null;
+
+    // Handle incoming audio / voice notes or images
+    if (messageType === 'audio' || messageType === 'image' || messageType === 'video') {
+      const mediaId = message[messageType]?.id;
+      mimeType = message[messageType]?.mime_type;
+
+      if (mediaId && process.env.WHATSAPP_TOKEN) {
+        console.log(`[Downloading Media]: ID ${mediaId}`);
+        // Fetch media URL from Meta Graph API
+        const mediaRes = await axios.get(`https://graph.facebook.com/v21.0/${mediaId}`, {
+          headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` }
+        });
+
+        // Download actual media binary
+        const binaryRes = await axios.get(mediaRes.data.url, {
+          headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` },
+          responseType: 'arraybuffer'
+        });
+
+        mediaBuffer = Buffer.from(binaryRes.data);
+      }
+    }
+
+    // Trigger asynchronous Gemini AI evaluation
+    const aiResult = await evaluateMediaWithGemini(mediaBuffer, mimeType, captionText);
+    
+  } catch (err) {
+    console.error('[Webhook Processing Error]:', err.message);
+  }
+});
+
+// Root Health Check Route
 app.get('/', (req, res) => {
   res.status(200).send('Titan OS V4.3 Active');
 });
