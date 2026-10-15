@@ -34,25 +34,6 @@ async function initStorageBucket() {
   }
 }
 
-// Fetch actual field names from Airtable Meta API
-async function getAirtableFields() {
-  try {
-    const res = await fetch(`https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}/tables`, {
-      headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
-    });
-    const data = await res.json();
-    if (data.tables) {
-      const table = data.tables.find((t) => t.name === AIRTABLE_TABLE_NAME || t.id === AIRTABLE_TABLE_NAME);
-      if (table) {
-        return table.fields.map((f) => f.name);
-      }
-    }
-  } catch (err) {
-    console.error(`[Airtable Meta API Warning] ${err.message}`);
-  }
-  return null;
-}
-
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -110,54 +91,57 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // Map of logical keys to header variations
-    const targetMappings = {
-      phone: ['Wa Phone', 'Wa Phone Number', 'Phone Number', 'Phone', 'From'],
-      media: ['Inbound Media URL', 'Media URL', 'Media', 'Attachment'],
-      type: ['Message Type', 'Type'],
-      id: ['Message ID', 'ID', 'Wamid'],
-      body: ['Text Body', 'Text', 'Body', 'Message'],
+    // Baseline payload with primary expected column names
+    let airtablePayload = {
+      'Wa Phone': fromNumber,
+      'Message Type': messageType,
+      'Message ID': wamid,
     };
 
-    const liveFields = await getAirtableFields();
-    const airtablePayload = {};
+    if (mediaUrl) {
+      airtablePayload['Inbound Media URL'] = mediaUrl;
+    }
 
-    const findMatch = (candidates) => {
-      if (!liveFields) return candidates[0];
-      return candidates.find((c) => liveFields.includes(c));
-    };
+    if (messageType === 'text' && message.text) {
+      airtablePayload['Text Body'] = message.text.body;
+    }
 
-    const phoneCol = findMatch(targetMappings.phone);
-    const typeCol = findMatch(targetMappings.type);
-    const idCol = findMatch(targetMappings.id);
-    const mediaCol = findMatch(targetMappings.media);
-    const bodyCol = findMatch(targetMappings.body);
+    // Post to Airtable with automatic strip-and-retry on UNKNOWN_FIELD_NAME
+    let success = false;
+    while (!success && Object.keys(airtablePayload).length > 0) {
+      console.log(`[Airtable Attempt] Posting fields:`, Object.keys(airtablePayload));
 
-    if (phoneCol) airtablePayload[phoneCol] = fromNumber;
-    if (typeCol) airtablePayload[typeCol] = messageType;
-    if (idCol) airtablePayload[idCol] = wamid;
-    if (mediaUrl && mediaCol) airtablePayload[mediaCol] = mediaUrl;
-    if (messageType === 'text' && message.text && bodyCol) airtablePayload[bodyCol] = message.text.body;
+      const airtableRes = await fetch(
+        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ fields: airtablePayload }),
+        }
+      );
 
-    console.log(`[Airtable] Posting payload with detected columns:`, Object.keys(airtablePayload));
+      const airtableData = await airtableRes.json();
 
-    const airtableRes = await fetch(
-      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ fields: airtablePayload }),
+      if (!airtableData.error) {
+        console.log(`[Airtable] Successfully logged message ${wamid}`);
+        success = true;
+      } else if (airtableData.error.type === 'UNKNOWN_FIELD_NAME') {
+        const badFieldMatch = airtableData.error.message.match(/Unknown field name: "(.*)"/);
+        if (badFieldMatch && badFieldMatch[1]) {
+          const badField = badFieldMatch[1];
+          console.log(`[Airtable Retry] Removing unknown field "${badField}" and retrying...`);
+          delete airtablePayload[badField];
+        } else {
+          console.error(`[Airtable API Error] ${JSON.stringify(airtableData.error)}`);
+          break;
+        }
+      } else {
+        console.error(`[Airtable API Error] ${JSON.stringify(airtableData.error)}`);
+        break;
       }
-    );
-
-    const airtableData = await airtableRes.json();
-    if (airtableData.error) {
-      console.error(`[Airtable API Error] ${JSON.stringify(airtableData.error)}`);
-    } else {
-      console.log(`[Airtable] Successfully logged message ${wamid}`);
     }
   } catch (err) {
     console.error('[Pipeline Error]', err.message);
