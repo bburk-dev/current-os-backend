@@ -10,6 +10,7 @@ app.use(express.json({
   }
 }));
 
+// Initialize Gemini SDK with Environment Variable
 const ai = new GoogleGenAI({ 
   apiKey: process.env.GEMINI_API_KEY || '' 
 });
@@ -20,7 +21,7 @@ const ai = new GoogleGenAI({
 async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') {
   try {
     if (!process.env.GEMINI_API_KEY) {
-      console.error('[Gemini Evaluation Error]: GEMINI_API_KEY missing');
+      console.error('[Gemini Evaluation Error]: GEMINI_API_KEY missing from environment variables');
       return null;
     }
 
@@ -44,7 +45,7 @@ Worker Caption/Text: "${captionText}"
 
     const contents = [];
 
-    // Attach inline video/audio/image binary buffer for Gemini 2.5 Flash
+    // Attach inline video, audio, or image binary buffer for Gemini 2.5 Flash
     if (mediaBuffer && mimeType) {
       contents.push({
         inlineData: {
@@ -84,17 +85,16 @@ async function saveToAirtable(senderPhone, messageType, captionText, aiResult) {
       return;
     }
 
-    // Standardized Airtable field payload matching base column conventions
     const fields = {
-      'Phone': senderPhone,
-      'Type': messageType,
-      'Text': captionText || '',
+      'Worker Phone': senderPhone,
+      'Message Type': messageType,
+      'Caption': captionText || '',
       'Language': aiResult?.detected_language || 'en',
       'Summary': aiResult?.summary || '',
       'Compliance Status': aiResult?.compliance_status || 'NEEDS_REVIEW',
-      'Court': aiResult?.court_id || 'Unknown',
+      'Court ID': aiResult?.court_id || 'Unknown',
       'Action Required': aiResult?.action_required || false,
-      'Issues': (aiResult?.issues_detected || []).join(', ')
+      'Issues Detected': (aiResult?.issues_detected || []).join(', ')
     };
 
     const response = await axios.post(
@@ -178,10 +178,10 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // 1. Send media buffer & prompt to Gemini 2.5 Flash
+    // Evaluate media/text with Gemini 2.5 Flash
     const aiResult = await evaluateMediaWithGemini(mediaBuffer, mimeType, captionText);
 
-    // 2. Save result directly into Airtable
+    // Save result to Airtable
     await saveToAirtable(senderPhone, messageType, captionText, aiResult);
 
   } catch (err) {
@@ -189,10 +189,12 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// Root Health Check Route
 app.get('/', (req, res) => {
   res.status(200).send('Titan OS V4.3 Active');
 });
 
+// Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
