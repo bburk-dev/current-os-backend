@@ -91,7 +91,6 @@ Worker Caption/Text: "${captionText}"
 
     const contents = [];
 
-    // Attach inline video, audio, or image binary buffer for Gemini 2.5 Flash
     if (mediaBuffer && mimeType) {
       contents.push({
         inlineData: {
@@ -228,7 +227,6 @@ app.post('/webhook', async (req, res) => {
       const mediaId = message[messageType]?.id;
       mimeType = message[messageType]?.mime_type || (messageType === 'video' ? 'video/mp4' : 'audio/ogg');
 
-      // Checks WHATSAPP_ACCESS_TOKEN first, falling back to WHATSAPP_TOKEN or META_ACCESS_TOKEN
       const token = process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
 
       if (mediaId && token) {
@@ -246,7 +244,7 @@ app.post('/webhook', async (req, res) => {
         mediaBuffer = Buffer.from(binaryRes.data);
         console.log(`[Media Downloaded Successfully]: Buffer size ${mediaBuffer.length} bytes`);
       } else {
-        console.warn('[Media Download Skipped]: Missing WHATSAPP_ACCESS_TOKEN in environment variables');
+        console.warn('[Media Download Skipped]: Missing token in environment variables');
       }
     }
 
@@ -263,4 +261,18 @@ app.post('/webhook', async (req, res) => {
     // 3. Send WhatsApp auto-reply back to worker
     await sendWhatsAppReply(senderPhone, aiResult);
 
-  } catch (err
+  } catch (err) {
+    console.error('[Webhook Processing Error]:', err.message);
+  }
+});
+
+// Root Health Check Route
+app.get('/', (req, res) => {
+  res.status(200).send('Titan OS V4.3 Active');
+});
+
+// Start Server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
+});
