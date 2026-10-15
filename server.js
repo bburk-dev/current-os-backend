@@ -192,7 +192,7 @@ async function handleLinkCommand(chatId, siteNameQuery) {
   }
 }
 
-// 7. Supabase Media Archiver Engine
+// 7. Supabase Media Archiver Engine (Storage HTTP Header & Sanitization Fix Applied)
 async function downloadAndArchiveMedia(mediaId, mimeType, messageId) {
   try {
     // Step A: Fetch media URL from Meta Graph API
@@ -214,14 +214,19 @@ async function downloadAndArchiveMedia(mediaId, mimeType, messageId) {
     const date = new Date();
     const year = date.getUTCFullYear();
     const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const storagePath = `${year}/${month}/${messageId}.${ext}`;
+    // Sanitize message ID to prevent encoding breaks in storage paths
+    const sanitizedMsgId = messageId.replace(/[^a-zA-Z0-9_-]/g, '');
+    const storagePath = `${year}/${month}/${sanitizedMsgId}.${ext}`;
 
     // Step D: Upload binary buffer directly to Supabase REST endpoint
-    const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${storagePath}`;
+    const cleanServiceKey = (SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    const baseUrl = (SUPABASE_URL || '').replace(/\/$/, '');
+    const uploadUrl = `${baseUrl}/storage/v1/object/${SUPABASE_BUCKET}/${storagePath}`;
     
-    await axios.post(uploadUrl, mediaBuffer.data, {
+    await axios.post(uploadUrl, Buffer.from(mediaBuffer.data), {
       headers: {
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        'Authorization': `Bearer ${cleanServiceKey}`,
+        'apikey': cleanServiceKey,
         'Content-Type': mimeType,
         'x-upsert': 'true'
       }
@@ -229,7 +234,7 @@ async function downloadAndArchiveMedia(mediaId, mimeType, messageId) {
 
     return {
       storagePath,
-      publicUrl: `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${storagePath}`,
+      publicUrl: `${baseUrl}/storage/v1/object/public/${SUPABASE_BUCKET}/${storagePath}`,
       buffer: Buffer.from(mediaBuffer.data),
       mimeType
     };
@@ -394,10 +399,10 @@ app.post('/webhook', verifyWhatsAppSignature, async (req, res) => {
     // Step E: Gemini Multimodal Evaluation
     const aiOutput = await evaluateSubmissionWithGemini(workerInfo, siteInfo, captionText, mediaData);
 
-    // Step F: Persist Record to "Inbound Messages 2"
+    // Step F: Persist Record to "Inbound Messages 2" (Corrected Airtable Field Name: 'Sender')
     const inboundFields = {
       'Message ID': message.id,
-      'Sender Phone': whatsappChatId,
+      'Sender': whatsappChatId,
       'Worker': [workerInfo.recordId],
       'Message Type': message.type || 'text',
       'Caption Text': captionText,
