@@ -150,7 +150,7 @@ async function uploadToSupabase(buffer, mime, messageId) {
   }
 }
 
-// ---------- WhatsApp media download ----------
+// ---------- WhatsApp media download & direct messaging ----------
 async function downloadMedia(mediaId) {
   const meta = await axios.get(`${GRAPH}/${mediaId}`, {
     headers: { Authorization: `Bearer ${WA_TOKEN}` },
@@ -165,7 +165,20 @@ async function downloadMedia(mediaId) {
   return Buffer.from(bin.data);
 }
 
-// ---------- Airtable Bouncer & Data Handlers ----------
+async function sendRawWhatsAppMessage(to, textBody) {
+  if (!WA_TOKEN || !WA_PHONE_ID) return;
+  try {
+    await axios.post(
+      `${GRAPH}/${WA_PHONE_ID}/messages`,
+      { messaging_product: 'whatsapp', to, type: 'text', text: { body: textBody } },
+      { headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    console.error('[WhatsApp Outbound] Error:', err.response?.data || err.message);
+  }
+}
+
+// ---------- Airtable Lookups & Command Handlers ----------
 const atHeaders = () => ({
   Authorization: `Bearer ${AIRTABLE_KEY}`,
   'Content-Type': 'application/json',
@@ -205,6 +218,73 @@ async function lookupWorker(rawPhone) {
   } catch (err) {
     console.error('[Bouncer] Lookup failed:', err.response?.data || err.message);
     return null;
+  }
+}
+
+// Site Group Lookup: Maps WhatsApp Group ID (@g.us) to Sites table
+async function lookupSiteByGroupId(groupId) {
+  if (!AIRTABLE_KEY || !AIRTABLE_BASE || !groupId || !groupId.endsWith('@g.us')) return null;
+  
+  try {
+    const formula = `{WhatsApp Group ID}="${groupId}"`;
+    const r = await axios.get(atUrl('Sites'), {
+      headers: atHeaders(),
+      params: { filterByFormula: formula, maxRecords: 1 },
+    });
+    
+    const rec = r.data.records?.[0];
+    if (!rec) return null;
+
+    return {
+      id: rec.id,
+      siteName: rec.fields['Site Name'],
+      location: rec.fields['Site location'],
+      defaultWorkflow: rec.fields['Workflow Mode'] || 'INSTALLATION',
+      status: rec.fields['Site Status']
+    };
+  } catch (err) {
+    console.error('[Site Lookup] Error:', err.message);
+    return null;
+  }
+}
+
+// Slash Command Handler: /link <Site Name>
+async function handleLinkCommand(chatId, text) {
+  const match = text.trim().match(/^\/link\s+(.+)$/i);
+  if (!match) return false;
+
+  const targetSiteName = match[1].trim();
+
+  try {
+    const formula = `LOWER({Site Name})="${targetSiteName.toLowerCase()}"`;
+    const r = await axios.get(atUrl('Sites'), {
+      headers: atHeaders(),
+      params: { filterByFormula: formula, maxRecords: 1 },
+    });
+
+    const rec = r.data.records?.[0];
+    if (!rec) {
+      await sendRawWhatsAppMessage(chatId, `❌ Could not find site "${targetSiteName}" in Airtable. Please check the exact Site Name.`);
+      return true;
+    }
+
+    await axios.patch(
+      `${atUrl('Sites')}/${rec.id}`,
+      { fields: { 'WhatsApp Group ID': chatId } },
+      { headers: atHeaders() }
+    );
+
+    await sendRawWhatsAppMessage(
+      chatId,
+      `🔗 *Titan OS | Site Linked Successfully*\n` +
+      `*Site Name:* ${rec.fields['Site Name']}\n` +
+      `*Workflow Mode:* ${rec.fields['Workflow Mode'] || 'INSTALLATION'}\n` +
+      `*Group ID:* ${chatId}`
+    );
+    return true;
+  } catch (err) {
+    console.error('[Link Command] Error:', err.message);
+    return false;
   }
 }
 
@@ -280,14 +360,19 @@ async function saveReport(inboundId, ai_) {
 }
 
 // ---------- Gemini Multi-Workflow Evaluation ----------
-function buildPrompt(caption, worker) {
+function buildPrompt(caption, worker, site) {
   const workerContext = worker 
     ? `Sender Identity: ${worker.name} (Role: ${worker.role}, Default Project: ${worker.defaultProject})` 
     : `Sender Identity: Unregistered Worker`;
 
+  const siteContext = site
+    ? `Target Site Location: ${site.siteName} (Location: ${site.location}, Preferred Mode: ${site.defaultWorkflow})`
+    : `Target Site Location: ${worker ? worker.defaultProject : 'Court 1'}`;
+
   return `
 You are Titan OS, an intelligent field-operations AI partner for padel court operations.
 ${workerContext}
+${siteContext}
 
 Analyze the submission across three distinct workflow modes:
 1. INSTALLATION: Building/installing a court. Check progress against these 12 milestones:
@@ -299,7 +384,7 @@ ${ITEMS.map((n, i) => `${i + 1}.${n}`).join('\n')}
 Determine the workflow_mode: "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT".
 
 Context Rules:
-- Default "court_id": "${worker ? worker.defaultProject : 'Court 1'}" unless speech/caption mentions a different court.
+- Default "court_id": "${site ? site.siteName : (worker ? worker.defaultProject : 'Court 1')}" unless speech/caption specifies otherwise.
 - Set "should_reply": true for operational media, progress updates, or questions. Set false for casual banter.
 
 Worker caption: ${JSON.stringify(caption || '')}
@@ -311,7 +396,7 @@ Return ONLY valid JSON:
   "summary": "1-2 sentences summarizing observed physical state",
   "verified_items": ["names from the 12 items if INSTALLATION, else empty"],
   "compliance_status": "PASSED | NEEDS_REVIEW",
-  "court_id": "Court 1 | Court 2 | General | Unknown",
+  "court_id": "Court Name / Identifier",
   "action_required": false,
   "should_reply": true,
   "status_observed": "Key physical findings or defect observations (e.g. net loose, rust on frame, sand needed)",
@@ -320,12 +405,12 @@ Return ONLY valid JSON:
 }`;
 }
 
-function cleanResult(raw, worker) {
+function cleanResult(raw, worker, site) {
   const pick = (arr) => (Array.isArray(arr) ? arr.filter((x) => ITEMS.includes(x)) : []);
   const verified = pick(raw.verified_items);
   const mode = ['INSTALLATION', 'MAINTENANCE', 'SPOT_VISIT'].includes(raw.workflow_mode)
     ? raw.workflow_mode
-    : 'INSTALLATION';
+    : (site?.defaultWorkflow || 'INSTALLATION');
 
   return {
     workflow_mode: mode,
@@ -334,7 +419,7 @@ function cleanResult(raw, worker) {
     verified_items: verified,
     unverified_items: ITEMS.filter((i) => !verified.includes(i)),
     compliance_status: raw.compliance_status === 'PASSED' ? 'PASSED' : 'NEEDS_REVIEW',
-    court_id: raw.court_id || worker?.defaultProject || 'Court 1',
+    court_id: raw.court_id || site?.siteName || worker?.defaultProject || 'Court 1',
     action_required: raw.action_required === true,
     should_reply: raw.should_reply !== false,
     status_observed: String(raw.status_observed || raw.summary || '').slice(0, 1000),
@@ -343,7 +428,7 @@ function cleanResult(raw, worker) {
   };
 }
 
-async function evaluateWithGemini(buffer, mime, caption, worker) {
+async function evaluateWithGemini(buffer, mime, caption, worker, site) {
   if (!GEMINI_API_KEY) {
     console.error('[Gemini] GEMINI_API_KEY missing');
     return null;
@@ -370,14 +455,14 @@ async function evaluateWithGemini(buffer, mime, caption, worker) {
         parts.push({ fileData: { fileUri: uploaded.uri, mimeType: uploaded.mimeType || mime } });
       }
     }
-    parts.push({ text: buildPrompt(caption, worker) });
+    parts.push({ text: buildPrompt(caption, worker, site) });
 
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: [{ role: 'user', parts }],
       config: { responseMimeType: 'application/json' },
     });
-    const result = cleanResult(JSON.parse(response.text), worker);
+    const result = cleanResult(JSON.parse(response.text), worker, site);
     console.log('[Gemini] ok:', result.workflow_mode, '| status:', result.compliance_status, '| worker:', worker?.name);
     return result;
   } catch (err) {
@@ -435,6 +520,8 @@ async function processMessage(message, fullPayload) {
   const messageId = message.id;
   const sender = message.from;
   const type = message.type;
+  const media = ['audio', 'image', 'video'].includes(type) ? message[type] : null;
+  const caption = message.text?.body || media?.caption || '';
 
   if (seen.has(messageId) || (await inboundExists(messageId))) {
     console.log(`[Dedup] skipping ${messageId}`);
@@ -442,7 +529,13 @@ async function processMessage(message, fullPayload) {
   }
   remember(messageId);
 
-  // 1. BOUNCER SECURITY GATE
+  // 1. Slash Command Check (/link <Site Name>)
+  if (caption.startsWith('/link')) {
+    const isHandled = await handleLinkCommand(sender, caption);
+    if (isHandled) return;
+  }
+
+  // 2. BOUNCER SECURITY GATE
   const worker = await lookupWorker(sender);
   if (!worker || !worker.active) {
     console.warn(`[Bouncer] Rejected unauthorized/inactive sender: ${maskPhone(sender)}`);
@@ -450,11 +543,13 @@ async function processMessage(message, fullPayload) {
   }
   console.log(`[Bouncer] Authorized worker: ${worker.name} (${worker.role})`);
 
-  const media = ['audio', 'image', 'video'].includes(type) ? message[type] : null;
-  const caption = message.text?.body || media?.caption || '';
+  // 3. Site Group Check (if message came from a WhatsApp Group)
+  const site = await lookupSiteByGroupId(sender);
+  if (site) console.log(`[Site] Matched Group ID to site: ${site.siteName}`);
+
   const mime = media ? baseMime(media.mime_type) : null;
 
-  // 2. Claim Inbound Message
+  // 4. Claim Inbound Message
   const inboundId = await createInboundRow(
     {
       'Message ID': messageId,
@@ -465,7 +560,7 @@ async function processMessage(message, fullPayload) {
   );
   if (!inboundId) return;
 
-  // 3. Media Upload
+  // 5. Media Upload
   let buffer = null;
   let storagePath = null;
   if (media?.id) {
@@ -481,9 +576,9 @@ async function processMessage(message, fullPayload) {
     if (storagePath) await patchInbound(inboundId, { 'Media Path': storagePath });
   }
 
-  // 4. Gemini Multi-Workflow Evaluation & WhatsApp Reply
+  // 6. Gemini Multi-Workflow Evaluation & WhatsApp Reply
   if (buffer || caption) {
-    const result = await evaluateWithGemini(buffer, mime, caption, worker);
+    const result = await evaluateWithGemini(buffer, mime, caption, worker, site);
     if (result) {
       await saveReport(inboundId, result);
       await sendReply(sender, result, worker);
