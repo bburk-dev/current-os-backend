@@ -1,215 +1,163 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Titan OS V4.3 - Master Server Configuration (Chunk 1 of 3)",
-  "version": "4.3.0",
-  "system_environment": {
-    "node_version": "26.12.0",
-    "runtime": "Node.js Express Web Service",
-    "deployment_platform": "Render (titan-os-v4-3-1)",
-    "port": 3000,
-    "environment_variables": {
-      "META_APP_SECRET": { "type": "string", "required": true, "sensitive": true },
-      "WEBHOOK_VERIFY_TOKEN": { "type": "string", "required": true, "sensitive": true },
-      "WHATSAPP_ACCESS_TOKEN": { "type": "string", "required": true, "sensitive": true },
-      "WHATSAPP_PHONE_NUMBER_ID": { "type": "string", "required": true, "sensitive": false },
-      "GEMINI_API_KEY": { "type": "string", "required": true, "sensitive": true },
-      "GEMINI_MODEL": { "type": "string", "default": "gemini-3.5-flash", "required": true },
-      "AIRTABLE_API_KEY": { "type": "string", "required": true, "sensitive": true },
-      "AIRTABLE_BASE_ID": { "type": "string", "default": "apppNFEBAt2iQLVEP", "required": true },
-      "SUPABASE_URL": { "type": "string", "required": true, "sensitive": false },
-      "SUPABASE_SERVICE_ROLE_KEY": { "type": "string", "required": true, "sensitive": true },
-      "SUPABASE_BUCKET": { "type": "string", "default": "inbound-media", "required": true },
-      "AUTO_REPLY": { "type": "boolean", "default": true }
-    }
-  },
-  "security_layer": {
-    "hmac_sha256_validation": {
-      "header_name": "x-hub-signature-256",
-      "algorithm": "sha256",
-      "raw_body_buffer_capture": true,
-      "enforcement_action": {
-        "missing_signature_status": 401,
-        "invalid_signature_status": 401,
-        "error_message": "Unauthorized: Invalid or missing X-Hub-Signature-256 header"
-      }
-    }
-  },
-  "webhook_endpoint": {
-    "route": "/webhook",
-    "verification_get_handler": {
-      "query_parameters": {
-        "hub_mode": "hub.mode",
-        "hub_verify_token": "hub.verify_token",
-        "hub_challenge": "hub.challenge"
-      },
-      "expected_mode": "subscribe",
-      "success_status": 200,
-      "failure_status": 403
-    },
-    "event_post_handler": {
-      "root_path": "body.entry[0].changes[0].value",
-      "extracted_data": {
-        "message_object": "value.messages[0]",
-        "sender_phone": "value.messages[0].from",
-        "sender_wa_id": "value.contacts[0].wa_id",
-        "message_id": "value.messages[0].id",
-        "timestamp": "value.messages[0].timestamp",
-        "message_type": "value.messages[0].type",
-        "caption_text": "value.messages[0].text.body",
-        "image_attachment": "value.messages[0].image",
-        "video_attachment": "value.messages[0].video",
-        "audio_attachment": "value.messages[0].audio"
-      }
-    }
-  },
-  "slash_command_engine": {
-    "command_prefix": "/link",
-    "trigger_condition": "caption_text.startsWith('/link ')",
-    "execution_flow": {
-      "step_1": "Extract <Site Name> string from caption after /link prefix",
-      "step_2": "Query Airtable 'Sites' table matching {Site Name} = extracted name",
-      "step_3": "Patch matched record with 'WhatsApp Group ID' = sender_phone (@g.us)",
-      "step_4": "Send outbound WhatsApp confirmation text back to group",
-      "step_5": "Terminate webhook processing loop early with HTTP 200"
-    }
+const express = require('express');
+const crypto = require('crypto');
+const axios = require('axios');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Environment Variables
+const {
+  META_APP_SECRET,
+  WHATSAPP_ACCESS_TOKEN,
+  WEBHOOK_VERIFY_TOKEN,
+  AIRTABLE_API_KEY,
+  AIRTABLE_BASE_ID
+} = process.env;
+
+// 1. Capture Raw Body Buffer for HMAC Verification
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
   }
-}{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Titan OS V4.3 - Business Logic & Intelligence Schema (Chunk 2 of 3)",
-  "version": "4.3.0",
-  "worker_bouncer_security": {
-    "target_table": "Worker",
-    "e164_normalization": "Convert sender_phone to pure E.164 string (e.g., '+14379287172')",
-    "lookup_query": "AND({Phone E164} = normalized_phone, {Active} = TRUE())",
-    "match_handling": {
-      "on_success": {
-        "extract": ["Full Name", "Role", "Default Project"],
-        "proceed": true
-      },
-      "on_failure": {
-        "action": "BLOCK",
-        "log": "Unauthorized worker attempt blocked at zero token cost",
-        "http_status": 200,
-        "response": { "status": "BLOCKED", "reason": "Sender not registered or inactive in Worker table" }
-      }
-    }
-  },
-  "site_location_resolver": {
-    "target_table": "Sites",
-    "lookup_query": "{WhatsApp Group ID} = sender_phone",
-    "match_handling": {
-      "on_success": {
-        "extract_fields": {
-          "site_record_id": "id",
-          "site_name": "fields['Site Name']",
-          "preferred_workflow_mode": "fields['Workflow Mode']",
-          "site_status": "fields['Site Status']"
-        },
-        "linked_site_array": ["$site_record_id"]
-      },
-      "on_failure": {
-        "site_name": "Unlinked Location",
-        "preferred_workflow_mode": "MAINTENANCE",
-        "linked_site_array": []
-      }
-    }
-  },
-  "supabase_media_archiver": {
-    "bucket": "inbound-media",
-    "privacy": "public: false",
-    "storage_path": "YYYY/MM/${message_id}.${file_extension}",
-    "execution": {
-      "step_1": "Fetch raw media binary stream from Meta Graph API using WHATSAPP_ACCESS_TOKEN",
-      "step_2": "Stream buffer directly to Supabase REST endpoint using SUPABASE_SERVICE_ROLE_KEY",
-      "step_3": "Return private path reference string for database logging"
-    }
-  },
-  "gemini_multimodal_engine": {
-    "sdk": "@google/genai",
-    "model": "gemini-3.5-flash",
-    "temperature": 0.0,
-    "media_handling": {
-      "inline_threshold_mb": 10,
-      "files_api_threshold_mb": 40
-    },
-    "supported_workflow_modes": ["INSTALLATION", "MAINTENANCE", "SPOT_VISIT"],
-    "accepted_milestone_gates": [
-      "1. Steel Structure",
-      "2. Lower mesh",
-      "3. Upper mesh",
-      "5. Glass",
-      "6. Turf and sand",
-      "7. Silicone",
-      "8. Net posts and net"
-    ],
-    "output_format": "STRICT_JSON",
-    "json_schema_definition": {
-      "workflow_mode": "ENUM('INSTALLATION', 'MAINTENANCE', 'SPOT_VISIT')",
-      "mentioned_gates": "ARRAY_OF_STRINGS",
-      "verification_basis": "ENUM('VISUAL_PROOF', 'WORKER_CLAIM', 'OPERATIONAL_OVERRIDE', 'AI_VISUAL_ASSESSMENT')",
-      "overall_status": "ENUM('CLEARED', 'NEEDS_ATTENTION', 'BLOCKED')",
-      "worker_summary": "STRING",
-      "status_observed": "STRING",
-      "action_intent": "STRING"
-    }
+}));
+
+// 2. Middleware: HMAC SHA-256 Signature Validation
+const verifyWhatsAppSignature = (req, res, next) => {
+  const signature = req.headers['x-hub-signature-256'];
+
+  if (!signature) {
+    return res.status(401).json({
+      status: 'UNAUTHORIZED',
+      message: 'Access Denied: x-hub-signature-256 header missing.'
+    });
   }
-}{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Titan OS V4.3 - Database Operations & Outbound Messaging (Chunk 3 of 3)",
-  "version": "4.3.0",
-  "airtable_inbound_messages_2_pipeline": {
-    "target_table": "Inbound Messages 2",
-    "fields_mapping": {
-      "Message ID": "$webhook.message_id",
-      "Sender Phone": "$worker.normalized_phone",
-      "Worker": ["$worker.record_id"],
-      "Message Type": "$webhook.message_type",
-      "Caption Text": "$webhook.caption_text",
-      "Media Path": "$supabase.storage_path",
-      "Raw Payload JSON": "$webhook.raw_json_string"
-    }
-  },
-  "airtable_reports_2_pipeline": {
-    "target_table": "Reports 2",
-    "fields_mapping": {
-      "Inbound Messages 2": ["$inbound_messages_2.record_id"],
-      "Sites": "$site_location_resolver.linked_site_array",
-      "Source Batch ID": "$webhook.sender_phone",
-      "WhatsApp Reply Text": "$webhook.caption_text",
-      "Mentioned Gates": "JOIN_WITH_COMMA($gemini.mentioned_gates)",
-      "Verification Basis": "$gemini.verification_basis",
-      "Workflow Mode": "$gemini.workflow_mode",
-      "Overall Status": "$gemini.overall_status",
-      "Worker Summary": "$gemini.worker_summary",
-      "Status Observed": "$gemini.status_observed",
-      "Action Intent": "$gemini.action_intent",
-      "Clean JSON": "JSON.stringify($gemini.raw_output)"
-    }
-  },
-  "outbound_whatsapp_notifier": {
-    "condition": "process.env.AUTO_REPLY === 'true'",
-    "endpoint": "https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages",
-    "message_template": "🤖 Titan OS | 🏗️ ${gemini.workflow_mode} Update\n\n📌 Site: ${site.site_name}\n👷 Worker: ${worker.full_name}\n🔍 Status: ${gemini.overall_status}\n\n📝 Summary:\n${gemini.worker_summary}",
-    "headers": {
-      "Authorization": "Bearer ${WHATSAPP_ACCESS_TOKEN}",
-      "Content-Type": "application/json"
-    }
-  },
-  "response_orchestration": {
-    "on_success": {
-      "http_status": 200,
-      "body": {
-        "status": "SUCCESS",
-        "message": "Webhook processed, Worker verified, media archived to Supabase, AI evaluated, and record saved to Reports 2."
-      }
-    },
-    "on_error": {
-      "http_status": 500,
-      "log_format": "ERROR: Webhook pipeline failed: ${error.stack}",
-      "body": {
-        "status": "INTERNAL_SERVER_ERROR",
-        "message": "Webhook processing failed."
-      }
-    }
+
+  const expectedSignature = 'sha256=' + crypto
+    .createHmac('sha256', META_APP_SECRET || '')
+    .update(req.rawBody || '')
+    .digest('hex');
+
+  const sigBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+
+  if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+    return res.status(401).json({
+      status: 'UNAUTHORIZED',
+      message: 'Access Denied: Payload HMAC verification failed.'
+    });
   }
-}
+
+  next();
+};
+
+// 3. Meta Verification Handshake (GET /webhook)
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token === WEBHOOK_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  return res.status(403).send('Forbidden');
+});// 4. Webhook Ingestion Engine (POST /webhook)
+app.post('/webhook', verifyWhatsAppSignature, async (req, res) => {
+  try {
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0]?.value;
+    const message = change?.messages?.[0];
+
+    if (!message) {
+      return res.status(200).json({ status: 'IGNORED', message: 'No message object found.' });
+    }
+
+    const whatsappChatId = message.from;
+    const rawTextBody = message.text?.body || '';
+    const hasMedia = !!message.image || !!message.video;
+
+    // A. Site Location Resolver Lookup
+    let siteRecordId = null;
+    let workflowMode = 'MAINTENANCE';
+    let siteStatus = 'ACTIVE';
+
+    try {
+      const siteLookupResponse = await axios.get(
+        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Sites`,
+        {
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
+          params: { filterByFormula: `{WhatsApp Group ID} = '${whatsappChatId}'` }
+        }
+      );
+
+      const matchedSite = siteLookupResponse.data?.records?.[0];
+      if (matchedSite) {
+        siteRecordId = matchedSite.id;
+        workflowMode = matchedSite.fields['Workflow Mode'] || 'MAINTENANCE';
+        siteStatus = matchedSite.fields['Site Status'] || 'ACTIVE';
+      }
+    } catch (lookupErr) {
+      console.warn('Site lookup failed or unlinked:', lookupErr.message);
+    }
+
+    // B. Milestone Gate Parser
+    const gatePatterns = [
+      { name: '1. Steel Structure', patterns: [/steel structure/i, /steel frame/i, /columns/i, /beams/i] },
+      { name: '2. Lower mesh', patterns: [/lower mesh/i, /bottom mesh/i, /lower fence/i] },
+      { name: '3. Upper mesh', patterns: [/upper mesh/i, /top mesh/i, /upper fence/i] },
+      { name: '5. Glass', patterns: [/glass/i, /glass panels/i, /tempered glass/i] },
+      { name: '6. Turf and sand', patterns: [/turf/i, /grass/i, /sand/i, /sand infill/i] },
+      { name: '7. Silicone', patterns: [/silicone/i, /seals/i, /sealant/i] },
+      { name: '8. Net posts and net', patterns: [/net/i, /net posts/i, /center net/i] }
+    ];
+
+    const matchedGates = gatePatterns
+      .filter(gate => gate.patterns.some(regex => regex.test(rawTextBody)))
+      .map(gate => gate.name);
+
+    const mentionedGatesString = matchedGates.join(', ');
+
+    // C. Verification Basis Logic
+    const verificationBasis = hasMedia ? 'VISUAL_PROOF' : 'WORKER_CLAIM';// D. Build Reports 2 Payload
+    const reportFields = {
+      'Source Batch ID': whatsappChatId,
+      'WhatsApp Reply Text': rawTextBody,
+      'Mentioned Gates': mentionedGatesString,
+      'Verification Basis': verificationBasis,
+      'Workflow Mode': workflowMode,
+      'Site Status': siteStatus
+    };
+
+    if (siteRecordId) {
+      reportFields['Sites'] = [siteRecordId]; // Linked record ID array
+    }
+
+    // E. Persist Record to Reports 2
+    const airtableResponse = await axios.post(
+      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Reports%202`,
+      { records: [{ fields: reportFields }] },
+      {
+        headers: {
+          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    return res.status(200).json({
+      status: 'SUCCESS',
+      message: 'Webhook processed, payload validated, and report recorded.',
+      record_id: airtableResponse.data.records[0].id
+    });
+
+  } catch (error) {
+    console.error('Webhook processing error:', error.response?.data || error.message);
+    return res.status(500).json({
+      status: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to persist report record to database.'
+    });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Titan OS Webhook service running on port ${PORT}`);
+});
