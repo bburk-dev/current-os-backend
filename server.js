@@ -51,7 +51,7 @@ async function sendWhatsAppReply(recipientPhone, aiResult) {
       text: { body: messageText }
     };
 
-    const response = await axios.post(
+    await axios.post(
       `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
       payload,
       {
@@ -62,7 +62,7 @@ async function sendWhatsAppReply(recipientPhone, aiResult) {
       }
     );
 
-    console.log('[WhatsApp Reply Sent Successfully]: Message ID', response.data?.messages?.[0]?.id);
+    console.log('[WhatsApp Reply Sent Successfully]');
   } catch (err) {
     console.error('[WhatsApp Reply Error]:', err.response?.data || err.message);
   }
@@ -230,8 +230,6 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   res.status(200).send('EVENT_RECEIVED');
 
-  console.log('[Webhook Ingest]: Inbound request received from Meta');
-
   try {
     const entry = req.body?.entry?.[0];
     const changes = entry?.changes?.[0];
@@ -270,16 +268,31 @@ app.post('/webhook', async (req, res) => {
 
         mediaBuffer = Buffer.from(binaryRes.data);
         console.log(`[Media Downloaded Successfully]: Buffer size ${mediaBuffer.length} bytes`);
-      } else {
-        console.warn('[Media Download Skipped]: Missing token in environment variables');
       }
     }
 
-    // 1. Evaluate media/text with Gemini 2.5 Flash
     const aiResult = await evaluateMediaWithGemini(mediaBuffer, mimeType, captionText);
 
-    // 2. Save to Airtable tables
     const inboundRecordId = await saveToInboundMessages2(senderPhone, messageType, captionText, aiResult, req.body, messageId);
 
     if (inboundRecordId) {
-      await saveToReports
+      await saveToReports2(inboundRecordId, aiResult);
+    }
+
+    await sendWhatsAppReply(senderPhone, aiResult);
+
+  } catch (err) {
+    console.error('[Webhook Processing Error]:', err.message);
+  }
+});
+
+// Root Health Check Route
+app.get('/', (req, res) => {
+  res.status(200).send('Titan OS V4.3 Active');
+});
+
+// Start Server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
+});
