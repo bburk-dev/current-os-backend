@@ -120,65 +120,55 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // 4. Multi-Field Airtable Payload Injection
-    const baseFields = {
-      'Message Type': messageType,
-      'Message ID': wamid,
-    };
+    // Candidate key maps to test against Airtable schema
+    const phoneKeys = ['Wa Phone', 'Wa Phone Number', 'Phone Number', 'Phone'];
+    const mediaKeys = ['Media URL', 'Inbound Media URL', 'Media', 'Media Link'];
 
-    if (mediaUrl) {
-      baseFields['Inbound Media URL'] = mediaUrl;
-    }
-
-    if (messageType === 'text' && message.text) {
-      baseFields['Text Body'] = message.text.body;
-    }
-
-    // Attempt insertion across all common field title variants
-    const candidatePhoneFields = ['Wa Phone Number', 'Wa Phone ', 'Phone Number', 'Phone', 'From'];
     let logged = false;
 
-    for (const fieldKey of candidatePhoneFields) {
-      const payload = { fields: { ...baseFields, [fieldKey]: fromNumber } };
-      const airtableRes = await fetch(
-        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        }
-      );
+    // Try permutations of phone & media column names
+    for (const phoneKey of phoneKeys) {
+      for (const mediaKey of mediaKeys) {
+        const airtableFields = {
+          [phoneKey]: fromNumber,
+          'Message Type': messageType,
+          'Message ID': wamid,
+        };
 
-      const airtableData = await airtableRes.json();
-      if (!airtableData.error) {
-        console.log(`[Airtable] Successfully logged message ${wamid} using column "${fieldKey}"`);
-        logged = true;
-        break;
+        if (mediaUrl) {
+          airtableFields[mediaKey] = mediaUrl;
+        }
+
+        if (messageType === 'text' && message.text) {
+          airtableFields['Text Body'] = message.text.body;
+        }
+
+        const airtableRes = await fetch(
+          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ fields: airtableFields }),
+          }
+        );
+
+        const airtableData = await airtableRes.json();
+        if (!airtableData.error) {
+          console.log(
+            `[Airtable] Successfully logged message ${wamid} using fields "${phoneKey}" and "${mediaKey}"`
+          );
+          logged = true;
+          break;
+        }
       }
+      if (logged) break;
     }
 
-    // Fallback: Post record without phone field if all phone key attempts fail
     if (!logged) {
-      const fallbackRes = await fetch(
-        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ fields: baseFields }),
-        }
-      );
-      const fallbackData = await fallbackRes.json();
-      if (!fallbackData.error) {
-        console.log(`[Airtable] Logged record ${wamid} (base fields only)`);
-      } else {
-        console.error(`[Airtable Error] ${JSON.stringify(fallbackData.error)}`);
-      }
+      console.error(`[Airtable Error] Could not match column headers. Please check Airtable schema.`);
     }
   } catch (err) {
     console.error('[Pipeline Error]', err.message);
