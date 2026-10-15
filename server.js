@@ -10,6 +10,7 @@ app.use(express.json({
   }
 }));
 
+// Initialize Gemini SDK with Environment Variable
 const ai = new GoogleGenAI({ 
   apiKey: process.env.GEMINI_API_KEY || '' 
 });
@@ -20,7 +21,7 @@ const ai = new GoogleGenAI({
 async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') {
   try {
     if (!process.env.GEMINI_API_KEY) {
-      console.error('[Gemini Evaluation Error]: GEMINI_API_KEY missing');
+      console.error('[Gemini Evaluation Error]: GEMINI_API_KEY missing from environment variables');
       return null;
     }
 
@@ -44,6 +45,7 @@ Worker Caption/Text: "${captionText}"
 
     const contents = [];
 
+    // Attach inline video, audio, or image binary buffer for Gemini 2.5 Flash
     if (mediaBuffer && mimeType) {
       contents.push({
         inlineData: {
@@ -83,13 +85,11 @@ async function saveToInboundMessages2(senderPhone, messageType, captionText, aiR
       return null;
     }
 
-    // Exact fields for "Inbound Messages 2"
+    // Essential fields matching Inbound Messages 2
     const fields = {
       'Message ID': messageId || `msg_${Date.now()}`,
       'Caption Text': captionText || aiResult?.summary || '',
-      'Language Detected': aiResult?.detected_language || 'en',
-      'Raw Payload JSON': JSON.stringify(rawPayload),
-      'Phone E164': senderPhone
+      'Raw Payload JSON': JSON.stringify(rawPayload)
     };
 
     const response = await axios.post(
@@ -103,7 +103,7 @@ async function saveToInboundMessages2(senderPhone, messageType, captionText, aiR
       }
     );
 
-    console.log('[Inbound Messages 2 Saved]: Record ID', response.data.id);
+    console.log('[Inbound Messages 2 Saved Successfully]: Record ID', response.data.id);
     return response.data.id;
   } catch (err) {
     console.error('[Inbound Messages 2 Error]:', err.response?.data || err.message);
@@ -118,13 +118,12 @@ async function saveToReports2(inboundRecordId, aiResult) {
   try {
     if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) return;
 
-    // Exact fields for "Reports 2"
+    // Fields matching Reports 2
     const fields = {
       'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
       'Worker Summary': aiResult?.summary || '',
       'Action Required': aiResult?.action_required || false,
-      'Asset Identifier': aiResult?.court_id || 'General',
-      'Issue Severity': aiResult?.compliance_status === 'FAILED' ? 'HIGH' : 'NONE'
+      'Asset Identifier': aiResult?.court_id || 'General'
     };
 
     const response = await axios.post(
@@ -138,7 +137,7 @@ async function saveToReports2(inboundRecordId, aiResult) {
       }
     );
 
-    console.log('[Reports 2 Saved]: Record ID', response.data.id);
+    console.log('[Reports 2 Saved Successfully]: Record ID', response.data.id);
   } catch (err) {
     console.error('[Reports 2 Error]:', err.response?.data || err.message);
   }
@@ -150,7 +149,7 @@ app.get('/webhook', (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode && token === process.env.WEBHOOK_VERHOOK_VERIFY_TOKEN) {
+  if (mode && token === process.env.WEBHOOK_VERIFY_TOKEN) {
     console.log('[Webhook Verification]: Verified successfully!');
     return res.status(200).send(challenge);
   }
@@ -204,16 +203,18 @@ app.post('/webhook', async (req, res) => {
 
         mediaBuffer = Buffer.from(binaryRes.data);
         console.log(`[Media Downloaded Successfully]: Buffer size ${mediaBuffer.length} bytes`);
+      } else {
+        console.warn('[Media Download Skipped]: Missing WHATSAPP_TOKEN in environment variables');
       }
     }
 
-    // 1. Evaluate with Gemini 2.5 Flash
+    // 1. Evaluate media/text with Gemini 2.5 Flash
     const aiResult = await evaluateMediaWithGemini(mediaBuffer, mimeType, captionText);
 
-    // 2. Save to "Inbound Messages 2"
+    // 2. Save to Inbound Messages 2
     const inboundRecordId = await saveToInboundMessages2(senderPhone, messageType, captionText, aiResult, req.body, messageId);
 
-    // 3. Save connected report in "Reports 2"
+    // 3. Save connected record in Reports 2
     if (inboundRecordId) {
       await saveToReports2(inboundRecordId, aiResult);
     }
@@ -223,10 +224,12 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// Root Health Check Route
 app.get('/', (req, res) => {
   res.status(200).send('Titan OS V4.3 Active');
 });
 
+// Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
