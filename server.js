@@ -16,6 +16,52 @@ const ai = new GoogleGenAI({
 });
 
 /**
+ * Send Automated Outbound WhatsApp Message to Worker
+ */
+async function sendWhatsAppReply(recipientPhone, aiResult) {
+  try {
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '1099852093201368';
+    const token = process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
+
+    if (!token || !phoneNumberId) {
+      console.warn('[WhatsApp Reply Skipped]: Missing token or WHATSAPP_PHONE_NUMBER_ID');
+      return;
+    }
+
+    let messageText = '';
+
+    if (aiResult?.compliance_status === 'NEEDS_REVIEW' || aiResult?.action_required) {
+      messageText = `🤖 *Titan OS Update*\n\nWe received your submission, but require additional verification.\n\n*Summary:* ${aiResult?.summary || 'Submission received'}\n\n👉 *Action Required:* Please send a clear photo or close-up video of the court gate/latch to complete this report.`;
+    } else {
+      messageText = `✅ *Titan OS Logged*\n\n*Court:* ${aiResult?.court_id || 'General'}\n*Summary:* ${aiResult?.summary || 'Report logged successfully'}\n\nNo further photos needed. Thank you!`;
+    }
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipientPhone,
+      type: 'text',
+      text: { body: messageText }
+    };
+
+    const response = await axios.post(
+      `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log('[WhatsApp Reply Sent Successfully]: Message ID', response.data?.messages?.[0]?.id);
+  } catch (err) {
+    console.error('[WhatsApp Reply Error]:', err.response?.data || err.message);
+  }
+}
+
+/**
  * Asynchronous Multimodal Evaluation Function
  */
 async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') {
@@ -85,7 +131,6 @@ async function saveToInboundMessages2(senderPhone, messageType, captionText, aiR
       return null;
     }
 
-    // Essential fields matching Inbound Messages 2
     const fields = {
       'Message ID': messageId || `msg_${Date.now()}`,
       'Caption Text': captionText || aiResult?.summary || '',
@@ -118,7 +163,6 @@ async function saveToReports2(inboundRecordId, aiResult) {
   try {
     if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) return;
 
-    // Fields matching Reports 2
     const fields = {
       'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
       'Worker Summary': aiResult?.summary || '',
@@ -168,10 +212,7 @@ app.post('/webhook', async (req, res) => {
     const value = changes?.value;
     const message = value?.messages?.[0];
 
-    if (!message) {
-      console.log('[Webhook Ingest]: Non-message event received');
-      return;
-    }
+    if (!message) return;
 
     const senderPhone = message.from;
     const messageType = message.type;
@@ -187,7 +228,8 @@ app.post('/webhook', async (req, res) => {
       const mediaId = message[messageType]?.id;
       mimeType = message[messageType]?.mime_type || (messageType === 'video' ? 'video/mp4' : 'audio/ogg');
 
-      const token = process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
+      // Checks WHATSAPP_ACCESS_TOKEN first, falling back to WHATSAPP_TOKEN or META_ACCESS_TOKEN
+      const token = process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
 
       if (mediaId && token) {
         console.log(`[Downloading Media]: ID ${mediaId} (${mimeType})`);
@@ -204,33 +246,21 @@ app.post('/webhook', async (req, res) => {
         mediaBuffer = Buffer.from(binaryRes.data);
         console.log(`[Media Downloaded Successfully]: Buffer size ${mediaBuffer.length} bytes`);
       } else {
-        console.warn('[Media Download Skipped]: Missing WHATSAPP_TOKEN in environment variables');
+        console.warn('[Media Download Skipped]: Missing WHATSAPP_ACCESS_TOKEN in environment variables');
       }
     }
 
     // 1. Evaluate media/text with Gemini 2.5 Flash
     const aiResult = await evaluateMediaWithGemini(mediaBuffer, mimeType, captionText);
 
-    // 2. Save to Inbound Messages 2
+    // 2. Save to Airtable tables
     const inboundRecordId = await saveToInboundMessages2(senderPhone, messageType, captionText, aiResult, req.body, messageId);
 
-    // 3. Save connected record in Reports 2
     if (inboundRecordId) {
       await saveToReports2(inboundRecordId, aiResult);
     }
 
-  } catch (err) {
-    console.error('[Webhook Processing Error]:', err.message);
-  }
-});
+    // 3. Send WhatsApp auto-reply back to worker
+    await sendWhatsAppReply(senderPhone, aiResult);
 
-// Root Health Check Route
-app.get('/', (req, res) => {
-  res.status(200).send('Titan OS V4.3 Active');
-});
-
-// Start Server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
-});
+  } catch (err
