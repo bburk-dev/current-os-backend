@@ -124,36 +124,50 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // 4. Log payload to Airtable
-    const airtableFields = {
-      'From': fromNumber,
+    // 4. Log payload to Airtable with dynamic key matching
+    const baseFields = {
       'Message Type': messageType,
       'Message ID': wamid,
-      Timestamp: new Date().toISOString(),
     };
 
     if (mediaUrl) {
-      airtableFields['Media URL'] = mediaUrl;
+      baseFields['Media URL'] = mediaUrl;
     }
 
     if (messageType === 'text' && message.text) {
-      airtableFields['Text Body'] = message.text.body;
+      baseFields['Text Body'] = message.text.body;
     }
 
-    const airtableRes = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ fields: airtableFields }),
-    });
+    // Attempt insert with fallback phone field names
+    const phoneKeysToTry = ['Phone Number', 'From', 'Phone', 'Sender Phone'];
+    let loggedSuccessfully = false;
 
-    const airtableData = await airtableRes.json();
-    if (airtableData.error) {
-      console.error(`[Airtable API Error] ${JSON.stringify(airtableData.error)}`);
-    } else {
-      console.log(`[Airtable] Successfully logged message ${wamid}`);
+    for (const phoneKey of phoneKeysToTry) {
+      const airtableFields = { ...baseFields, [phoneKey]: fromNumber };
+
+      const airtableRes = await fetch(
+        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ fields: airtableFields }),
+        }
+      );
+
+      const airtableData = await airtableRes.json();
+
+      if (!airtableData.error) {
+        console.log(`[Airtable] Successfully logged message ${wamid} using field "${phoneKey}"`);
+        loggedSuccessfully = true;
+        break;
+      }
+    }
+
+    if (!loggedSuccessfully) {
+      console.error(`[Airtable Error] Could not match phone column name. Tried: ${phoneKeysToTry.join(', ')}`);
     }
   } catch (err) {
     console.error('[Pipeline Error]', err.message);
