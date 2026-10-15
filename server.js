@@ -99,7 +99,7 @@ app.post('/webhook', async (req, res) => {
         console.error(`[Meta API Error] ${JSON.stringify(metaData.error)}`);
       } else if (metaData.url) {
         console.log(`[Meta Success] Got download URL. Downloading binary stream...`);
-        
+
         // 2. Download binary media stream from Meta
         const binaryRes = await fetch(metaData.url, {
           headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
@@ -126,7 +126,7 @@ app.post('/webhook', async (req, res) => {
 
     // 4. Log payload to Airtable
     const airtableFields = {
-      'Phone Number': fromNumber,
+      'From': fromNumber,
       'Message Type': messageType,
       'Message ID': wamid,
       Timestamp: new Date().toISOString(),
