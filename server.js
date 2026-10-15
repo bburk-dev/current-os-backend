@@ -24,7 +24,6 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const BUCKET = process.env.SUPABASE_BUCKET || 'inbound-media';
 
-// Set AUTO_REPLY=true in Render environment to enable Titan responses
 const AUTO_REPLY = process.env.AUTO_REPLY === 'true';
 
 const MAX_MEDIA_BYTES = 40 * 1024 * 1024; // refuse anything bigger (RAM safety)
@@ -76,7 +75,7 @@ const ITEMS = [
 
 // ---------- Signature verification (Meta X-Hub-Signature-256) ----------
 function validSignature(req) {
-  if (!META_APP_SECRET) return false; // fail closed
+  if (!META_APP_SECRET) return false;
   const header = req.get('x-hub-signature-256') || '';
   if (!header.startsWith('sha256=') || !req.rawBody) return false;
   const expected = crypto
@@ -89,7 +88,7 @@ function validSignature(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// ---------- Supabase private storage (REST, no extra SDK) ----------
+// ---------- Supabase private storage ----------
 const sbHeaders = () => ({
   Authorization: `Bearer ${SUPABASE_KEY}`,
   apikey: SUPABASE_KEY,
@@ -97,7 +96,7 @@ const sbHeaders = () => ({
 
 async function ensurePrivateBucket() {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
-    console.error('[Storage] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing: media will NOT be stored');
+    console.error('[Storage] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing');
     return false;
   }
   try {
@@ -122,7 +121,7 @@ async function ensurePrivateBucket() {
         { public: false },
         { headers: sbHeaders() }
       );
-      console.log(`[Storage] bucket "${BUCKET}" was public; set to private`);
+      console.log(`[Storage] bucket "${BUCKET}" set to private`);
     }
     console.log(`[Storage] bucket "${BUCKET}" ready (private)`);
     return true;
@@ -166,113 +165,48 @@ async function downloadMedia(mediaId) {
   return Buffer.from(bin.data);
 }
 
-// ---------- Gemini evaluation ----------
-function buildPrompt(caption) {
-  return `
-You are Titan OS, an intelligent, conversational field-operations AI partner for padel court construction.
-The submission may be a photo, video, voice note, or text in English, Spanish, Swahili, or Hindi.
-
-Core Tasks:
-1. Evaluate visible physical progress and audio voiceovers against these 12 milestones:
-${ITEMS.map((n, i) => `${i + 1}.${n}`).join('\n')}
-
-2. Analyze Audio & Context:
-   - Listen to site speech/commentary in audio/video submissions.
-   - Extract operational updates, technical questions, or installation descriptions.
-   - Ignore unrelated casual chatter (e.g., lunch, coffee, social banter).
-
-3. Intent & Response Gating ("should_reply"):
-   - Set "should_reply": true IF the submission contains construction media, a site progress update, or an installation question.
-   - Set "should_reply": false IF the submission is strictly non-operational casual banter or chatter with no media/installation relevance.
-
-4. Installation Feedback ("field_feedback"):
-   - Provide concise, encouraging, and expert installation feedback confirming what was seen/heard and offering constructive next steps or quality tips.
-
-Worker caption: ${JSON.stringify(caption || '')}
-
-Return ONLY valid JSON:
-{
-  "detected_language": "en | es | sw | hi",
-  "summary": "1-2 sentences on verified physical progress and key speech content",
-  "verified_items": ["names from the 12 items"],
-  "unverified_items": ["remaining names from the 12 items"],
-  "compliance_status": "PASSED | NEEDS_REVIEW",
-  "court_id": "Court 1 | Court 2 | General | Unknown",
-  "action_required": false,
-  "should_reply": true,
-  "field_feedback": "Short expert feedback confirming visual findings and offering next-step guidance"
-}`;
-}
-
-function cleanResult(raw) {
-  const pick = (arr) => (Array.isArray(arr) ? arr.filter((x) => ITEMS.includes(x)) : []);
-  const verified = pick(raw.verified_items);
-  return {
-    detected_language: raw.detected_language || 'unknown',
-    summary: String(raw.summary || '').slice(0, 1000),
-    verified_items: verified,
-    unverified_items: ITEMS.filter((i) => !verified.includes(i)),
-    compliance_status: raw.compliance_status === 'PASSED' ? 'PASSED' : 'NEEDS_REVIEW',
-    court_id: raw.court_id || 'Unknown',
-    action_required: raw.action_required === true,
-    should_reply: raw.should_reply !== false, // default true unless explicitly non-operational
-    field_feedback: String(raw.field_feedback || raw.summary || '').slice(0, 1000),
-  };
-}
-
-async function evaluateWithGemini(buffer, mime, caption) {
-  if (!GEMINI_API_KEY) {
-    console.error('[Gemini] GEMINI_API_KEY missing');
-    return null;
-  }
-  let uploaded = null;
-  try {
-    const parts = [];
-    if (buffer && mime) {
-      if (buffer.length <= INLINE_LIMIT_BYTES) {
-        parts.push({ inlineData: { data: buffer.toString('base64'), mimeType: mime } });
-      } else {
-        uploaded = await ai.files.upload({
-          file: new Blob([buffer], { type: mime }),
-          config: { mimeType: mime },
-        });
-        let tries = 0;
-        while (uploaded.state && uploaded.state !== 'ACTIVE' && tries < 30) {
-          if (uploaded.state === 'FAILED') throw new Error('Gemini file processing failed');
-          await new Promise((r) => setTimeout(r, 2000));
-          uploaded = await ai.files.get({ name: uploaded.name });
-          tries++;
-        }
-        if (uploaded.state && uploaded.state !== 'ACTIVE') throw new Error('Gemini file not ready in time');
-        parts.push({ fileData: { fileUri: uploaded.uri, mimeType: uploaded.mimeType || mime } });
-      }
-    }
-    parts.push({ text: buildPrompt(caption) });
-
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: [{ role: 'user', parts }],
-      config: { responseMimeType: 'application/json' },
-    });
-    const result = cleanResult(JSON.parse(response.text));
-    console.log('[Gemini] ok:', result.compliance_status, '| verified:', result.verified_items.length, '| reply:', result.should_reply);
-    return result;
-  } catch (err) {
-    console.error('[Gemini] error:', err.message);
-    return null;
-  } finally {
-    if (uploaded?.name) {
-      ai.files.delete({ name: uploaded.name }).catch(() => {});
-    }
-  }
-}
-
-// ---------- Airtable ----------
+// ---------- Airtable Bouncer & Data Handlers ----------
 const atHeaders = () => ({
   Authorization: `Bearer ${AIRTABLE_KEY}`,
   'Content-Type': 'application/json',
 });
 const atUrl = (table) => `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(table)}`;
+
+// Bouncer Lookup: Matches incoming phone against Worker table
+async function lookupWorker(rawPhone) {
+  if (!AIRTABLE_KEY || !AIRTABLE_BASE) return null;
+  const cleanPhone = String(rawPhone).replace(/[^0-9+]/g, '');
+  const withPlus = cleanPhone.startsWith('+') ? cleanPhone : `+${cleanPhone}`;
+  
+  try {
+    const formula = `OR({Phone E164}="${withPlus}", {WhatsApp Number}="${withPlus}", {Phone E164}="${cleanPhone}")`;
+    const r = await axios.get(atUrl('Worker'), {
+      headers: atHeaders(),
+      params: { filterByFormula: formula, maxRecords: 1 },
+    });
+    
+    const rec = r.data.records?.[0];
+    if (!rec) {
+      console.warn(`[Bouncer] No worker record found for phone: ${maskPhone(rawPhone)}`);
+      return null;
+    }
+
+    const fields = rec.fields;
+    const isActive = fields['Active'] === true || fields['Active'] === 'true';
+
+    return {
+      id: rec.id,
+      name: fields['Full Name'] || 'Unknown Worker',
+      role: fields['Role'] || 'Worker',
+      defaultProject: fields['Default Project'] || 'General Site',
+      language: fields['Language Preference'] || 'English',
+      active: isActive
+    };
+  } catch (err) {
+    console.error('[Bouncer] Lookup failed:', err.response?.data || err.message);
+    return null;
+  }
+}
 
 async function inboundExists(messageId) {
   try {
@@ -283,7 +217,7 @@ async function inboundExists(messageId) {
     });
     return (r.data.records || []).length > 0;
   } catch (err) {
-    console.error('[Airtable] dedup lookup failed (processing anyway):', err.response?.data || err.message);
+    console.error('[Airtable] dedup lookup failed:', err.response?.data || err.message);
     return false;
   }
 }
@@ -341,134 +275,39 @@ async function saveReport(inboundId, ai_) {
   }
 }
 
-// ---------- Intelligent WhatsApp Reply ----------
-async function sendReply(to, r) {
-  if (!AUTO_REPLY || !r?.should_reply || !WA_TOKEN || !WA_PHONE_ID) {
-    if (r && !r.should_reply) console.log('[Reply] skipped non-operational chatter');
-    return;
-  }
-  try {
-    const verifiedList = r.verified_items.length > 0 ? r.verified_items.join(', ') : 'None explicitly confirmed';
-    const text =
-      `🤖 *Titan OS Update*\n` +
-      `*Court:* ${r.court_id}\n\n` +
-      `*Verified Milestones:* ${verifiedList}\n\n` +
-      `*Field Feedback:* ${r.field_feedback}`;
+// ---------- Gemini evaluation ----------
+function buildPrompt(caption, worker) {
+  const workerContext = worker 
+    ? `Sender Identity: ${worker.name} (Role: ${worker.role}, Default Project:${worker.defaultProject})` 
+    : `Sender Identity: Unregistered Worker`;
 
-    await axios.post(
-      `${GRAPH}/${WA_PHONE_ID}/messages`,
-      { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } },
-      { headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' } }
-    );
-    console.log('[Reply] sent intelligent feedback to WhatsApp');
-  } catch (err) {
-    console.error('[Reply] failed:', err.response?.data || err.message);
-  }
-}
+  return `
+You are Titan OS, an intelligent field-operations AI partner for padel court construction.
+${workerContext}
 
-// ---------- Job queue: one message at a time (RAM safety) ----------
-let chain = Promise.resolve();
-const enqueue = (fn) => {
-  chain = chain.then(fn).catch((e) => console.error('[Job] unhandled:', e.message));
-};
+Core Tasks:
+1. Evaluate visible physical progress and audio voiceovers against these 12 milestones:
+${ITEMS.map((n, i) => `${i + 1}. ${n}`).join('\n')}
 
-const seen = new Set(); // quick in-memory dedup on top of the Airtable check
-function remember(id) {
-  seen.add(id);
-  if (seen.size > 2000) seen.delete(seen.values().next().value);
-}
+2. Context & Assigned Project:
+   - Default to "court_id": "${worker ? worker.defaultProject : 'Court 1'}" unless speech or caption explicitly mentions a different court number.
 
-async function processMessage(message, fullPayload) {
-  const messageId = message.id;
-  const sender = message.from;
-  const type = message.type;
+3. Intent & Response Gating ("should_reply"):
+   - Set "should_reply": true IF the submission contains construction media, a site progress update, or an installation question.
+   - Set "should_reply": false IF the submission is strictly non-operational casual banter with no installation relevance.
 
-  if (seen.has(messageId) || (await inboundExists(messageId))) {
-    console.log(`[Dedup] skipping ${messageId}`);
-    return;
-  }
-  remember(messageId);
+4. Installation Feedback ("field_feedback"):
+   - Provide concise, professional field guidance addressing ${worker ? worker.name : 'the team'} directly, confirming findings and offering next steps.
 
-  const media = ['audio', 'image', 'video'].includes(type) ? message[type] : null;
-  const caption = message.text?.body || media?.caption || '';
-  const mime = media ? baseMime(media.mime_type) : null;
+Worker caption: ${JSON.stringify(caption || '')}
 
-  console.log(`[Message] from ${maskPhone(sender)} | type ${type}`);
-
-  // 1. Claim the message first (this row is also the dedup marker).
-  const inboundId = await createInboundRow(
-    {
-      'Message ID': messageId,
-      'Caption Text': caption,
-      'Raw Payload JSON': JSON.stringify(fullPayload),
-    },
-    { 'Sender Phone': sender, 'Message Type': type }
-  );
-  if (!inboundId) return;
-
-  // 2. Download + store media privately.
-  let buffer = null;
-  let storagePath = null;
-  if (media?.id) {
-    if (!WA_TOKEN) {
-      console.error('[Media] WHATSAPP_ACCESS_TOKEN missing');
-    } else {
-      try {
-        buffer = await downloadMedia(media.id);
-        console.log(`[Media] downloaded ${buffer.length} bytes`);
-        storagePath = await uploadToSupabase(buffer, mime, messageId);
-      } catch (err) {
-        console.error('[Media] download failed:', err.response?.data || err.message);
-      }
-    }
-    if (storagePath) await patchInbound(inboundId, { 'Media Path': storagePath });
-  }
-
-  // 3. Evaluate (only if there is something to evaluate).
-  if (buffer || caption) {
-    const result = await evaluateWithGemini(buffer, mime, caption);
-    if (result) {
-      await saveReport(inboundId, result);
-      await sendReply(sender, result);
-    }
-  }
-
-  buffer = null; // release RAM
-}
-
-// ---------- Routes ----------
-app.get('/webhook', (req, res) => {
-  const ok =
-    WEBHOOK_VERIFY_TOKEN &&
-    req.query['hub.mode'] === 'subscribe' &&
-    req.query['hub.verify_token'] === WEBHOOK_VERIFY_TOKEN;
-  if (ok) return res.status(200).send(req.query['hub.challenge']);
-  return res.sendStatus(403);
-});
-
-app.post('/webhook', (req, res) => {
-  if (!validSignature(req)) {
-    console.warn('[Security] rejected POST with missing/invalid signature');
-    return res.sendStatus(401);
-  }
-  res.status(200).send('EVENT_RECEIVED');
-
-  for (const entry of req.body?.entry || []) {
-    for (const change of entry.changes || []) {
-      for (const message of change.value?.messages || []) {
-        enqueue(() => processMessage(message, req.body));
-      }
-    }
-  }
-});
-
-app.get('/', (_req, res) => res.status(200).send('Titan OS V4.3 Active'));
-
-// ---------- Start ----------
-app.listen(PORT, async () => {
-  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
-  if (!META_APP_SECRET) console.error('[Security] META_APP_SECRET missing: ALL webhook POSTs will be rejected');
-  if (!WEBHOOK_VERIFY_TOKEN) console.error('[Security] WEBHOOK_VERIFY_TOKEN missing: verification will fail');
-  console.log(`[Config] model=${GEMINI_MODEL} | autoReply=${AUTO_REPLY}`);
-  await ensurePrivateBucket();
-});
+Return ONLY valid JSON:
+{
+  "detected_language": "en | es | sw | hi",
+  "summary": "1-2 sentences on verified physical progress and key speech content",
+  "verified_items": ["names from the 12 items"],
+  "unverified_items": ["remaining names from the 12 items"],
+  "compliance_status": "PASSED | NEEDS_REVIEW",
+  "court_id": "Court 1 | Court 2 | General | Unknown",
+  "action_required": false,
+  "should_
