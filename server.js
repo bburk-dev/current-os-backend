@@ -10,7 +10,7 @@ const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || 'v21.0';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
-const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'Inbound Messages';
+const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'Inbound Messages 2';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'inbound-media';
@@ -61,10 +61,11 @@ app.post('/webhook', async (req, res) => {
     console.log(`[Webhook] Received ${messageType} from ${fromNumber}`);
 
     let mediaUrl = null;
+    let mimeType = '';
 
     if (['video', 'image', 'audio'].includes(messageType)) {
       const mediaId = message[messageType].id;
-      const mimeType = message[messageType].mime_type || '';
+      mimeType = message[messageType].mime_type || '';
       const extension = messageType === 'video' ? 'mp4' : messageType === 'image' ? 'jpg' : 'm4a';
 
       const metaRes = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${mediaId}`, {
@@ -91,57 +92,44 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // Baseline payload with primary expected column names
-    let airtablePayload = {
-      'Wa Phone': fromNumber,
+    // Exact Airtable Field Mapping
+    const airtablePayload = {
+      'Worker Phone Raw': fromNumber,
       'Message Type': messageType,
       'Message ID': wamid,
     };
 
     if (mediaUrl) {
-      airtablePayload['Inbound Media URL'] = mediaUrl;
+      airtablePayload['Media URL'] = mediaUrl;
+    }
+
+    if (mimeType) {
+      airtablePayload['Mime Type'] = mimeType;
     }
 
     if (messageType === 'text' && message.text) {
       airtablePayload['Text Body'] = message.text.body;
     }
 
-    // Post to Airtable with automatic strip-and-retry on UNKNOWN_FIELD_NAME
-    let success = false;
-    while (!success && Object.keys(airtablePayload).length > 0) {
-      console.log(`[Airtable Attempt] Posting fields:`, Object.keys(airtablePayload));
+    console.log(`[Airtable] Posting payload:`, Object.keys(airtablePayload));
 
-      const airtableRes = await fetch(
-        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ fields: airtablePayload }),
-        }
-      );
-
-      const airtableData = await airtableRes.json();
-
-      if (!airtableData.error) {
-        console.log(`[Airtable] Successfully logged message ${wamid}`);
-        success = true;
-      } else if (airtableData.error.type === 'UNKNOWN_FIELD_NAME') {
-        const badFieldMatch = airtableData.error.message.match(/Unknown field name: "(.*)"/);
-        if (badFieldMatch && badFieldMatch[1]) {
-          const badField = badFieldMatch[1];
-          console.log(`[Airtable Retry] Removing unknown field "${badField}" and retrying...`);
-          delete airtablePayload[badField];
-        } else {
-          console.error(`[Airtable API Error] ${JSON.stringify(airtableData.error)}`);
-          break;
-        }
-      } else {
-        console.error(`[Airtable API Error] ${JSON.stringify(airtableData.error)}`);
-        break;
+    const airtableRes = await fetch(
+      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ fields: airtablePayload }),
       }
+    );
+
+    const airtableData = await airtableRes.json();
+    if (airtableData.error) {
+      console.error(`[Airtable Error] ${JSON.stringify(airtableData.error)}`);
+    } else {
+      console.log(`[Airtable] Successfully logged message ${wamid}`);
     }
   } catch (err) {
     console.error('[Pipeline Error]', err.message);
