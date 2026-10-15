@@ -1,626 +1,215 @@
-'use strict';
-
-const crypto = require('crypto');
-const express = require('express');
-const axios = require('axios');
-const { GoogleGenAI } = require('@google/genai');
-
-// ---------- Config (all from environment, no hardcoded IDs) ----------
-const GRAPH = 'https://graph.facebook.com/v21.0';
-const PORT = process.env.PORT || 3000;
-
-const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || '';
-const META_APP_SECRET = process.env.META_APP_SECRET || '';
-const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
-const WA_PHONE_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
-
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
-
-const AIRTABLE_KEY = process.env.AIRTABLE_API_KEY || '';
-const AIRTABLE_BASE = process.env.AIRTABLE_BASE_ID || '';
-
-const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const BUCKET = process.env.SUPABASE_BUCKET || 'inbound-media';
-
-const AUTO_REPLY = process.env.AUTO_REPLY === 'true';
-
-const MAX_MEDIA_BYTES = 40 * 1024 * 1024; // refuse anything bigger (RAM safety)
-const INLINE_LIMIT_BYTES = 10 * 1024 * 1024; // above this, use Gemini Files API
-
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-
-const app = express();
-app.use(
-  express.json({
-    verify: (req, _res, buf) => {
-      req.rawBody = buf;
-    },
-  })
-);
-
-// ---------- Helpers ----------
-const maskPhone = (p) => (p ? `***${String(p).slice(-4)}` : 'unknown');
-const baseMime = (m) => String(m || '').split(';')[0].trim().toLowerCase();
-const safeKey = (s) => String(s).replace(/[^A-Za-z0-9._-]/g, '_');
-
-const EXT = {
-  'audio/ogg': 'ogg',
-  'audio/mpeg': 'mp3',
-  'audio/mp4': 'm4a',
-  'audio/aac': 'aac',
-  'audio/amr': 'amr',
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-  'video/mp4': 'mp4',
-  'video/3gpp': '3gp',
-};
-
-const ITEMS = [
-  'Foundation',
-  'Steel Frame - Bottom',
-  'Steel Frame - Top',
-  'Lower Mesh',
-  'Upper Mesh',
-  'Glass',
-  'Silicone',
-  'Turf',
-  'Sand',
-  'Net Posts',
-  'Net',
-  'Site Cleanliness & Final Walkthrough',
-];
-
-// ---------- Signature verification (Meta X-Hub-Signature-256) ----------
-function validSignature(req) {
-  if (!META_APP_SECRET) return false;
-  const header = req.get('x-hub-signature-256') || '';
-  if (!header.startsWith('sha256=') || !req.rawBody) return false;
-  const expected = crypto
-    .createHmac('sha256', META_APP_SECRET)
-    .update(req.rawBody)
-    .digest('hex');
-  const got = header.slice('sha256='.length);
-  const a = Buffer.from(got, 'utf8');
-  const b = Buffer.from(expected, 'utf8');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
-// ---------- Supabase private storage ----------
-const sbHeaders = () => ({
-  Authorization: `Bearer ${SUPABASE_KEY}`,
-  apikey: SUPABASE_KEY,
-});
-
-async function ensurePrivateBucket() {
-  if (!SUPABASE_URL || !SUPABASE_KEY) {
-    console.error('[Storage] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing');
-    return false;
-  }
-  try {
-    let bucket = null;
-    try {
-      const r = await axios.get(`${SUPABASE_URL}/storage/v1/bucket/${BUCKET}`, { headers: sbHeaders() });
-      bucket = r.data;
-    } catch (e) {
-      if (e.response && (e.response.status === 404 || e.response.status === 400)) bucket = null;
-      else throw e;
-    }
-    if (!bucket) {
-      await axios.post(
-        `${SUPABASE_URL}/storage/v1/bucket`,
-        { id: BUCKET, name: BUCKET, public: false },
-        { headers: sbHeaders() }
-      );
-      console.log(`[Storage] created private bucket "${BUCKET}"`);
-    } else if (bucket.public) {
-      await axios.put(
-        `${SUPABASE_URL}/storage/v1/bucket/${BUCKET}`,
-        { public: false },
-        { headers: sbHeaders() }
-      );
-      console.log(`[Storage] bucket "${BUCKET}" set to private`);
-    }
-    console.log(`[Storage] bucket "${BUCKET}" ready (private)`);
-    return true;
-  } catch (err) {
-    console.error('[Storage] bucket check failed:', err.response?.data || err.message);
-    return false;
-  }
-}
-
-async function uploadToSupabase(buffer, mime, messageId) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
-  const d = new Date();
-  const ext = EXT[mime] || 'bin';
-  const path = `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${safeKey(messageId)}.${ext}`;
-  try {
-    await axios.post(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, buffer, {
-      headers: { ...sbHeaders(), 'Content-Type': mime || 'application/octet-stream', 'x-upsert': 'true' },
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-    });
-    console.log(`[Storage] uploaded ${path} (${buffer.length} bytes)`);
-    return path;
-  } catch (err) {
-    console.error('[Storage] upload failed:', err.response?.data || err.message);
-    return null;
-  }
-}
-
-// ---------- WhatsApp media download & direct messaging ----------
-async function downloadMedia(mediaId) {
-  const meta = await axios.get(`${GRAPH}/${mediaId}`, {
-    headers: { Authorization: `Bearer ${WA_TOKEN}` },
-  });
-  const size = Number(meta.data.file_size || 0);
-  if (size > MAX_MEDIA_BYTES) throw new Error(`media too large (${size} bytes)`);
-  const bin = await axios.get(meta.data.url, {
-    headers: { Authorization: `Bearer ${WA_TOKEN}` },
-    responseType: 'arraybuffer',
-    maxContentLength: MAX_MEDIA_BYTES,
-  });
-  return Buffer.from(bin.data);
-}
-
-async function sendRawWhatsAppMessage(to, textBody) {
-  if (!WA_TOKEN || !WA_PHONE_ID) return;
-  try {
-    await axios.post(
-      `${GRAPH}/${WA_PHONE_ID}/messages`,
-      { messaging_product: 'whatsapp', to, type: 'text', text: { body: textBody } },
-      { headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' } }
-    );
-  } catch (err) {
-    console.error('[WhatsApp Outbound] Error:', err.response?.data || err.message);
-  }
-}
-
-// ---------- Airtable Lookups & Command Handlers ----------
-const atHeaders = () => ({
-  Authorization: `Bearer ${AIRTABLE_KEY}`,
-  'Content-Type': 'application/json',
-});
-const atUrl = (table) => `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(table)}`;
-
-// Bouncer Lookup: Matches incoming phone against Worker table
-async function lookupWorker(rawPhone) {
-  if (!AIRTABLE_KEY || !AIRTABLE_BASE) return null;
-  const cleanPhone = String(rawPhone).replace(/[^0-9+]/g, '');
-  const withPlus = cleanPhone.startsWith('+') ? cleanPhone : `+${cleanPhone}`;
-  
-  try {
-    const formula = `OR({Phone E164}="${withPlus}", {WhatsApp Number}="${withPlus}", {Phone E164}="${cleanPhone}")`;
-    const r = await axios.get(atUrl('Worker'), {
-      headers: atHeaders(),
-      params: { filterByFormula: formula, maxRecords: 1 },
-    });
-    
-    const rec = r.data.records?.[0];
-    if (!rec) {
-      console.warn(`[Bouncer] No worker record found for phone: ${maskPhone(rawPhone)}`);
-      return null;
-    }
-
-    const fields = rec.fields;
-    const isActive = fields['Active'] === true || fields['Active'] === 'true';
-
-    return {
-      id: rec.id,
-      name: fields['Full Name'] || 'Unknown Worker',
-      role: fields['Role'] || 'Worker',
-      defaultProject: fields['Default Project'] || 'General Site',
-      language: fields['Language Preference'] || 'English',
-      active: isActive
-    };
-  } catch (err) {
-    console.error('[Bouncer] Lookup failed:', err.response?.data || err.message);
-    return null;
-  }
-}
-
-// Site Group Lookup: Maps WhatsApp Group ID (@g.us) to Sites table
-async function lookupSiteByGroupId(groupId) {
-  if (!AIRTABLE_KEY || !AIRTABLE_BASE || !groupId || !groupId.endsWith('@g.us')) return null;
-  
-  try {
-    const formula = `{WhatsApp Group ID}="${groupId}"`;
-    const r = await axios.get(atUrl('Sites'), {
-      headers: atHeaders(),
-      params: { filterByFormula: formula, maxRecords: 1 },
-    });
-    
-    const rec = r.data.records?.[0];
-    if (!rec) return null;
-
-    return {
-      id: rec.id,
-      siteName: rec.fields['Site Name'],
-      location: rec.fields['Site location'],
-      defaultWorkflow: rec.fields['Workflow Mode'] || 'INSTALLATION',
-      status: rec.fields['Site Status']
-    };
-  } catch (err) {
-    console.error('[Site Lookup] Error:', err.message);
-    return null;
-  }
-}
-
-// Slash Command Handler: /link <Site Name>
-async function handleLinkCommand(chatId, text) {
-  const match = text.trim().match(/^\/link\s+(.+)$/i);
-  if (!match) return false;
-
-  const targetSiteName = match[1].trim();
-
-  try {
-    const formula = `LOWER({Site Name})="${targetSiteName.toLowerCase()}"`;
-    const r = await axios.get(atUrl('Sites'), {
-      headers: atHeaders(),
-      params: { filterByFormula: formula, maxRecords: 1 },
-    });
-
-    const rec = r.data.records?.[0];
-    if (!rec) {
-      await sendRawWhatsAppMessage(chatId, `❌ Could not find site "${targetSiteName}" in Airtable. Please check the exact Site Name.`);
-      return true;
-    }
-
-    await axios.patch(
-      `${atUrl('Sites')}/${rec.id}`,
-      { fields: { 'WhatsApp Group ID': chatId } },
-      { headers: atHeaders() }
-    );
-
-    await sendRawWhatsAppMessage(
-      chatId,
-      `🔗 *Titan OS | Site Linked Successfully*\n` +
-      `*Site Name:* ${rec.fields['Site Name']}\n` +
-      `*Workflow Mode:* ${rec.fields['Workflow Mode'] || 'INSTALLATION'}\n` +
-      `*Group ID:* ${chatId}`
-    );
-    return true;
-  } catch (err) {
-    console.error('[Link Command] Error:', err.message);
-    return false;
-  }
-}
-
-async function inboundExists(messageId) {
-  try {
-    const formula = `{Message ID}="${String(messageId).replace(/"/g, '')}"`;
-    const r = await axios.get(atUrl('Inbound Messages 2'), {
-      headers: atHeaders(),
-      params: { filterByFormula: formula, maxRecords: 1 },
-    });
-    return (r.data.records || []).length > 0;
-  } catch (err) {
-    console.error('[Airtable] dedup lookup failed:', err.response?.data || err.message);
-    return false;
-  }
-}
-
-async function createInboundRow(base, optional) {
-  try {
-    const r = await axios.post(
-      atUrl('Inbound Messages 2'),
-      { fields: { ...base, ...optional } },
-      { headers: atHeaders() }
-    );
-    return r.data.id;
-  } catch (err) {
-    const type = err.response?.data?.error?.type;
-    if (err.response?.status === 422 && type === 'UNKNOWN_FIELD_NAME') {
-      console.warn('[Airtable] optional column missing in Inbound Messages 2; saving core fields only');
-      try {
-        const r = await axios.post(atUrl('Inbound Messages 2'), { fields: base }, { headers: atHeaders() });
-        return r.data.id;
-      } catch (e2) {
-        console.error('[Airtable] inbound save failed:', e2.response?.data || e2.message);
-        return null;
-      }
-    }
-    console.error('[Airtable] inbound save failed:', err.response?.data || err.message);
-    return null;
-  }
-}
-
-async function patchInbound(recordId, fields) {
-  try {
-    await axios.patch(`${atUrl('Inbound Messages 2')}/${recordId}`, { fields }, { headers: atHeaders() });
-  } catch (err) {
-    console.warn('[Airtable] inbound update skipped:', err.response?.data?.error?.type || err.message);
-  }
-}// Maps Unified Multi-Workflow JSON into existing Reports 2 columns
-async function saveReport(inboundId, ai_) {
-  try {
-    const fields = {
-      'Inbound Messages 2': [inboundId],
-      'Worker Summary': ai_.field_feedback || ai_.summary,
-      'Action Required': ai_.action_required || ai_.compliance_status === 'NEEDS_REVIEW',
-      'Asset Identifier': ai_.court_id,
-      'Workflow Mode': ai_.workflow_mode,
-      'Overall Status': ai_.compliance_status,
-      'Status Observed': ai_.status_observed || ai_.summary,
-      'Action Intent': ai_.action_intent || 'None',
-      'Clean JSON': JSON.stringify(ai_),
-    };
-
-    await axios.post(
-      atUrl('Reports 2'),
-      { fields },
-      { headers: atHeaders() }
-    );
-    console.log(`[Airtable] report saved (${ai_.workflow_mode})`);
-  } catch (err) {
-    console.error('[Airtable] report save failed:', err.response?.data || err.message);
-  }
-}
-
-// ---------- Gemini Multi-Workflow Evaluation ----------
-function buildPrompt(caption, worker, site) {
-  const workerContext = worker 
-    ? `Sender Identity: ${worker.name} (Role: ${worker.role}, Default Project: ${worker.defaultProject})` 
-    : `Sender Identity: Unregistered Worker`;
-
-  const siteContext = site
-    ? `Target Site Location: ${site.siteName} (Location: ${site.location}, Preferred Mode: ${site.defaultWorkflow})`
-    : `Target Site Location: ${worker ? worker.defaultProject : 'Court 1'}`;
-
-  return `
-You are Titan OS, an intelligent field-operations AI partner for padel court operations.
-${workerContext}
-${siteContext}
-
-Analyze the submission across three distinct workflow modes:
-1. INSTALLATION: Building/installing a court. Check progress against these 12 milestones:
-${ITEMS.map((n, i) => `${i + 1}.${n}`).join('\n')}
-
-2. MAINTENANCE: Repairs, replacing damaged items, silicone leaks, rust, or broken glass.
-3. SPOT_VISIT: Health checks for INOC (checking net tension, sand distribution, turf wear, cleanliness).
-
-Determine the workflow_mode: "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT".
-
-Context Rules:
-- Default "court_id": "${site ? site.siteName : (worker ? worker.defaultProject : 'Court 1')}" unless speech/caption specifies otherwise.
-- Set "should_reply": true for operational media, progress updates, or questions. Set false for casual banter.
-
-Worker caption: ${JSON.stringify(caption || '')}
-
-Return ONLY valid JSON:
 {
-  "workflow_mode": "INSTALLATION | MAINTENANCE | SPOT_VISIT",
-  "detected_language": "en | es | sw | hi",
-  "summary": "1-2 sentences summarizing observed physical state",
-  "verified_items": ["names from the 12 items if INSTALLATION, else empty"],
-  "compliance_status": "PASSED | NEEDS_REVIEW",
-  "court_id": "Court Name / Identifier",
-  "action_required": false,
-  "should_reply": true,
-  "status_observed": "Key physical findings or defect observations (e.g. net loose, rust on frame, sand needed)",
-  "action_intent": "Required next step or tools needed (e.g. brush sand, tension winch, clear ladder)",
-  "field_feedback": "Short expert feedback confirming visual findings and offering next-step guidance"
-}`;
-}
-
-function cleanResult(raw, worker, site) {
-  const pick = (arr) => (Array.isArray(arr) ? arr.filter((x) => ITEMS.includes(x)) : []);
-  const verified = pick(raw.verified_items);
-  const mode = ['INSTALLATION', 'MAINTENANCE', 'SPOT_VISIT'].includes(raw.workflow_mode)
-    ? raw.workflow_mode
-    : (site?.defaultWorkflow || 'INSTALLATION');
-
-  return {
-    workflow_mode: mode,
-    detected_language: raw.detected_language || 'unknown',
-    summary: String(raw.summary || '').slice(0, 1000),
-    verified_items: verified,
-    unverified_items: ITEMS.filter((i) => !verified.includes(i)),
-    compliance_status: raw.compliance_status === 'PASSED' ? 'PASSED' : 'NEEDS_REVIEW',
-    court_id: raw.court_id || site?.siteName || worker?.defaultProject || 'Court 1',
-    action_required: raw.action_required === true,
-    should_reply: raw.should_reply !== false,
-    status_observed: String(raw.status_observed || raw.summary || '').slice(0, 1000),
-    action_intent: String(raw.action_intent || '').slice(0, 1000),
-    field_feedback: String(raw.field_feedback || raw.summary || '').slice(0, 1000),
-  };
-}
-
-async function evaluateWithGemini(buffer, mime, caption, worker, site) {
-  if (!GEMINI_API_KEY) {
-    console.error('[Gemini] GEMINI_API_KEY missing');
-    return null;
-  }
-  let uploaded = null;
-  try {
-    const parts = [];
-    if (buffer && mime) {
-      if (buffer.length <= INLINE_LIMIT_BYTES) {
-        parts.push({ inlineData: { data: buffer.toString('base64'), mimeType: mime } });
-      } else {
-        uploaded = await ai.files.upload({
-          file: new Blob([buffer], { type: mime }),
-          config: { mimeType: mime },
-        });
-        let tries = 0;
-        while (uploaded.state && uploaded.state !== 'ACTIVE' && tries < 30) {
-          if (uploaded.state === 'FAILED') throw new Error('Gemini file processing failed');
-          await new Promise((r) => setTimeout(r, 2000));
-          uploaded = await ai.files.get({ name: uploaded.name });
-          tries++;
-        }
-        if (uploaded.state && uploaded.state !== 'ACTIVE') throw new Error('Gemini file not ready in time');
-        parts.push({ fileData: { fileUri: uploaded.uri, mimeType: uploaded.mimeType || mime } });
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Titan OS V4.3 - Master Server Configuration (Chunk 1 of 3)",
+  "version": "4.3.0",
+  "system_environment": {
+    "node_version": "26.12.0",
+    "runtime": "Node.js Express Web Service",
+    "deployment_platform": "Render (titan-os-v4-3-1)",
+    "port": 3000,
+    "environment_variables": {
+      "META_APP_SECRET": { "type": "string", "required": true, "sensitive": true },
+      "WEBHOOK_VERIFY_TOKEN": { "type": "string", "required": true, "sensitive": true },
+      "WHATSAPP_ACCESS_TOKEN": { "type": "string", "required": true, "sensitive": true },
+      "WHATSAPP_PHONE_NUMBER_ID": { "type": "string", "required": true, "sensitive": false },
+      "GEMINI_API_KEY": { "type": "string", "required": true, "sensitive": true },
+      "GEMINI_MODEL": { "type": "string", "default": "gemini-3.5-flash", "required": true },
+      "AIRTABLE_API_KEY": { "type": "string", "required": true, "sensitive": true },
+      "AIRTABLE_BASE_ID": { "type": "string", "default": "apppNFEBAt2iQLVEP", "required": true },
+      "SUPABASE_URL": { "type": "string", "required": true, "sensitive": false },
+      "SUPABASE_SERVICE_ROLE_KEY": { "type": "string", "required": true, "sensitive": true },
+      "SUPABASE_BUCKET": { "type": "string", "default": "inbound-media", "required": true },
+      "AUTO_REPLY": { "type": "boolean", "default": true }
+    }
+  },
+  "security_layer": {
+    "hmac_sha256_validation": {
+      "header_name": "x-hub-signature-256",
+      "algorithm": "sha256",
+      "raw_body_buffer_capture": true,
+      "enforcement_action": {
+        "missing_signature_status": 401,
+        "invalid_signature_status": 401,
+        "error_message": "Unauthorized: Invalid or missing X-Hub-Signature-256 header"
       }
     }
-    parts.push({ text: buildPrompt(caption, worker, site) });
-
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: [{ role: 'user', parts }],
-      config: { responseMimeType: 'application/json' },
-    });
-    const result = cleanResult(JSON.parse(response.text), worker, site);
-    console.log('[Gemini] ok:', result.workflow_mode, '| status:', result.compliance_status, '| worker:', worker?.name);
-    return result;
-  } catch (err) {
-    console.error('[Gemini] error:', err.message);
-    return null;
-  } finally {
-    if (uploaded?.name) {
-      ai.files.delete({ name: uploaded.name }).catch(() => {});
-    }
-  }
-}
-
-// ---------- Intelligent WhatsApp Reply ----------
-async function sendReply(to, r, worker) {
-  if (!AUTO_REPLY || !r?.should_reply || !WA_TOKEN || !WA_PHONE_ID) {
-    if (r && !r.should_reply) console.log('[Reply] skipped non-operational chatter');
-    return;
-  }
-  try {
-    let modeHeader = '🏗️ *Installation Update*';
-    if (r.workflow_mode === 'MAINTENANCE') modeHeader = '🔧 *Maintenance Update*';
-    if (r.workflow_mode === 'SPOT_VISIT') modeHeader = '📋 *Spot Visit Check*';
-
-    const text =
-      `🤖 *Titan OS* | ${modeHeader}\n` +
-      `*Worker:* ${worker ? worker.name : 'Team Member'}\n` +
-      `*Court/Project:* ${r.court_id}\n\n` +
-      `*Observations:* ${r.status_observed}\n\n` +
-      `*Field Feedback:* ${r.field_feedback}`;
-
-    await axios.post(
-      `${GRAPH}/${WA_PHONE_ID}/messages`,
-      { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } },
-      { headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' } }
-    );
-    console.log('[Reply] sent intelligent feedback to WhatsApp');
-  } catch (err) {
-    console.error('[Reply] failed:', err.response?.data || err.message);
-  }
-}
-
-// ---------- Job Queue & Processing ----------
-let chain = Promise.resolve();
-const enqueue = (fn) => {
-  chain = chain.then(fn).catch((e) => console.error('[Job] unhandled:', e.message));
-};
-
-const seen = new Set();
-function remember(id) {
-  seen.add(id);
-  if (seen.size > 2000) seen.delete(seen.values().next().value);
-}
-
-async function processMessage(message, fullPayload) {
-  const messageId = message.id;
-  const sender = message.from;
-  const type = message.type;
-  const media = ['audio', 'image', 'video'].includes(type) ? message[type] : null;
-  const caption = message.text?.body || media?.caption || '';
-
-  if (seen.has(messageId) || (await inboundExists(messageId))) {
-    console.log(`[Dedup] skipping ${messageId}`);
-    return;
-  }
-  remember(messageId);
-
-  // 1. Slash Command Check (/link <Site Name>)
-  if (caption.startsWith('/link')) {
-    const isHandled = await handleLinkCommand(sender, caption);
-    if (isHandled) return;
-  }
-
-  // 2. BOUNCER SECURITY GATE
-  const worker = await lookupWorker(sender);
-  if (!worker || !worker.active) {
-    console.warn(`[Bouncer] Rejected unauthorized/inactive sender: ${maskPhone(sender)}`);
-    return;
-  }
-  console.log(`[Bouncer] Authorized worker: ${worker.name} (${worker.role})`);
-
-  // 3. Site Group Check (if message came from a WhatsApp Group)
-  const site = await lookupSiteByGroupId(sender);
-  if (site) console.log(`[Site] Matched Group ID to site: ${site.siteName}`);
-
-  const mime = media ? baseMime(media.mime_type) : null;
-
-  // 4. Claim Inbound Message
-  const inboundId = await createInboundRow(
-    {
-      'Message ID': messageId,
-      'Caption Text': caption,
-      'Raw Payload JSON': JSON.stringify(fullPayload),
+  },
+  "webhook_endpoint": {
+    "route": "/webhook",
+    "verification_get_handler": {
+      "query_parameters": {
+        "hub_mode": "hub.mode",
+        "hub_verify_token": "hub.verify_token",
+        "hub_challenge": "hub.challenge"
+      },
+      "expected_mode": "subscribe",
+      "success_status": 200,
+      "failure_status": 403
     },
-    { 'Sender Phone': sender, 'Message Type': type }
-  );
-  if (!inboundId) return;
-
-  // 5. Media Upload
-  let buffer = null;
-  let storagePath = null;
-  if (media?.id) {
-    if (WA_TOKEN) {
-      try {
-        buffer = await downloadMedia(media.id);
-        console.log(`[Media] downloaded ${buffer.length} bytes`);
-        storagePath = await uploadToSupabase(buffer, mime, messageId);
-      } catch (err) {
-        console.error('[Media] download failed:', err.response?.data || err.message);
+    "event_post_handler": {
+      "root_path": "body.entry[0].changes[0].value",
+      "extracted_data": {
+        "message_object": "value.messages[0]",
+        "sender_phone": "value.messages[0].from",
+        "sender_wa_id": "value.contacts[0].wa_id",
+        "message_id": "value.messages[0].id",
+        "timestamp": "value.messages[0].timestamp",
+        "message_type": "value.messages[0].type",
+        "caption_text": "value.messages[0].text.body",
+        "image_attachment": "value.messages[0].image",
+        "video_attachment": "value.messages[0].video",
+        "audio_attachment": "value.messages[0].audio"
       }
     }
-    if (storagePath) await patchInbound(inboundId, { 'Media Path': storagePath });
-  }
-
-  // 6. Gemini Multi-Workflow Evaluation & WhatsApp Reply
-  if (buffer || caption) {
-    const result = await evaluateWithGemini(buffer, mime, caption, worker, site);
-    if (result) {
-      await saveReport(inboundId, result);
-      await sendReply(sender, result, worker);
+  },
+  "slash_command_engine": {
+    "command_prefix": "/link",
+    "trigger_condition": "caption_text.startsWith('/link ')",
+    "execution_flow": {
+      "step_1": "Extract <Site Name> string from caption after /link prefix",
+      "step_2": "Query Airtable 'Sites' table matching {Site Name} = extracted name",
+      "step_3": "Patch matched record with 'WhatsApp Group ID' = sender_phone (@g.us)",
+      "step_4": "Send outbound WhatsApp confirmation text back to group",
+      "step_5": "Terminate webhook processing loop early with HTTP 200"
     }
   }
-
-  buffer = null; // Memory management
+}{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Titan OS V4.3 - Business Logic & Intelligence Schema (Chunk 2 of 3)",
+  "version": "4.3.0",
+  "worker_bouncer_security": {
+    "target_table": "Worker",
+    "e164_normalization": "Convert sender_phone to pure E.164 string (e.g., '+14379287172')",
+    "lookup_query": "AND({Phone E164} = normalized_phone, {Active} = TRUE())",
+    "match_handling": {
+      "on_success": {
+        "extract": ["Full Name", "Role", "Default Project"],
+        "proceed": true
+      },
+      "on_failure": {
+        "action": "BLOCK",
+        "log": "Unauthorized worker attempt blocked at zero token cost",
+        "http_status": 200,
+        "response": { "status": "BLOCKED", "reason": "Sender not registered or inactive in Worker table" }
+      }
+    }
+  },
+  "site_location_resolver": {
+    "target_table": "Sites",
+    "lookup_query": "{WhatsApp Group ID} = sender_phone",
+    "match_handling": {
+      "on_success": {
+        "extract_fields": {
+          "site_record_id": "id",
+          "site_name": "fields['Site Name']",
+          "preferred_workflow_mode": "fields['Workflow Mode']",
+          "site_status": "fields['Site Status']"
+        },
+        "linked_site_array": ["$site_record_id"]
+      },
+      "on_failure": {
+        "site_name": "Unlinked Location",
+        "preferred_workflow_mode": "MAINTENANCE",
+        "linked_site_array": []
+      }
+    }
+  },
+  "supabase_media_archiver": {
+    "bucket": "inbound-media",
+    "privacy": "public: false",
+    "storage_path": "YYYY/MM/${message_id}.${file_extension}",
+    "execution": {
+      "step_1": "Fetch raw media binary stream from Meta Graph API using WHATSAPP_ACCESS_TOKEN",
+      "step_2": "Stream buffer directly to Supabase REST endpoint using SUPABASE_SERVICE_ROLE_KEY",
+      "step_3": "Return private path reference string for database logging"
+    }
+  },
+  "gemini_multimodal_engine": {
+    "sdk": "@google/genai",
+    "model": "gemini-3.5-flash",
+    "temperature": 0.0,
+    "media_handling": {
+      "inline_threshold_mb": 10,
+      "files_api_threshold_mb": 40
+    },
+    "supported_workflow_modes": ["INSTALLATION", "MAINTENANCE", "SPOT_VISIT"],
+    "accepted_milestone_gates": [
+      "1. Steel Structure",
+      "2. Lower mesh",
+      "3. Upper mesh",
+      "5. Glass",
+      "6. Turf and sand",
+      "7. Silicone",
+      "8. Net posts and net"
+    ],
+    "output_format": "STRICT_JSON",
+    "json_schema_definition": {
+      "workflow_mode": "ENUM('INSTALLATION', 'MAINTENANCE', 'SPOT_VISIT')",
+      "mentioned_gates": "ARRAY_OF_STRINGS",
+      "verification_basis": "ENUM('VISUAL_PROOF', 'WORKER_CLAIM', 'OPERATIONAL_OVERRIDE', 'AI_VISUAL_ASSESSMENT')",
+      "overall_status": "ENUM('CLEARED', 'NEEDS_ATTENTION', 'BLOCKED')",
+      "worker_summary": "STRING",
+      "status_observed": "STRING",
+      "action_intent": "STRING"
+    }
+  }
+}{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Titan OS V4.3 - Database Operations & Outbound Messaging (Chunk 3 of 3)",
+  "version": "4.3.0",
+  "airtable_inbound_messages_2_pipeline": {
+    "target_table": "Inbound Messages 2",
+    "fields_mapping": {
+      "Message ID": "$webhook.message_id",
+      "Sender Phone": "$worker.normalized_phone",
+      "Worker": ["$worker.record_id"],
+      "Message Type": "$webhook.message_type",
+      "Caption Text": "$webhook.caption_text",
+      "Media Path": "$supabase.storage_path",
+      "Raw Payload JSON": "$webhook.raw_json_string"
+    }
+  },
+  "airtable_reports_2_pipeline": {
+    "target_table": "Reports 2",
+    "fields_mapping": {
+      "Inbound Messages 2": ["$inbound_messages_2.record_id"],
+      "Sites": "$site_location_resolver.linked_site_array",
+      "Source Batch ID": "$webhook.sender_phone",
+      "WhatsApp Reply Text": "$webhook.caption_text",
+      "Mentioned Gates": "JOIN_WITH_COMMA($gemini.mentioned_gates)",
+      "Verification Basis": "$gemini.verification_basis",
+      "Workflow Mode": "$gemini.workflow_mode",
+      "Overall Status": "$gemini.overall_status",
+      "Worker Summary": "$gemini.worker_summary",
+      "Status Observed": "$gemini.status_observed",
+      "Action Intent": "$gemini.action_intent",
+      "Clean JSON": "JSON.stringify($gemini.raw_output)"
+    }
+  },
+  "outbound_whatsapp_notifier": {
+    "condition": "process.env.AUTO_REPLY === 'true'",
+    "endpoint": "https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages",
+    "message_template": "🤖 Titan OS | 🏗️ ${gemini.workflow_mode} Update\n\n📌 Site: ${site.site_name}\n👷 Worker: ${worker.full_name}\n🔍 Status: ${gemini.overall_status}\n\n📝 Summary:\n${gemini.worker_summary}",
+    "headers": {
+      "Authorization": "Bearer ${WHATSAPP_ACCESS_TOKEN}",
+      "Content-Type": "application/json"
+    }
+  },
+  "response_orchestration": {
+    "on_success": {
+      "http_status": 200,
+      "body": {
+        "status": "SUCCESS",
+        "message": "Webhook processed, Worker verified, media archived to Supabase, AI evaluated, and record saved to Reports 2."
+      }
+    },
+    "on_error": {
+      "http_status": 500,
+      "log_format": "ERROR: Webhook pipeline failed: ${error.stack}",
+      "body": {
+        "status": "INTERNAL_SERVER_ERROR",
+        "message": "Webhook processing failed."
+      }
+    }
+  }
 }
-
-// ---------- Routes ----------
-app.get('/webhook', (req, res) => {
-  const ok =
-    WEBHOOK_VERIFY_TOKEN &&
-    req.query['hub.mode'] === 'subscribe' &&
-    req.query['hub.verify_token'] === WEBHOOK_VERIFY_TOKEN;
-  if (ok) return res.status(200).send(req.query['hub.challenge']);
-  return res.sendStatus(403);
-});
-
-app.post('/webhook', (req, res) => {
-  if (!validSignature(req)) {
-    console.warn('[Security] rejected POST with missing/invalid signature');
-    return res.sendStatus(401);
-  }
-  res.status(200).send('EVENT_RECEIVED');
-
-  for (const entry of req.body?.entry || []) {
-    for (const change of entry.changes || []) {
-      for (const message of change.value?.messages || []) {
-        enqueue(() => processMessage(message, req.body));
-      }
-    }
-  }
-});
-
-app.get('/', (_req, res) => res.status(200).send('Titan OS V4.3 Active'));
-
-// ---------- Start ----------
-app.listen(PORT, async () => {
-  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
-  if (!META_APP_SECRET) console.error('[Security] META_APP_SECRET missing');
-  if (!WEBHOOK_VERIFY_TOKEN) console.error('[Security] WEBHOOK_VERIFY_TOKEN missing');
-  console.log(`[Config] model=${GEMINI_MODEL} | autoReply=${AUTO_REPLY}`);
-  await ensurePrivateBucket();
-});
