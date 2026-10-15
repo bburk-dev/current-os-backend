@@ -6,14 +6,21 @@ const { GoogleGenAI } = require('@google/genai');
 const app = express();
 app.use(express.json());
 
-// Initialize Gemini SDK (reads process.env.GEMINI_API_KEY automatically)
-const ai = new GoogleGenAI({});
+// Initialize Gemini Client safely with environment variable
+const ai = new GoogleGenAI({ 
+  apiKey: process.env.GEMINI_API_KEY || '' 
+});
 
 /**
  * Asynchronous Multimodal Evaluation Function
  */
 async function evaluateMediaWithGemini(mediaBuffer, mimeType, captionText = '') {
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      console.error('[Gemini Evaluation Error]: GEMINI_API_KEY missing from environment variables');
+      return null;
+    }
+
     const prompt = `
 You are Titan OS, an automated field operations AI for Padel court facilities.
 Analyze the incoming worker media/text (English, Spanish, Swahili, or Hindi).
@@ -61,3 +68,14 @@ Worker Caption/Text: "${captionText}"
     return null;
   }
 }
+
+// Basic Health Check Route
+app.get('/', (req, res) => {
+  res.status(200).send('Titan OS V4.3 Active');
+});
+
+// Start Server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
+});
