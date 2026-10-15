@@ -255,62 +255,69 @@ async function patchInbound(recordId, fields) {
   }
 }
 
+// Maps Unified Multi-Workflow JSON into existing Reports 2 columns
 async function saveReport(inboundId, ai_) {
   try {
+    const fields = {
+      'Inbound Messages 2': [inboundId],
+      'Worker Summary': ai_.field_feedback || ai_.summary,
+      'Action Required': ai_.action_required || ai_.compliance_status === 'NEEDS_REVIEW',
+      'Asset Identifier': ai_.court_id,
+      'Workflow Mode': ai_.workflow_mode,
+      'Overall Status': ai_.compliance_status,
+      'Status Observed': ai_.status_observed || ai_.summary,
+      'Action Intent': ai_.action_intent || 'None',
+      'Clean JSON': JSON.stringify(ai_),
+    };
+
     await axios.post(
       atUrl('Reports 2'),
-      {
-        fields: {
-          'Inbound Messages 2': [inboundId],
-          'Worker Summary': ai_.field_feedback || ai_.summary,
-          'Action Required': ai_.action_required || ai_.compliance_status === 'NEEDS_REVIEW',
-          'Asset Identifier': ai_.court_id,
-        },
-      },
+      { fields },
       { headers: atHeaders() }
     );
-    console.log('[Airtable] report saved');
+    console.log(`[Airtable] report saved (${ai_.workflow_mode})`);
   } catch (err) {
     console.error('[Airtable] report save failed:', err.response?.data || err.message);
   }
 }
 
-// ---------- Gemini evaluation ----------
+// ---------- Gemini Multi-Workflow Evaluation ----------
 function buildPrompt(caption, worker) {
   const workerContext = worker 
     ? `Sender Identity: ${worker.name} (Role: ${worker.role}, Default Project: ${worker.defaultProject})` 
     : `Sender Identity: Unregistered Worker`;
 
   return `
-You are Titan OS, an intelligent field-operations AI partner for padel court construction.
+You are Titan OS, an intelligent field-operations AI partner for padel court operations.
 ${workerContext}
 
-Core Tasks:
-1. Evaluate visible physical progress and audio voiceovers against these 12 milestones:
+Analyze the submission across three distinct workflow modes:
+1. INSTALLATION: Building/installing a court. Check progress against these 12 milestones:
 ${ITEMS.map((n, i) => `${i + 1}.${n}`).join('\n')}
 
-2. Context & Assigned Project:
-   - Default to "court_id": "${worker ? worker.defaultProject : 'Court 1'}" unless speech or caption explicitly mentions a different court number.
+2. MAINTENANCE: Repairs, replacing damaged items, silicone leaks, rust, or broken glass.
+3. SPOT_VISIT: Health checks for INOC (checking net tension, sand distribution, turf wear, cleanliness).
 
-3. Intent & Response Gating ("should_reply"):
-   - Set "should_reply": true IF the submission contains construction media, a site progress update, or an installation question.
-   - Set "should_reply": false IF the submission is strictly non-operational casual banter with no installation relevance.
+Determine the workflow_mode: "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT".
 
-4. Installation Feedback ("field_feedback"):
-   - Provide concise, professional field guidance addressing ${worker ? worker.name : 'the team'} directly, confirming findings and offering next steps.
+Context Rules:
+- Default "court_id": "${worker ? worker.defaultProject : 'Court 1'}" unless speech/caption mentions a different court.
+- Set "should_reply": true for operational media, progress updates, or questions. Set false for casual banter.
 
 Worker caption: ${JSON.stringify(caption || '')}
 
 Return ONLY valid JSON:
 {
+  "workflow_mode": "INSTALLATION | MAINTENANCE | SPOT_VISIT",
   "detected_language": "en | es | sw | hi",
-  "summary": "1-2 sentences on verified physical progress and key speech content",
-  "verified_items": ["names from the 12 items"],
-  "unverified_items": ["remaining names from the 12 items"],
+  "summary": "1-2 sentences summarizing observed physical state",
+  "verified_items": ["names from the 12 items if INSTALLATION, else empty"],
   "compliance_status": "PASSED | NEEDS_REVIEW",
   "court_id": "Court 1 | Court 2 | General | Unknown",
   "action_required": false,
   "should_reply": true,
+  "status_observed": "Key physical findings or defect observations (e.g. net loose, rust on frame, sand needed)",
+  "action_intent": "Required next step or tools needed (e.g. brush sand, tension winch, clear ladder)",
   "field_feedback": "Short expert feedback confirming visual findings and offering next-step guidance"
 }`;
 }
@@ -318,7 +325,12 @@ Return ONLY valid JSON:
 function cleanResult(raw, worker) {
   const pick = (arr) => (Array.isArray(arr) ? arr.filter((x) => ITEMS.includes(x)) : []);
   const verified = pick(raw.verified_items);
+  const mode = ['INSTALLATION', 'MAINTENANCE', 'SPOT_VISIT'].includes(raw.workflow_mode)
+    ? raw.workflow_mode
+    : 'INSTALLATION';
+
   return {
+    workflow_mode: mode,
     detected_language: raw.detected_language || 'unknown',
     summary: String(raw.summary || '').slice(0, 1000),
     verified_items: verified,
@@ -327,6 +339,8 @@ function cleanResult(raw, worker) {
     court_id: raw.court_id || worker?.defaultProject || 'Court 1',
     action_required: raw.action_required === true,
     should_reply: raw.should_reply !== false,
+    status_observed: String(raw.status_observed || raw.summary || '').slice(0, 1000),
+    action_intent: String(raw.action_intent || '').slice(0, 1000),
     field_feedback: String(raw.field_feedback || raw.summary || '').slice(0, 1000),
   };
 }
@@ -366,7 +380,7 @@ async function evaluateWithGemini(buffer, mime, caption, worker) {
       config: { responseMimeType: 'application/json' },
     });
     const result = cleanResult(JSON.parse(response.text), worker);
-    console.log('[Gemini] ok:', result.compliance_status, '| verified:', result.verified_items.length, '| worker:', worker?.name);
+    console.log('[Gemini] ok:', result.workflow_mode, '| status:', result.compliance_status, '| worker:', worker?.name);
     return result;
   } catch (err) {
     console.error('[Gemini] error:', err.message);
@@ -385,12 +399,15 @@ async function sendReply(to, r, worker) {
     return;
   }
   try {
-    const verifiedList = r.verified_items.length > 0 ? r.verified_items.join(', ') : 'None explicitly confirmed';
+    let modeHeader = '🏗️ *Installation Update*';
+    if (r.workflow_mode === 'MAINTENANCE') modeHeader = '🔧 *Maintenance Update*';
+    if (r.workflow_mode === 'SPOT_VISIT') modeHeader = '📋 *Spot Visit Check*';
+
     const text =
-      `🤖 *Titan OS Update*\n` +
+      `🤖 *Titan OS* | ${modeHeader}\n` +
       `*Worker:* ${worker ? worker.name : 'Team Member'}\n` +
       `*Court/Project:* ${r.court_id}\n\n` +
-      `*Verified Milestones:* ${verifiedList}\n\n` +
+      `*Observations:* ${r.status_observed}\n\n` +
       `*Field Feedback:* ${r.field_feedback}`;
 
     await axios.post(
@@ -411,106 +428,4 @@ const enqueue = (fn) => {
 };
 
 const seen = new Set();
-function remember(id) {
-  seen.add(id);
-  if (seen.size > 2000) seen.delete(seen.values().next().value);
-}
-
-async function processMessage(message, fullPayload) {
-  const messageId = message.id;
-  const sender = message.from;
-  const type = message.type;
-
-  if (seen.has(messageId) || (await inboundExists(messageId))) {
-    console.log(`[Dedup] skipping ${messageId}`);
-    return;
-  }
-  remember(messageId);
-
-  // 1. BOUNCER SECURITY GATE
-  const worker = await lookupWorker(sender);
-  if (!worker || !worker.active) {
-    console.warn(`[Bouncer] Rejected unauthorized/inactive sender: ${maskPhone(sender)}`);
-    return;
-  }
-  console.log(`[Bouncer] Authorized worker: ${worker.name} (${worker.role})`);
-
-  const media = ['audio', 'image', 'video'].includes(type) ? message[type] : null;
-  const caption = message.text?.body || media?.caption || '';
-  const mime = media ? baseMime(media.mime_type) : null;
-
-  // 2. Claim Inbound Message
-  const inboundId = await createInboundRow(
-    {
-      'Message ID': messageId,
-      'Caption Text': caption,
-      'Raw Payload JSON': JSON.stringify(fullPayload),
-    },
-    { 'Sender Phone': sender, 'Message Type': type }
-  );
-  if (!inboundId) return;
-
-  // 3. Media Upload
-  let buffer = null;
-  let storagePath = null;
-  if (media?.id) {
-    if (WA_TOKEN) {
-      try {
-        buffer = await downloadMedia(media.id);
-        console.log(`[Media] downloaded ${buffer.length} bytes`);
-        storagePath = await uploadToSupabase(buffer, mime, messageId);
-      } catch (err) {
-        console.error('[Media] download failed:', err.response?.data || err.message);
-      }
-    }
-    if (storagePath) await patchInbound(inboundId, { 'Media Path': storagePath });
-  }
-
-  // 4. Gemini Evaluation & Outbound Feedback
-  if (buffer || caption) {
-    const result = await evaluateWithGemini(buffer, mime, caption, worker);
-    if (result) {
-      await saveReport(inboundId, result);
-      await sendReply(sender, result, worker);
-    }
-  }
-
-  buffer = null; // Memory management
-}
-
-// ---------- Routes ----------
-app.get('/webhook', (req, res) => {
-  const ok =
-    WEBHOOK_VERIFY_TOKEN &&
-    req.query['hub.mode'] === 'subscribe' &&
-    req.query['hub.verify_token'] === WEBHOOK_VERIFY_TOKEN;
-  if (ok) return res.status(200).send(req.query['hub.challenge']);
-  return res.sendStatus(403);
-});
-
-app.post('/webhook', (req, res) => {
-  if (!validSignature(req)) {
-    console.warn('[Security] rejected POST with missing/invalid signature');
-    return res.sendStatus(401);
-  }
-  res.status(200).send('EVENT_RECEIVED');
-
-  for (const entry of req.body?.entry || []) {
-    for (const change of entry.changes || []) {
-      for (const message of change.value?.messages || []) {
-        enqueue(() => processMessage(message, req.body));
-      }
-    }
-  }
-});
-
-app.get('/', (_req, res) => res.status(200).send('Titan OS V4.3 Active'));
-
-// ---------- Start ----------
-app.listen(PORT, async () => {
-  console.log(`[Titan V4.3] listening on ${PORT} | graph=v21.0`);
-  if (!META_APP_SECRET) console.error('[Security] META_APP_SECRET missing');
-  if (!WEBHOOK_VERIFY_TOKEN) console.error('[Security] WEBHOOK_VERIFY_TOKEN missing');
-  console.log(`[Config] model=${GEMINI_MODEL} | autoReply=${AUTO_REPLY}`);
-  await ensurePrivateBucket();
-});
+function remember(id
