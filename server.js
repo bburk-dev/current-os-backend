@@ -5,7 +5,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// Use raw body buffer for HMAC signature verification
+// Raw body buffer for HMAC SHA-256 verification
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
@@ -18,10 +18,12 @@ const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || 'v21.0';
 const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 const WHATSAPP_APP_SECRET = process.env.WHATSAPP_APP_SECRET;
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
 const AIRTABLE_TABLE_ID = process.env.AIRTABLE_TABLE_ID;
+const WORKERS_TABLE_ID = process.env.WORKERS_TABLE_ID || 'Workers';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -29,14 +31,21 @@ const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'inbound-media';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// In-memory set for message deduplication
+// In-memory sets & caches
 const processedMessages = new Set();
+const workerPhoneCache = new Set();
 
-// Utility: Verify WhatsApp HMAC Signature
+// Utility: Normalize phone number to digits only
+function normalizePhone(phone) {
+  if (!phone) return '';
+  return String(phone).replace(/\D/g, '');
+}
+
+// Utility: Strict HMAC Signature Check
 function verifySignature(req) {
   if (!WHATSAPP_APP_SECRET) {
-    console.warn('[Security Warning] WHATSAPP_APP_SECRET is not configured.');
-    return true;
+    console.error('[Security Error] WHATSAPP_APP_SECRET missing. Rejecting request.');
+    return false;
   }
 
   const signature = req.headers['x-hub-signature-256'];
@@ -50,6 +59,49 @@ function verifySignature(req) {
     .digest('hex');
 
   return crypto.timingSafeEqual(Buffer.from(signatureHash), Buffer.from(expectedHash));
+}
+
+// Utility: Cache Airtable Worker Phone Numbers
+async function refreshWorkerCache() {
+  if (!AIRTABLE_API_KEY || !AIRTABLE_BASE_ID) return;
+  try {
+    const res = await axios.get(
+      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(WORKERS_TABLE_ID)}`,
+      { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    workerPhoneCache.clear();
+    (res.data.records || []).forEach(record => {
+      const rawPhone = record.fields['Phone'] || record.fields['Worker Phone Raw'];
+      const clean = normalizePhone(rawPhone);
+      if (clean) workerPhoneCache.add(clean);
+    });
+    console.log(`[Cache] Refreshed ${workerPhoneCache.size} worker phones`);
+  } catch (err) {
+    console.error(`[Cache Error] Failed to fetch workers: ${err.message}`);
+  }
+}
+
+// Utility: Send Outbound WhatsApp Text Receipt
+async function sendWhatsAppReceipt(toPhone) {
+  if (!WHATSAPP_ACCESS_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.warn('[Chatter] Skipping auto-receipt: missing access token or phone number ID.');
+    return;
+  }
+  try {
+    await axios.post(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: toPhone,
+        type: 'text',
+        text: { body: 'Recibido ✅' }
+      },
+      { headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
+    );
+    console.log(`[Chatter] Receipt sent to ${toPhone}`);
+  } catch (err) {
+    console.error(`[Chatter Error] Receipt failed: ${err.response ? JSON.stringify(err.response.data) : err.message}`);
+  }
 }
 
 // Check bucket privacy setting at startup
@@ -66,7 +118,7 @@ async function ensurePrivateBucket() {
       }
     } else {
       if (bucket.public) {
-        console.warn(`[Storage Warning] Bucket ${STORAGE_BUCKET} is currently PUBLIC!`);
+        console.warn(`[Storage Warning] Bucket ${STORAGE_BUCKET} is PUBLIC!`);
       } else {
         console.log(`[Storage] Bucket ${STORAGE_BUCKET} confirmed private`);
       }
@@ -76,39 +128,28 @@ async function ensurePrivateBucket() {
   }
 }
 
-// GET /webhook (Meta verification handshake)
+// GET /webhook (Handshake)
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (!WHATSAPP_VERIFY_TOKEN) {
-    console.error('[Error] WHATSAPP_VERIFY_TOKEN environment variable is missing.');
-    return res.sendStatus(500);
-  }
+  if (!WHATSAPP_VERIFY_TOKEN) return res.sendStatus(500);
 
   if (mode === 'subscribe' && token === WHATSAPP_VERIFY_TOKEN) {
     console.log('[Webhook] Verification successful');
     return res.status(200).send(challenge);
   }
 
-  console.warn('[Webhook] Verification failed: Token mismatch');
   return res.sendStatus(403);
 });
 
-// POST /webhook (Inbound messages)
+// POST /webhook (Inbound Webhook)
 app.post('/webhook', async (req, res) => {
-  // Signature Check
-  if (WHATSAPP_APP_SECRET) {
-    const signatureHeader = req.headers['x-hub-signature-256'];
-    if (!signatureHeader) {
-      console.warn('[Security] Missing x-hub-signature-256 header');
-      return res.status(401).send('Missing signature');
-    }
-    if (!verifySignature(req)) {
-      console.warn('[Security] Invalid x-hub-signature-256 header');
-      return res.status(403).send('Invalid signature');
-    }
+  // 1. Strict Security Check
+  if (!verifySignature(req)) {
+    console.warn('[Security] Unauthorized payload rejected');
+    return res.status(401).send('Unauthorized');
   }
 
   const body = req.body;
@@ -116,7 +157,6 @@ app.post('/webhook', async (req, res) => {
     return res.status(200).send('EVENT_RECEIVED');
   }
 
-  // Process all entries and changes in the batch
   for (const entry of body.entry) {
     const changes = entry.changes || [];
     for (const change of changes) {
@@ -126,9 +166,9 @@ app.post('/webhook', async (req, res) => {
       for (const message of value.messages) {
         const wamid = message.id;
 
-        // Deduplication Check
+        // Deduplication
         if (processedMessages.has(wamid)) {
-          console.log(`[Deduplication] Skipping already processed message ${wamid}`);
+          console.log(`[Deduplication] Skipping ${wamid}`);
           continue;
         }
         processedMessages.add(wamid);
@@ -137,7 +177,10 @@ app.post('/webhook', async (req, res) => {
           processedMessages.delete(first);
         }
 
-        const fromNumber = message.from;
+        // 2. Phone Normalization & Bouncer Match Check
+        const cleanFromNumber = normalizePhone(message.from);
+        const isKnownWorker = workerPhoneCache.has(cleanFromNumber);
+
         const messageType = message.type;
         const rawJson = JSON.stringify(message);
 
@@ -155,7 +198,6 @@ app.post('/webhook', async (req, res) => {
             mimeType = mediaObj.mime_type || '';
             const mediaId = mediaObj.id;
 
-            // Map extensions cleanly
             let extension = 'bin';
             if (messageType === 'image') extension = 'jpg';
             else if (messageType === 'video') extension = 'mp4';
@@ -164,20 +206,17 @@ app.post('/webhook', async (req, res) => {
             }
 
             try {
-              // Fetch Meta media URL
               const metaRes = await axios.get(
                 `https://graph.facebook.com/${GRAPH_API_VERSION}/${mediaId}`,
                 { headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
               );
 
               if (metaRes.data && metaRes.data.url) {
-                // Download binary payload
                 const binaryRes = await axios.get(metaRes.data.url, {
                   headers: { Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
                   responseType: 'arraybuffer'
                 });
 
-                // Path uses message ID instead of raw phone number for privacy
                 const filePath = `${wamid}.${extension}`;
                 const { error: uploadError } = await supabase.storage
                   .from(STORAGE_BUCKET)
@@ -186,25 +225,24 @@ app.post('/webhook', async (req, res) => {
                     upsert: true
                   });
 
-                if (uploadError) {
-                  console.error(`[Supabase Upload Error] ${uploadError.message}`);
-                } else {
+                if (!uploadError) {
                   mediaUrl = `${SUPABASE_URL}/storage/v1/object/authenticated/${STORAGE_BUCKET}/${filePath}`;
                   console.log(`[Media] stored ${filePath}`);
                 }
               }
             } catch (mediaErr) {
-              console.error(`[Media Fetch Error] ${mediaErr.response ? JSON.stringify(mediaErr.response.data) : mediaErr.message}`);
+              console.error(`[Media Error] ${mediaErr.message}`);
             }
           }
         }
 
-        // Build complete payload for Airtable
+        // Payload Construction
         const airtablePayload = {
-          'Worker Phone Raw': fromNumber,
+          'Worker Phone Raw': cleanFromNumber,
           'Message Type': messageType,
           'Message ID': wamid,
-          'Raw Payload JSON': rawJson
+          'Raw Payload JSON': rawJson,
+          'Known Worker': isKnownWorker
         };
 
         if (textBody) airtablePayload['Text Body'] = textBody;
@@ -212,7 +250,7 @@ app.post('/webhook', async (req, res) => {
         if (mediaUrl) airtablePayload['Media URL'] = mediaUrl;
         if (mimeType) airtablePayload['Mime Type'] = mimeType;
 
-        // Perform write BEFORE sending 200 acknowledgment to avoid data loss
+        // Pre-acknowledgment write
         try {
           const airtableRes = await axios.post(
             `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_ID)}`,
@@ -224,15 +262,18 @@ app.post('/webhook', async (req, res) => {
               }
             }
           );
-          console.log(`[Airtable] Successfully logged message ${wamid} (Row ID: ${airtableRes.data.id})`);
+          console.log(`[Airtable] Logged ${wamid} (Row ID: ${airtableRes.data.id})`);
+
+          // 3. Auto-Receipt Confirmation
+          await sendWhatsAppReceipt(cleanFromNumber);
+
         } catch (airtableErr) {
-          console.error(`[Airtable Error] ${airtableErr.response ? JSON.stringify(airtableErr.response.data) : airtableErr.message}`);
+          console.error(`[Airtable Error] ${airtableErr.message}`);
         }
       }
     }
   }
 
-  // Send ACK after processing completes
   return res.status(200).send('EVENT_RECEIVED');
 });
 
@@ -240,4 +281,8 @@ app.post('/webhook', async (req, res) => {
 app.listen(PORT, async () => {
   console.log(`[Titan V4.3] listening on ${PORT} | graph=${GRAPH_API_VERSION}`);
   await ensurePrivateBucket();
+  await refreshWorkerCache();
+
+  // Refresh worker cache every 10 minutes
+  setInterval(refreshWorkerCache, 10 * 60 * 1000);
 });
