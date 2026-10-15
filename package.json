@@ -1,19 +1,18 @@
 {
-  "name": "titan-os-backend",
-  "version": "4.3.0",
-  "description": "Titan OS Headless WhatsApp ERP Engine",
+  "name": "titan-v43-webhook",
+  "version": "1.1.0",
+  "description": "Titan V4.3 WhatsApp webhook: HMAC, private Supabase media, Gemini evaluation, Airtable logging",
   "main": "server.js",
+  "private": true,
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@google/genai": "^2.30.0",
-    "@supabase/supabase-js": "^2.45.0",
-    "axios": "^1.7.0",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "@google/genai": "^1.0.0",
+    "axios": "^1.7.9",
+    "express": "^4.21.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }
