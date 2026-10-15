@@ -78,7 +78,6 @@ app.post('/webhook', verifyWhatsAppSignature, async (req, res) => {
     // A. Site Location Resolver Lookup
     let siteRecordId = null;
     let workflowMode = 'MAINTENANCE';
-    let siteStatus = 'ACTIVE';
 
     try {
       const siteLookupResponse = await axios.get(
@@ -93,7 +92,6 @@ app.post('/webhook', verifyWhatsAppSignature, async (req, res) => {
       if (matchedSite) {
         siteRecordId = matchedSite.id;
         workflowMode = matchedSite.fields['Workflow Mode'] || 'MAINTENANCE';
-        siteStatus = matchedSite.fields['Site Status'] || 'ACTIVE';
       }
     } catch (lookupErr) {
       console.warn('Site lookup failed or unlinked:', lookupErr.message);
@@ -123,8 +121,7 @@ app.post('/webhook', verifyWhatsAppSignature, async (req, res) => {
       'WhatsApp Reply Text': rawTextBody,
       'Mentioned Gates': mentionedGatesString,
       'Verification Basis': verificationBasis,
-      'Workflow Mode': workflowMode,
-      'Site Status': siteStatus
+      'Workflow Mode': workflowMode
     };
 
     if (siteRecordId) {
