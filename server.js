@@ -8,17 +8,17 @@ const PORT = process.env.PORT || 3000;
 const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
 const META_APP_SECRET = process.env.META_APP_SECRET;
 
-// Capture raw payload buffer for timing-safe HMAC SHA-256 signature checks
+// Capture raw body for timing-safe HMAC SHA-256 signature verification
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
   }
 }));
 
-// In-memory sequential task queue to eliminate race conditions
+// In-memory sequential task queue to eliminate concurrency race conditions
 let taskQueue = Promise.resolve();
 
-// Meta Webhook Verification Handshake (GET)
+// Meta Webhook Challenge Handshake (GET)
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -31,7 +31,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// Meta Inbound Event Gateway (POST)
+// Meta Inbound Webhook Listener (POST)
 app.post('/webhook', (req, res) => {
   const signature = req.headers['x-hub-signature-256'];
 
@@ -56,7 +56,7 @@ app.post('/webhook', (req, res) => {
     }
   }
 
-  // Acknowledge receipt to Meta immediately within 200ms
+  // Acknowledge Meta immediately within 200ms
   res.status(200).send('EVENT_RECEIVED');
 
   const body = req.body;
@@ -89,7 +89,7 @@ app.listen(PORT, () => {
 const META_PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
 
 /**
- * Dispatches an outbound WhatsApp text message via Meta Graph API v21.0
+ * Sends a structured WhatsApp text message via Meta Graph API v21.0
  */
 async function sendWhatsAppMessage(to, text) {
   try {
@@ -118,7 +118,7 @@ async function sendWhatsAppMessage(to, text) {
 }
 
 /**
- * Downloads binary payload from Meta's CDN
+ * Downloads binary media payload from Meta's CDN
  */
 async function downloadMetaMedia(mediaId) {
   const metaUrlRes = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, {
@@ -609,7 +609,7 @@ async function handleIncomingMessage(message, metadata) {
   let activeMilestones = [...new Set([...existingMilestones, ...(aiResult.verified_milestones || [])])];
   const needsAttentionList = aiResult.needs_attention || [];
 
-  // Dual text audit scanner: inspects both needs_attention and notes so no blocker is missed
+  // Dual text audit scanner: inspects both needs_attention and notes
   const auditText = [
     ...needsAttentionList,
     (aiResult.notes || '')
