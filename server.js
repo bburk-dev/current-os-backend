@@ -6,35 +6,47 @@
 import express from 'express';
 import crypto from 'crypto';
 
-// --- 1. ENVIRONMENT CONFIGURATION & VALIDATION ---
+// --- 1. ENVIRONMENT CONFIGURATION & FLEXIBLE CREDENTIAL RESOLUTION ---
 const PORT = process.env.PORT || 3000;
 const META_APP_SECRET = process.env.META_APP_SECRET;
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+
+// Support common naming variations for Meta credentials across deployment environments
+const WHATSAPP_TOKEN =
+  process.env.WHATSAPP_TOKEN ||
+  process.env.META_ACCESS_TOKEN ||
+  process.env.WHATSAPP_ACCESS_TOKEN ||
+  process.env.META_WA_TOKEN;
+
+const PHONE_NUMBER_ID =
+  process.env.PHONE_NUMBER_ID ||
+  process.env.META_PHONE_NUMBER_ID ||
+  process.env.PHONE_ID ||
+  process.env.WHATSAPP_PHONE_ID;
+
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || META_APP_SECRET;
 
-const REQUIRED_ENVS = [
-  'META_APP_SECRET',
-  'WHATSAPP_TOKEN',
-  'PHONE_NUMBER_ID',
-  'AIRTABLE_API_KEY',
-  'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
-  'GEMINI_API_KEY'
+const REQUIRED_CONFIGS = [
+  { name: 'META_APP_SECRET', value: META_APP_SECRET },
+  { name: 'WHATSAPP_TOKEN', value: WHATSAPP_TOKEN },
+  { name: 'PHONE_NUMBER_ID', value: PHONE_NUMBER_ID },
+  { name: 'AIRTABLE_API_KEY', value: AIRTABLE_API_KEY },
+  { name: 'SUPABASE_URL', value: SUPABASE_URL },
+  { name: 'SUPABASE_SERVICE_ROLE_KEY', value: SUPABASE_SERVICE_ROLE_KEY },
+  { name: 'GEMINI_API_KEY', value: GEMINI_API_KEY }
 ];
 
-for (const envKey of REQUIRED_ENVS) {
-  if (!process.env[envKey]) {
-    console.warn(`[Config Warning] Missing environment variable: ${envKey}`);
+for (const cfg of REQUIRED_CONFIGS) {
+  if (!cfg.value) {
+    console.warn(`[Config Warning] Missing environment variable: ${cfg.name}`);
   }
 }
 
 // --- 2. SEQUENTIAL FIFO TASK QUEUE ---
-// Serializes incoming heavy workloads to protect single-core process memory
 let taskQueue = Promise.resolve();
 
 export function enqueue(task) {
@@ -55,9 +67,6 @@ export function enqueue(task) {
 // --- 3. RESILIENT AIRTABLE REST CLIENT ---
 const AIRTABLE_BASE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
 
-/**
- * Executes a filtered query against an Airtable table
- */
 export async function airtableQuery(tableName, filterByFormula = '', maxRecords = 10) {
   let url = `${AIRTABLE_BASE_URL}/${encodeURIComponent(tableName)}?maxRecords=${maxRecords}`;
   if (filterByFormula) {
@@ -81,9 +90,6 @@ export async function airtableQuery(tableName, filterByFormula = '', maxRecords 
   return data.records || [];
 }
 
-/**
- * Creates or updates records with automatic auto-drop schema recovery
- */
 export async function airtableWrite(tableName, records, isUpdate = false) {
   const method = isUpdate ? 'PATCH' : 'POST';
   const url = `${AIRTABLE_BASE_URL}/${encodeURIComponent(tableName)}`;
@@ -106,21 +112,22 @@ export async function airtableWrite(tableName, records, isUpdate = false) {
 
     const errorBody = await res.text();
 
-    // Self-healing schema auto-drop: intercept UNKNOWN_FIELD_NAME or INVALID_MULTIPLE_CHOICE_OPTIONS
+    // Auto-drop schema recovery for schema drift
     if (res.status === 422 && (errorBody.includes('UNKNOWN_FIELD_NAME') || errorBody.includes('cannot accept provided value'))) {
-      const fieldMatch = errorBody.match(/Unknown field name: "([^"]+)"/) || 
-                         errorBody.match(/Field "([^"]+)" cannot accept/);
-      
+      const fieldMatch =
+        errorBody.match(/Unknown field name: "([^"]+)"/) ||
+        errorBody.match(/Field "([^"]+)" cannot accept/);
+
       if (fieldMatch && fieldMatch[1]) {
         const offendingField = fieldMatch[1];
         console.warn(`[Airtable] ${tableName}: dropping field "${offendingField}" (UNKNOWN_FIELD_NAME); preserving record write.`);
-        
+
         for (const record of currentRecords) {
           if (record.fields && offendingField in record.fields) {
             delete record.fields[offendingField];
           }
         }
-        continue; // Retry write with cleaned payload
+        continue;
       }
     }
 
@@ -133,9 +140,6 @@ export async function airtableWrite(tableName, records, isUpdate = false) {
 
 // --- 4. PHONE NUMBER NORMALIZATION & WORKER BOUNCER ---
 
-/**
- * Normalizes an incoming raw phone string to standard E.164 format
- */
 export function normalizePhone(rawPhone) {
   if (!rawPhone) return '';
   const cleaned = String(rawPhone).replace(/[^\d+]/g, '');
@@ -143,17 +147,12 @@ export function normalizePhone(rawPhone) {
   return `+${cleaned}`;
 }
 
-/**
- * Identity & Access Management: Verifies sender identity against Airtable Worker table
- * Drops unauthorized or inactive contractors silently at the edge
- */
 export async function verifyWorkerBouncer(rawSenderPhone) {
   const normalizedPhone = normalizePhone(rawSenderPhone);
   const plainDigits = normalizedPhone.replace(/^\+/, '');
   const maskedPhone = `***${plainDigits.slice(-4)}`;
 
   try {
-    // Check both standardized E.164 and plain digit fields with {Active} requirement
     const filterFormula = `AND(OR({Phone E164} = '${normalizedPhone}', {WhatsApp Number} = '${plainDigits}', {WhatsApp Number} = '${normalizedPhone}'), {Active} = TRUE())`;
     const records = await airtableQuery('Worker', filterFormula, 1);
 
@@ -172,15 +171,12 @@ export async function verifyWorkerBouncer(rawSenderPhone) {
     };
   } catch (err) {
     console.error(`[Bouncer Error] Failed to evaluate identity for ${maskedPhone}:`, err.message);
-    return null; // Fail closed
+    return null;
   }
 }
 
 // --- 5. SITE RESOLUTION ENGINE ---
 
-/**
- * Resolves active site context using WhatsApp Group ID or direct chat fallback ID
- */
 export async function resolveSiteByChatId(chatId) {
   if (!chatId) return null;
 
@@ -208,10 +204,11 @@ export async function resolveSiteByChatId(chatId) {
 
 // --- 6. OUTBOUND WHATSAPP DISPATCH (META GRAPH API) ---
 
-/**
- * Delivers structured text updates and confirmation cards via Meta Graph API v21.0
- */
 export async function sendWhatsAppMessage(to, bodyText) {
+  if (!PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
+    throw new Error('Cannot dispatch WhatsApp message: Missing PHONE_NUMBER_ID or WHATSAPP_TOKEN');
+  }
+
   const url = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`;
 
   const payload = {
@@ -242,14 +239,11 @@ export async function sendWhatsAppMessage(to, bodyText) {
   return await res.json();
 }/**
  * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
- * Chunk 3 of 5: Supabase Storage Ingestion & Media Anonymization
+ * Chunk 3 of 5: Supabase Storage Ingestion & UUID Anonymization
  */
 
 // --- 7. META MEDIA RETRIEVAL ENGINE ---
 
-/**
- * Retrieves the temporary CDN download URL for an inbound WhatsApp media item
- */
 export async function getWhatsAppMediaUrl(mediaId) {
   const url = `https://graph.facebook.com/v21.0/${mediaId}`;
   const res = await fetch(url, {
@@ -272,9 +266,6 @@ export async function getWhatsAppMediaUrl(mediaId) {
   };
 }
 
-/**
- * Downloads binary media buffer from Meta's authenticated CDN
- */
 export async function downloadMediaBuffer(downloadUrl) {
   const res = await fetch(downloadUrl, {
     method: 'GET',
@@ -293,9 +284,6 @@ export async function downloadMediaBuffer(downloadUrl) {
 
 // --- 8. SUPABASE STORAGE & UUID ANONYMIZATION ---
 
-/**
- * Resolves file extension from standard MIME types
- */
 function getExtensionFromMime(mimeType) {
   const map = {
     'image/jpeg': 'jpg',
@@ -311,16 +299,13 @@ function getExtensionFromMime(mimeType) {
   return map[mimeType?.toLowerCase()] || 'bin';
 }
 
-/**
- * Streams media to private Supabase bucket with UUID anonymization and returns signed URL
- */
 export async function uploadToSupabase(mediaBuffer, mimeType) {
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
   const ext = getExtensionFromMime(mimeType);
 
-  // Security Hardening: UUID-based object key eliminates phone number exposure from wamid
+  // UUID object key to anonymize storage paths
   const anonymousKey = crypto.randomUUID();
   const storagePath = `${year}/${month}/${anonymousKey}.${ext}`;
 
@@ -341,7 +326,7 @@ export async function uploadToSupabase(mediaBuffer, mimeType) {
     throw new Error(`Supabase REST Upload Failed: ${uploadRes.status} - ${uploadErr}`);
   }
 
-  // Generate 7-day signed playback URL (604,800 seconds) for back-office auditors
+  // 7-day signed playback URL (604,800 seconds)
   const signEndpoint = `${SUPABASE_URL}/storage/v1/object/sign/inbound-media/${storagePath}`;
   const signRes = await fetch(signEndpoint, {
     method: 'POST',
@@ -386,9 +371,6 @@ const PADEL_MILESTONES = [
   'Site Cleanliness & Final Walkthrough'
 ];
 
-/**
- * Evaluates multimodal media and captions against padel construction & maintenance standards
- */
 export async function evaluateFieldSubmission({ mediaBuffer, mimeType, captionText, siteContext, workerContext }) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
@@ -474,9 +456,6 @@ Instructions:
 
 // --- 10. STRUCTURED CARD FORMATTER ---
 
-/**
- * Builds the outbound WhatsApp card delivered back to the field chat
- */
 export function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, mentionedGates, workerSummary }) {
   const gatesLine = mentionedGates && mentionedGates.length > 0 
     ? mentionedGates.join(', ') 
@@ -546,8 +525,6 @@ app.get('/webhook', (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || META_APP_SECRET;
-
   if (mode === 'subscribe' && token === WEBHOOK_VERIFY_TOKEN) {
     console.log('[Webhook] Handshake verified successfully.');
     return res.status(200).send(challenge);
@@ -568,9 +545,8 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
     const change = entry?.changes?.[0]?.value;
     const message = change?.messages?.[0];
 
-    if (!message) return; // Drop statuses/acks
+    if (!message) return;
 
-    // Suppress noise & reactions
     if (message.type === 'reaction') {
       console.log('[Skip] nothing to evaluate (type reaction)');
       return;
@@ -586,7 +562,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
 
     // Step A: Bouncer Check
     const worker = await verifyWorkerBouncer(senderPhone);
-    if (!worker) return; // Dropped silently
+    if (!worker) return;
 
     // Extract Text Content
     let textBody = '';
@@ -596,7 +572,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       textBody = message[message.type].caption;
     }
 
-    // Step B: Slash Command Engine (Case-Insensitive)
+    // Step B: Case-Insensitive Slash Command Engine
     if (textBody.trim().toLowerCase().startsWith('/link')) {
       const requestedSiteName = textBody.trim().substring(5).trim();
 
@@ -607,7 +583,6 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
 
       console.log(`[Link] Attempting to bind chat ${chatId} to site "${requestedSiteName}"`);
 
-      // Search Sites table (case-insensitive Airtable formula match)
       const filter = `LOWER({Site Name}) = '${requestedSiteName.toLowerCase().replace(/'/g, "\\'")}'`;
       const matchingSites = await airtableQuery('Sites', filter, 1);
 
@@ -618,7 +593,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
 
       const targetSite = matchingSites[0];
 
-      // Update Sites record with WhatsApp chat ID
+      // Update Sites record with WhatsApp chat ID and direct status notes
       await airtableWrite('Sites', [{
         id: targetSite.id,
         fields: {
@@ -684,7 +659,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       return;
     }
 
-    // Step F: AI Evaluation
+    // Step F: AI Multimodal Evaluation
     const aiResult = await evaluateFieldSubmission({
       mediaBuffer,
       mimeType,
@@ -743,7 +718,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       }
     }
 
-    // Step I: Outbound WhatsApp Reply
+    // Step I: Outbound WhatsApp Dispatch
     try {
       await sendWhatsAppMessage(chatId, replyCard);
     } catch (err) {
