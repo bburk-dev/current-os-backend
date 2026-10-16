@@ -553,17 +553,32 @@ Instructions:
     });
   }
 
-  const res = await fetch(endpoint, {
+  const payload = {
+    contents: [{ parts }],
+    generationConfig: {
+      temperature: 0.0,
+      responseMimeType: 'application/json',
+      thinkingConfig: {
+        thinkingBudget: 0
+      }
+    }
+  };
+
+  let res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts }],
-      generationConfig: {
-        temperature: 0.0,
-        responseMimeType: 'application/json'
-      }
-    })
+    body: JSON.stringify(payload)
   });
+
+  // Zero-downtime fallback: if thinkingConfig is rejected by API, retry without it
+  if (!res.ok && res.status === 400) {
+    delete payload.generationConfig.thinkingConfig;
+    res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  }
 
   if (!res.ok) {
     const errText = await res.text();
@@ -648,7 +663,7 @@ function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallSt
   return sections.join('\n').trim();
 }/**
  * Titan OS V4.4 — Autonomous Industrial Webhook Gateway
- * Chunk 5 of 5: Webhook HMAC, Slash Command Engine, Chatter Filter & Orchestration
+ * Chunk 5 of 5: Webhook HMAC, Slash Command Engine, Chatter Filter & Concurrent Orchestration
  */
 
 const app = express();
@@ -821,11 +836,9 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
     // Step C: Site Resolution
     const siteInfo = await resolveSiteByChatId(chatId);
 
-    // Step D: Inbound Media Processing
+    // Step D: Inbound Media Retrieval (From Meta CDN)
     let mediaBuffer = null;
     let mimeType = null;
-    let storagePath = null;
-    let signedUrl = null;
 
     const mediaObj = message[message.type];
     if (mediaObj && mediaObj.id) {
@@ -833,34 +846,9 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
         const metaMedia = await getWhatsAppMediaUrl(mediaObj.id);
         mimeType = metaMedia.mimeType;
         mediaBuffer = await downloadMediaBuffer(metaMedia.downloadUrl);
-
-        const storageResult = await uploadToSupabase(mediaBuffer, mimeType);
-        storagePath = storageResult.storagePath;
-        signedUrl = storageResult.signedUrl;
       } catch (err) {
         console.error('[Media Pipeline Error]', err.message);
       }
-    }
-
-    // Step E: Persist to Inbound Messages 2 (Audit log preserved)
-    let inboundRecordId = null;
-    try {
-      const inboundPayload = [{
-        fields: {
-          'Message ID': message.id,
-          'Worker Phone Raw': senderPhone,
-          'Message Type': message.type,
-          'Caption Text': textBody,
-          'Media URL': signedUrl || '',
-          'Media Path': storagePath || '',
-          'Raw Payload JSON': JSON.stringify(message)
-        }
-      }];
-
-      const inboundRes = await airtableWrite('Inbound Messages 2', inboundPayload);
-      inboundRecordId = inboundRes?.records?.[0]?.id || null;
-    } catch (err) {
-      console.error('[Airtable Inbound Write Error]', err.message);
     }
 
     // Pre-filter: Drop sub-5 character noise if no media attached
@@ -869,8 +857,15 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       return;
     }
 
-    // Step F: AI Multimodal Evaluation
-    const aiResult = await evaluateFieldSubmission({
+    // Step E: PARALLEL EXECUTION — Supabase Storage Upload & Gemini AI Evaluation
+    const storageTask = (mediaBuffer && mimeType)
+      ? uploadToSupabase(mediaBuffer, mimeType).catch(err => {
+          console.error('[Storage Upload Error]', err.message);
+          return { storagePath: '', signedUrl: '' };
+        })
+      : Promise.resolve({ storagePath: '', signedUrl: '' });
+
+    const aiTask = evaluateFieldSubmission({
       mediaBuffer,
       mimeType,
       captionText: textBody,
@@ -878,7 +873,11 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       workerContext: worker
     });
 
-    // --- CHATTER FILTER ---
+    const [storageResult, aiResult] = await Promise.all([storageTask, aiTask]);
+    const storagePath = storageResult?.storagePath || '';
+    const signedUrl = storageResult?.signedUrl || '';
+
+    // Step F: Chatter Filter
     const actionIntent = (aiResult.action_intent || '').toUpperCase();
     const hasMilestones = (aiResult.verified_gates?.length > 0) || (aiResult.action_items?.length > 0) || (aiResult.servicing_completed?.length > 0);
     const isSocialChatter =
@@ -890,7 +889,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       return;
     }
 
-    // --- MILESTONE, TRANSIENT CLEANLINESS & HANDOVER ENGINE ---
+    // Step G: Milestone, Transient Cleanliness & Handover Logic
     const currentMode = (siteInfo?.workflowMode || aiResult.workflow_mode || 'INSTALLATION').toUpperCase();
     const previouslyCleared = siteInfo?.clearedMilestones || [];
 
@@ -953,64 +952,81 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       ...filteredActionItems
     ];
 
-    // Step G: Persist to Reports 2 (Includes Headline & Summary for INOC Dashboard)
-    try {
-      const reportPayload = [{
-        fields: {
-          'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
-          'Sites': siteInfo?.siteRecordId ? [siteInfo.siteRecordId] : [],
-          'Workflow Mode': currentMode,
-          'Overall Status': computedStatus,
-          'Worker Summary': aiResult.worker_summary,
-          'Site Conditions': aiResult.site_conditions || '',
-          'Action Items': filteredActionItems.length > 0 ? filteredActionItems.map(i => `• ${i}`).join('\n') : '',
-          'Headline (Action Items)': aiResult.action_headline || '',
-          'Summary (Action Items)': aiResult.action_summary || '',
-          'Status Observed': computedStatus,
-          'Action Intent': aiResult.action_intent,
-          'Mentioned Gates': allGates.length > 0 ? allGates.join(', ') : '',
-          'WhatsApp Reply Text': replyCard,
-          'Clean JSON': JSON.stringify(aiResult)
-        }
-      }];
-
-      await airtableWrite('Reports 2', reportPayload);
-    } catch (err) {
-      console.error('[Airtable Report Write Error]', err.message);
-    }
-
-    // Step H: Direct Write to Parent Sites Record (State, Milestones, & Auto-Handover)
-    if (siteInfo?.siteRecordId) {
-      try {
-        const siteUpdateFields = {
-          'Last Intent': aiResult.action_intent || (currentMode === 'MAINTENANCE' ? 'MAINTENANCE_UPDATE' : 'INSTALL_UPDATE'),
-          'Last Note': aiResult.worker_summary || 'Field submission verified.',
-          'Cleared Milestones': uniqueVerifiedGates
-        };
-
-        // If installation is 100% complete, switch site to MAINTENANCE mode automatically!
-        if (autoHandoverToMaintenance) {
-          siteUpdateFields['Workflow Mode'] = 'MAINTENANCE';
-          siteUpdateFields['Site Status'] = 'ACTIVE';
-          siteUpdateFields['Last Note'] = '100% Installation complete. Handed over to operational maintenance.';
-          console.log(`[Handover] ${siteInfo.siteName} reached 12/12 gates. Switched Workflow Mode to MAINTENANCE.`);
-        }
-
-        await airtableWrite('Sites', [{
-          id: siteInfo.siteRecordId,
-          fields: siteUpdateFields
-        }], true);
-      } catch (err) {
-        console.error('[Airtable Sites Update Error]', err.message);
-      }
-    }
-
-    // Step I: Outbound WhatsApp Dispatch
-    try {
-      await sendWhatsAppMessage(chatId, replyCard);
-    } catch (err) {
+    // Step H: FAST DISPATCH & ASYNC AIRTABLE PERSISTENCE
+    // 1. Dispatch WhatsApp Status Card immediately so the worker gets rapid feedback
+    const whatsappPromise = sendWhatsAppMessage(chatId, replyCard).catch(err => {
       console.error('[WhatsApp Outbound Error]', err.message);
+    });
+
+    // 2. Persist Inbound Message to Audit Log
+    const inboundPayload = [{
+      fields: {
+        'Message ID': message.id,
+        'Worker Phone Raw': senderPhone,
+        'Message Type': message.type,
+        'Caption Text': textBody,
+        'Media URL': signedUrl || '',
+        'Media Path': storagePath || '',
+        'Raw Payload JSON': JSON.stringify(message)
+      }
+    }];
+
+    const inboundPromise = airtableWrite('Inbound Messages 2', inboundPayload)
+      .then(async (inboundRes) => {
+        const inboundRecordId = inboundRes?.records?.[0]?.id || null;
+
+        // Persist to Reports 2 with link to Inbound Message
+        const reportPayload = [{
+          fields: {
+            'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
+            'Sites': siteInfo?.siteRecordId ? [siteInfo.siteRecordId] : [],
+            'Workflow Mode': currentMode,
+            'Overall Status': computedStatus,
+            'Worker Summary': aiResult.worker_summary,
+            'Site Conditions': aiResult.site_conditions || '',
+            'Action Items': filteredActionItems.length > 0 ? filteredActionItems.map(i => `• ${i}`).join('\n') : '',
+            'Headline (Action Items)': aiResult.action_headline || '',
+            'Summary (Action Items)': aiResult.action_summary || '',
+            'Status Observed': computedStatus,
+            'Action Intent': aiResult.action_intent,
+            'Mentioned Gates': allGates.length > 0 ? allGates.join(', ') : '',
+            'WhatsApp Reply Text': replyCard,
+            'Clean JSON': JSON.stringify(aiResult)
+          }
+        }];
+
+        return airtableWrite('Reports 2', reportPayload);
+      })
+      .catch(err => {
+        console.error('[Airtable Inbound/Report Write Error]', err.message);
+      });
+
+    // 3. Persist State to Parent Sites Record
+    let sitesPromise = Promise.resolve();
+    if (siteInfo?.siteRecordId) {
+      const siteUpdateFields = {
+        'Last Intent': aiResult.action_intent || (currentMode === 'MAINTENANCE' ? 'MAINTENANCE_UPDATE' : 'INSTALL_UPDATE'),
+        'Last Note': aiResult.worker_summary || 'Field submission verified.',
+        'Cleared Milestones': uniqueVerifiedGates
+      };
+
+      if (autoHandoverToMaintenance) {
+        siteUpdateFields['Workflow Mode'] = 'MAINTENANCE';
+        siteUpdateFields['Site Status'] = 'ACTIVE';
+        siteUpdateFields['Last Note'] = '100% Installation complete. Handed over to operational maintenance.';
+        console.log(`[Handover] ${siteInfo.siteName} reached 12/12 gates. Switched Workflow Mode to MAINTENANCE.`);
+      }
+
+      sitesPromise = airtableWrite('Sites', [{
+        id: siteInfo.siteRecordId,
+        fields: siteUpdateFields
+      }], true).catch(err => {
+        console.error('[Airtable Sites Update Error]', err.message);
+      });
     }
+
+    // Await all outbound dispatches in parallel
+    await Promise.all([whatsappPromise, inboundPromise, sitesPromise]);
   });
 });
 
