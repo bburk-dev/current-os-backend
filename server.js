@@ -111,25 +111,23 @@ async function airtableWrite(tableName, records, isUpdate = false) {
 
     const errorBody = await res.text();
 
-    // Auto-drop schema recovery: intercept unknown, computed, read-only or invalid fields
+    // Universal auto-drop schema recovery: handles escaped/unescaped quotes, computed, and unknown fields
     const isRecoverableSchemaError =
       res.status === 422 &&
       (errorBody.includes('UNKNOWN_FIELD_NAME') ||
        errorBody.includes('cannot accept') ||
-       errorBody.includes('because the field is computed') ||
        errorBody.includes('is computed') ||
        errorBody.includes('INVALID_MULTIPLE_CHOICE_OPTIONS'));
 
     if (isRecoverableSchemaError) {
       const fieldMatch =
-        errorBody.match(/Unknown field name: "([^"]+)"/) ||
-        errorBody.match(/Field "([^"]+)" cannot accept/) ||
-        errorBody.match(/Field "([^"]+)" is computed/) ||
-        errorBody.match(/select option "([^"]+)"/);
+        errorBody.match(/Unknown field name:\s*\\*"([^\\"]+)/) ||
+        errorBody.match(/Field\s*\\*"([^\\"]+)/) ||
+        errorBody.match(/select option\s*\\*"([^\\"]+)/);
 
       if (fieldMatch && fieldMatch[1]) {
         const offendingField = fieldMatch[1];
-        console.warn(`[Airtable] ${tableName}: auto-dropping read-only/computed/unknown field "${offendingField}"; retrying write.`);
+        console.warn(`[Airtable] ${tableName}: auto-dropping missing/computed field "${offendingField}"; retrying write.`);
 
         for (const record of currentRecords) {
           if (record.fields && offendingField in record.fields) {
@@ -208,7 +206,7 @@ async function resolveSiteByChatId(chatId) {
       clearedGates = rawMilestones.split(',').map(s => s.trim()).filter(Boolean);
     }
 
-    // Parse milestone timestamps JSON for duration and lead-time analytics
+    // Parse milestone timestamps JSON for duration and velocity analytics
     let milestoneTimestamps = {};
     const rawTimestamps = site.fields['Milestone Timestamps JSON'] || site.fields['Gate Timestamps JSON'];
     if (typeof rawTimestamps === 'object' && rawTimestamps !== null) {
@@ -802,7 +800,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
 
     const trimmedLowerText = textBody.trim().toLowerCase();
 
-    // Step B: Slash Command Engine (/link and /mode)
+    // Step B: Slash Command Engine (/link, /mode, and /status)
     if (trimmedLowerText.startsWith('/link')) {
       const requestedSiteName = textBody.trim().substring(5).trim();
 
@@ -867,6 +865,37 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       }], true);
 
       await sendWhatsAppMessage(chatId, `🔄 *Workflow Mode Updated*\n\n📍 *Site:* ${siteForMode.siteName}\n⚡ *Current Mode:* *${newMode}*\n\nTitan OS will now audit submissions under ${newMode} guidelines.`);
+      return;
+    }
+
+    // Status Query Command: /status or /summary
+    if (trimmedLowerText === '/status' || trimmedLowerText === '/summary') {
+      const siteForStatus = await resolveSiteByChatId(chatId);
+      if (!siteForStatus) {
+        await sendWhatsAppMessage(chatId, '⚠️ Please link this chat to a site first using `/link <Site Name>`.');
+        return;
+      }
+
+      let elapsedText = null;
+      if (siteForStatus.installStarted) {
+        elapsedText = formatDuration(new Date(siteForStatus.installStarted).getTime());
+      }
+
+      const quickCard = buildWhatsAppStatusCard({
+        siteName: siteForStatus.siteName,
+        workerName: worker.fullName,
+        workflowMode: siteForStatus.workflowMode,
+        overallStatus: siteForStatus.siteStatus === 'ACTIVE' && siteForStatus.workflowMode === 'MAINTENANCE' ? 'CLEARED' : 'IN_PROGRESS',
+        siteConditions: 'Stationary query',
+        actionItems: [],
+        servicingCompleted: [],
+        verifiedGates: siteForStatus.clearedMilestones,
+        workerSummary: `Court is operating in ${siteForStatus.workflowMode} mode with ${siteForStatus.clearedMilestones.length}/12 gates cleared.`,
+        installDuration: elapsedText,
+        isHandover: siteForStatus.workflowMode === 'MAINTENANCE' && siteForStatus.clearedMilestones.length === 12
+      });
+
+      await sendWhatsAppMessage(chatId, quickCard);
       return;
     }
 
