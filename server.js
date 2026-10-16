@@ -1,5 +1,5 @@
 /**
- * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
+ * Titan OS V4.4 — Autonomous Industrial Webhook Gateway
  * Chunk 1 of 5: Dependencies, Environment, FIFO Queue, & Resilient Airtable Client
  */
 
@@ -141,7 +141,7 @@ async function airtableWrite(tableName, records, isUpdate = false) {
     throw new Error(`Airtable Write Failed [${tableName}]: ${res.status} - ${errorBody}`);
   }
 }/**
- * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
+ * Titan OS V4.4 — Autonomous Industrial Webhook Gateway
  * Chunk 2 of 5: Worker Bouncer, Site Resolution & WhatsApp Dispatch
  */
 
@@ -209,7 +209,7 @@ async function resolveSiteByChatId(chatId) {
     return {
       siteRecordId: site.id,
       siteName: site.fields['Site Name'] || 'Unlinked Site',
-      workflowMode: site.fields['Workflow Mode'] || 'INSTALLATION',
+      workflowMode: (site.fields['Workflow Mode'] || 'INSTALLATION').toUpperCase(),
       siteStatus: site.fields['Site Status'] || 'ACTIVE',
       siteLocation: site.fields['Site location'] || '',
       clearedMilestones: clearedGates
@@ -256,7 +256,7 @@ async function sendWhatsAppMessage(to, bodyText) {
 
   return await res.json();
 }/**
- * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
+ * Titan OS V4.4 — Autonomous Industrial Webhook Gateway
  * Chunk 3 of 5: Supabase Storage Ingestion & UUID Anonymization
  */
 
@@ -383,8 +383,8 @@ async function uploadToSupabase(mediaBuffer, mimeType) {
     signedUrl
   };
 }/**
- * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
- * Chunk 4 of 5: Gemini Multimodal Verification & Exception-First Card Assembly
+ * Titan OS V4.4 — Autonomous Industrial Webhook Gateway
+ * Chunk 4 of 5: Multimodal Verification Engine & Dynamic Card Formatter
  */
 
 // --- 9. MULTIMODAL AI EVALUATION ENGINE ---
@@ -407,26 +407,99 @@ const PADEL_MILESTONES = [
 async function evaluateFieldSubmission({ mediaBuffer, mimeType, captionText, siteContext, workerContext }) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
+  const mode = (siteContext?.workflowMode || 'INSTALLATION').toUpperCase();
   const previouslyCleared = siteContext?.clearedMilestones || [];
 
-  const promptSystem = `
-You are Titan OS, an autonomous industrial QA inspector for padel court construction and maintenance operations.
+  let promptSystem = '';
+
+  if (mode === 'MAINTENANCE') {
+    promptSystem = `
+You are Titan OS, an autonomous industrial QA inspector conducting a MAINTENANCE AUDIT on an operational padel court.
+Evaluate incoming media (walkthrough video, photos, audio, notes) to assess court condition, routine servicing, and defects.
+
+Site Context:
+- Site: ${siteContext?.siteName || 'Unlinked Site'}
+- Mode: MAINTENANCE
+- Location: ${siteContext?.siteLocation || 'Not specified'}
+- Worker: ${workerContext?.fullName || 'Field Contractor'} (${workerContext?.role || 'Technician'})
+
+Baseline: Court structural milestones are already complete. Do NOT evaluate installation progress.
+Inspect the following maintenance components:
+1. Turf & Sand: Sand redistribution, brushing coverage, high-wear baseline compaction, loose turf seams.
+2. Net & Hardware: Net sag, center strap regulation height (92 cm), band fraying, cable tension.
+3. Glass & Silicone: Silicone bead degradation/peeling, chipped glass edges, loose mounting clamps.
+4. Structure: Steel rust, bolt tightening, mesh tension, apron hazards, fixture illumination.
+
+Instructions:
+1. Ambient Site & Weather Observation: Note observable court ambient conditions (e.g., "Indoor facility, dry slab", "Outdoor court, dry surface, clear skies").
+2. Separate completed service tasks into "servicing_completed".
+3. Place active defects, wear, or required repairs into "action_items" (Format: "Component: Specific defect observed").
+4. If conversational chatter without work content, set action_intent to "CHATTER".
+5. Return output STRICTLY as valid JSON:
+{
+  "workflow_mode": "MAINTENANCE",
+  "overall_status": "CLEARED" | "FLAGGED" | "NEEDS_REVIEW" | "ACTION_REQUIRED",
+  "action_intent": "MAINTENANCE_UPDATE" | "QUALITY_AUDIT" | "CHATTER",
+  "site_conditions": "Short ambient weather / court surface status",
+  "servicing_completed": ["Serviced sand redistribution", "Net center strap adjusted"],
+  "action_items": ["Glass: Minor silicone peeling at bottom of panel 3"],
+  "action_headline": "3 to 6 word maintenance status headline",
+  "action_summary": "1 sentence executive summary of maintenance findings",
+  "verified_gates": ${JSON.stringify(previouslyCleared)},
+  "worker_summary": "1-2 sentence concise operational summary of maintenance visit.",
+  "confidence_score": 0.0 to 1.0
+}
+`.trim();
+  } else if (mode === 'SPOT_VISIT') {
+    promptSystem = `
+You are Titan OS, conducting a rapid SPOT VISIT / PLAYABILITY AUDIT on an active padel court.
+Evaluate whether the court is currently safe, playable, and presentable for players.
+
+Site Context:
+- Site: ${siteContext?.siteName || 'Unlinked Site'}
+- Mode: SPOT_VISIT
+- Location: ${siteContext?.siteLocation || 'Not specified'}
+- Worker: ${workerContext?.fullName || 'Field Auditor'}
+
+Audit Criteria:
+1. Playing Surface: Dry, clear of standing water, free of tripping hazards, tools, or trash.
+2. Glass & Enclosure: All glass panels intact and secure. No structural hazards.
+3. Net: Mounted, playable, tensioned.
+
+Instructions:
+1. If the court meets all 3 criteria, overall_status is "CLEARED" (Playable).
+2. If blocked or unsafe, overall_status is "ACTION_REQUIRED" and detail the hazard in "action_items".
+3. Return output STRICTLY as valid JSON:
+{
+  "workflow_mode": "SPOT_VISIT",
+  "overall_status": "CLEARED" | "ACTION_REQUIRED" | "NEEDS_REVIEW",
+  "action_intent": "QUALITY_AUDIT" | "CHATTER",
+  "site_conditions": "Short ambient weather / court surface status",
+  "servicing_completed": [],
+  "action_items": [],
+  "action_headline": "Court Playable & Ready" or "Court Unsafe / Blocked",
+  "action_summary": "1 sentence spot audit summary",
+  "verified_gates": ${JSON.stringify(previouslyCleared)},
+  "worker_summary": "1 sentence spot inspection summary.",
+  "confidence_score": 0.0 to 1.0
+}
+`.trim();
+  } else {
+    // Default: INSTALLATION MODE
+    promptSystem = `
+You are Titan OS, an autonomous industrial QA inspector for padel court construction and milestone verification.
 Evaluate incoming multimodal site updates (photos, walkthrough videos, voice notes, captions).
 
 Current Site Context:
 - Site Name: ${siteContext?.siteName || 'Unlinked Site'}
-- Active Workflow Mode: ${siteContext?.workflowMode || 'INSTALLATION'}
+- Active Workflow Mode: INSTALLATION
 - Location: ${siteContext?.siteLocation || 'Not specified'}
-
-Authorized Worker Context:
-- Worker Name: ${workerContext?.fullName || 'Field Contractor'}
-- Role: ${workerContext?.role || 'Installer'}
+- Authorized Worker: ${workerContext?.fullName || 'Field Contractor'} (${workerContext?.role || 'Installer'})
 
 Standard 12 Installation Milestone Gates:
 ${PADEL_MILESTONES.map((m, idx) => `${idx + 1}.${m}`).join('\n')}
 
-**CUMULATIVE MEMORY:**
-Previously Cleared Milestones for this site (DO NOT UN-VERIFY THESE):
+**CUMULATIVE MEMORY (DO NOT UN-VERIFY PREVIOUSLY CLEARED PHYSICAL GATES):**
 ${previouslyCleared.length > 0 ? previouslyCleared.join(', ') : 'None yet.'}
 
 **PADEL-SPECIFIC VISUAL HEURISTICS (CRITICAL FOR SILENT & MACRO VIDEO EVALUATION):**
@@ -438,29 +511,32 @@ ${previouslyCleared.length > 0 ? previouslyCleared.join(', ') : 'None yet.'}
    - Due to camera motion, lighting, and compression, clear silicone beads have subtle contrast. If glass panels are fully seated, flush, plumb, and the camera shows a pan along the seams/joints, mark "Silicone" as VERIFIED unless open unsealed gaps, loose mounting, or missing gaskets are visibly obvious.
 3. Foundation / Base Plates:
    - Only flag Foundation if base plates are visibly unbolted, hanging, or missing anchor bolts.
-4. Site Cleanliness:
-   - Only flag if significant construction debris, packaging trash, or protective film litter is scattered on the playing area. Minor active tools in use by workers do not fail cleanliness.
+4. Gate 12: Site Cleanliness & Final Walkthrough:
+   - Requires an unobstructed wide view of the entire court floor, perimeter aprons, and player entrance areas.
+   - Do NOT clear this gate on close-up, macro, or partial walkthrough clips.
+   - If construction tools, discarded silicone tubes, sand bags, packaging film, pallets, or uncollected sweepings are visible anywhere on or around the court, place "Site Cleanliness: Remove tools and construction debris" into "action_items" and do NOT include "Site Cleanliness & Final Walkthrough" in "verified_gates".
 
 Instructions:
-1. Examine media and caption text. Determine observable milestone progress, repair actions, or inspection notes.
-2. Ambient Site & Weather Observation: Note observable court ambient conditions (e.g., "Clear sky, sunny, dry outdoor court surface", "Indoor facility, dry slab").
-3. Exception-First Auditing:
-   - Automatically carry forward all "Previously Cleared Milestones" into the "verified_gates" array.
-   - Add any NEWLY verified milestones from this submission into "verified_gates" (applying the visual heuristics above).
-   - Only place items into "action_items" if there is an actual physical defect, missing structural piece, or uncompleted task. Do NOT create action items for gates that meet the heuristic criteria or are already complete.
-4. If the message is purely conversational or social, classify action_intent as "CHATTER" and overall_status as "NEEDS_REVIEW".
-5. Return output STRICTLY as valid JSON matching this schema:
+1. Ambient Site & Weather Observation: Note observable court ambient conditions (e.g., "Clear sky, sunny, dry outdoor court surface", "Indoor facility, dry slab").
+2. Automatically carry forward all "Previously Cleared Milestones" into "verified_gates" (except Gate 12 if active debris is observed).
+3. Add any NEWLY verified milestones into "verified_gates".
+4. Separate incomplete punch-list items, blocked tasks, missing bolts, or debris into "action_items" (Format: "Category: specific issue").
+5. Return output STRICTLY as valid JSON:
 {
-  "workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT",
+  "workflow_mode": "INSTALLATION",
   "overall_status": "CLEARED" | "FLAGGED" | "NEEDS_REVIEW" | "ACTION_REQUIRED",
-  "action_intent": "INSTALL_UPDATE" | "MAINTENANCE_UPDATE" | "QUALITY_AUDIT" | "CHATTER",
+  "action_intent": "INSTALL_UPDATE" | "QUALITY_AUDIT" | "CHATTER",
   "site_conditions": "Short ambient weather / court surface status",
+  "servicing_completed": [],
   "action_items": ["Category: Specific task or blocker requiring attention"],
+  "action_headline": "3 to 6 word punch-list status headline",
+  "action_summary": "1 sentence executive summary of outstanding issues or milestone completions",
   "verified_gates": ["List", "Of", "Detected", "Milestone", "Names"],
   "worker_summary": "1-2 sentence concise operational summary of physical work verified.",
   "confidence_score": 0.0 to 1.0
 }
 `.trim();
+  }
 
   const parts = [{ text: promptSystem }];
 
@@ -502,27 +578,35 @@ Instructions:
   } catch {
     console.error('[Gemini Parse Fallback] Non-JSON output received:', rawText);
     return {
-      workflow_mode: siteContext?.workflowMode || 'INSTALLATION',
+      workflow_mode: mode,
       overall_status: 'CLEARED',
-      action_intent: 'INSTALL_UPDATE',
+      action_intent: mode === 'MAINTENANCE' ? 'MAINTENANCE_UPDATE' : 'INSTALL_UPDATE',
       site_conditions: 'Dry surface observed',
+      servicing_completed: [],
       action_items: [],
+      action_headline: 'Site Submission Processed',
+      action_summary: 'Media verified. Operational log updated.',
       verified_gates: previouslyCleared,
-      worker_summary: 'Media verified. Operational milestone logged.',
+      worker_summary: 'Media verified. Operational log recorded.',
       confidence_score: 0.8
     };
   }
 }
 
-// --- 10. STRUCTURED EXCEPTION-FIRST CARD FORMATTER ---
+// --- 10. DYNAMIC MULTI-MODE STATUS CARD FORMATTER ---
 
-function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, siteConditions, actionItems, verifiedGates, workerSummary }) {
+function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, siteConditions, actionItems, servicingCompleted, verifiedGates, workerSummary }) {
+  const mode = (workflowMode || 'INSTALLATION').toUpperCase();
   const isActionRequired = overallStatus === 'ACTION_REQUIRED' || overallStatus === 'FLAGGED';
   const statusEmoji = isActionRequired ? '⚠️' : '✅';
   const statusLabel = overallStatus || 'CLEARED';
 
+  let title = 'Installation Update';
+  if (mode === 'MAINTENANCE') title = 'Maintenance Visit';
+  if (mode === 'SPOT_VISIT') title = 'Spot Audit';
+
   const sections = [
-    `🤖 *Titan OS | ${workflowMode || 'Installation'} Update*`,
+    `🤖 *Titan OS | ${title}*`,
     '',
     `📍 *Site:* ${siteName || 'Unlinked Location'}`,
     `👷 *Worker:* ${workerName || 'Bob'}`,
@@ -533,15 +617,24 @@ function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallSt
     sections.push(`🌤️ *Conditions:* ${siteConditions}`);
   }
 
+  if (servicingCompleted && servicingCompleted.length > 0) {
+    sections.push('');
+    sections.push(`🔧 *Servicing Completed (${servicingCompleted.length}):*`);
+    servicingCompleted.forEach(item => {
+      sections.push(`• ${item}`);
+    });
+  }
+
   if (actionItems && actionItems.length > 0) {
     sections.push('');
-    sections.push(`⚠️ *Needs Attention (${actionItems.length}):*`);
+    const issueTitle = mode === 'INSTALLATION' ? 'Needs Attention' : (mode === 'SPOT_VISIT' ? 'Blockers' : 'Logged Issues');
+    sections.push(`⚠️ *${issueTitle} (${actionItems.length}):*`);
     actionItems.forEach(item => {
       sections.push(`• ${item}`);
     });
   }
 
-  if (verifiedGates && verifiedGates.length > 0) {
+  if (mode === 'INSTALLATION' && verifiedGates && verifiedGates.length > 0) {
     sections.push('');
     sections.push(`✅ *Verified Milestones (${verifiedGates.length}):*`);
     sections.push(verifiedGates.join(', '));
@@ -554,7 +647,7 @@ function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallSt
 
   return sections.join('\n').trim();
 }/**
- * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
+ * Titan OS V4.4 — Autonomous Industrial Webhook Gateway
  * Chunk 5 of 5: Webhook HMAC, Slash Command Engine, Chatter Filter & Orchestration
  */
 
@@ -655,8 +748,10 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       textBody = message[message.type].caption;
     }
 
-    // Step B: Case-Insensitive Slash Command Engine
-    if (textBody.trim().toLowerCase().startsWith('/link')) {
+    const trimmedLowerText = textBody.trim().toLowerCase();
+
+    // Step B: Slash Command Engine (/link and /mode)
+    if (trimmedLowerText.startsWith('/link')) {
       const requestedSiteName = textBody.trim().substring(5).trim();
 
       if (!requestedSiteName) {
@@ -676,7 +771,6 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
 
       const targetSite = matchingSites[0];
 
-      // Update Sites record with chat binding and notes
       await airtableWrite('Sites', [{
         id: targetSite.id,
         fields: {
@@ -687,6 +781,40 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       }], true);
 
       await sendWhatsAppMessage(chatId, `✅ *Titan OS Site Linked*\n\nThis chat has been bound to site:\n📍 *${targetSite.fields['Site Name']}*\n\nField updates submitted here will now track under this site record.`);
+      return;
+    }
+
+    // Mode Switching Command: /mode <install | maintenance | spot>
+    if (trimmedLowerText.startsWith('/mode')) {
+      const siteForMode = await resolveSiteByChatId(chatId);
+      if (!siteForMode) {
+        await sendWhatsAppMessage(chatId, '⚠️ Please link this chat to a site first using `/link <Site Name>`.');
+        return;
+      }
+
+      const requestedMode = trimmedLowerText.substring(5).trim();
+      let newMode = '';
+      if (requestedMode === 'maintenance' || requestedMode === 'maint') {
+        newMode = 'MAINTENANCE';
+      } else if (requestedMode === 'install' || requestedMode === 'installation') {
+        newMode = 'INSTALLATION';
+      } else if (requestedMode === 'spot' || requestedMode === 'audit') {
+        newMode = 'SPOT_VISIT';
+      } else {
+        await sendWhatsAppMessage(chatId, '⚠️ Unknown mode. Use:\n• `/mode install`\n• `/mode maintenance`\n• `/mode spot`');
+        return;
+      }
+
+      await airtableWrite('Sites', [{
+        id: siteForMode.siteRecordId,
+        fields: {
+          'Workflow Mode': newMode,
+          'Last Intent': 'MODE_SWITCH',
+          'Last Note': `Workflow mode set to ${newMode} by ${worker.fullName}.`
+        }
+      }], true);
+
+      await sendWhatsAppMessage(chatId, `🔄 *Workflow Mode Updated*\n\n📍 *Site:* ${siteForMode.siteName}\n⚡ *Current Mode:* *${newMode}*\n\nTitan OS will now audit submissions under ${newMode} guidelines.`);
       return;
     }
 
@@ -706,7 +834,6 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
         mimeType = metaMedia.mimeType;
         mediaBuffer = await downloadMediaBuffer(metaMedia.downloadUrl);
 
-        // Upload to Supabase Storage with UUID path
         const storageResult = await uploadToSupabase(mediaBuffer, mimeType);
         storagePath = storageResult.storagePath;
         signedUrl = storageResult.signedUrl;
@@ -752,9 +879,8 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
     });
 
     // --- CHATTER FILTER ---
-    // Suppress status card and report creation for social chatter
     const actionIntent = (aiResult.action_intent || '').toUpperCase();
-    const hasMilestones = (aiResult.verified_gates?.length > 0) || (aiResult.action_items?.length > 0);
+    const hasMilestones = (aiResult.verified_gates?.length > 0) || (aiResult.action_items?.length > 0) || (aiResult.servicing_completed?.length > 0);
     const isSocialChatter =
       actionIntent === 'CHATTER' ||
       (!mediaBuffer && !hasMilestones && aiResult.overall_status === 'NEEDS_REVIEW');
@@ -764,57 +890,82 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       return;
     }
 
-    // Programmatic Cumulative Merge: Guaranteed memory retention
+    // --- MILESTONE, TRANSIENT CLEANLINESS & HANDOVER ENGINE ---
+    const currentMode = (siteInfo?.workflowMode || aiResult.workflow_mode || 'INSTALLATION').toUpperCase();
     const previouslyCleared = siteInfo?.clearedMilestones || [];
-    const uniqueVerifiedGates = Array.from(new Set([
-      ...previouslyCleared,
-      ...(aiResult.verified_gates || [])
-    ]));
 
-    // Filter action items to ensure no previously verified gates are re-flagged
-    const filteredActionItems = (aiResult.action_items || []).filter(item => {
-      return !uniqueVerifiedGates.some(gate =>
-        item.toLowerCase().startsWith(gate.toLowerCase()) ||
-        item.toLowerCase().includes(gate.toLowerCase() + ':')
-      );
-    });
-
-    // Re-evaluate overall status if all action items were cleared
+    let uniqueVerifiedGates = previouslyCleared;
+    let filteredActionItems = aiResult.action_items || [];
     let computedStatus = aiResult.overall_status;
-    if (uniqueVerifiedGates.length === 12 && filteredActionItems.length === 0) {
-      computedStatus = 'CLEARED';
-    } else if (filteredActionItems.length === 0 && computedStatus === 'ACTION_REQUIRED') {
-      computedStatus = 'CLEARED';
+    let autoHandoverToMaintenance = false;
+
+    if (currentMode === 'INSTALLATION') {
+      const newlyDetected = aiResult.verified_gates || [];
+      const mergedSet = new Set([...previouslyCleared, ...newlyDetected]);
+
+      // Transient Cleanliness Demotion Check:
+      // If any action item flags construction debris, packaging wrap, tools, or trash, demote Gate 12
+      const hasCleanlinessDebris = filteredActionItems.some(item => {
+        const lower = item.toLowerCase();
+        return lower.includes('cleanliness') || lower.includes('debris') || lower.includes('tools') || lower.includes('trash');
+      });
+
+      if (hasCleanlinessDebris) {
+        mergedSet.delete('Site Cleanliness & Final Walkthrough');
+      }
+
+      uniqueVerifiedGates = Array.from(mergedSet);
+
+      // Filter out punch list items for gates that are verified (preserving active cleanliness blockers)
+      filteredActionItems = filteredActionItems.filter(item => {
+        const lower = item.toLowerCase();
+        const isCleanliness = lower.includes('cleanliness') || lower.includes('debris');
+        if (isCleanliness && hasCleanlinessDebris) return true;
+        return !uniqueVerifiedGates.some(gate =>
+          lower.startsWith(gate.toLowerCase()) ||
+          lower.includes(gate.toLowerCase() + ':')
+        );
+      });
+
+      // Handover Check: All 12 gates verified with zero punch list items
+      if (uniqueVerifiedGates.length === 12 && filteredActionItems.length === 0) {
+        computedStatus = 'CLEARED';
+        autoHandoverToMaintenance = true;
+      } else if (filteredActionItems.length === 0 && computedStatus === 'ACTION_REQUIRED') {
+        computedStatus = 'CLEARED';
+      }
     }
 
     const replyCard = buildWhatsAppStatusCard({
       siteName: siteInfo?.siteName,
       workerName: worker.fullName,
-      workflowMode: aiResult.workflow_mode,
+      workflowMode: currentMode,
       overallStatus: computedStatus,
       siteConditions: aiResult.site_conditions,
       actionItems: filteredActionItems,
+      servicingCompleted: aiResult.servicing_completed,
       verifiedGates: uniqueVerifiedGates,
       workerSummary: aiResult.worker_summary
     });
 
-    // Combine verified gates and action items for historical Airtable tracking
     const allGates = [
       ...uniqueVerifiedGates,
       ...filteredActionItems
     ];
 
-    // Step G: Persist to Reports 2 (Includes Action Items plain text & Site Conditions)
+    // Step G: Persist to Reports 2 (Includes Headline & Summary for INOC Dashboard)
     try {
       const reportPayload = [{
         fields: {
           'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
           'Sites': siteInfo?.siteRecordId ? [siteInfo.siteRecordId] : [],
-          'Workflow Mode': aiResult.workflow_mode,
+          'Workflow Mode': currentMode,
           'Overall Status': computedStatus,
           'Worker Summary': aiResult.worker_summary,
           'Site Conditions': aiResult.site_conditions || '',
           'Action Items': filteredActionItems.length > 0 ? filteredActionItems.map(i => `• ${i}`).join('\n') : '',
+          'Headline (Action Items)': aiResult.action_headline || '',
+          'Summary (Action Items)': aiResult.action_summary || '',
           'Status Observed': computedStatus,
           'Action Intent': aiResult.action_intent,
           'Mentioned Gates': allGates.length > 0 ? allGates.join(', ') : '',
@@ -828,16 +979,26 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       console.error('[Airtable Report Write Error]', err.message);
     }
 
-    // Step H: Direct Write to Parent Sites Record ({Last Intent}, {Last Note}, & {Cleared Milestones})
+    // Step H: Direct Write to Parent Sites Record (State, Milestones, & Auto-Handover)
     if (siteInfo?.siteRecordId) {
       try {
+        const siteUpdateFields = {
+          'Last Intent': aiResult.action_intent || (currentMode === 'MAINTENANCE' ? 'MAINTENANCE_UPDATE' : 'INSTALL_UPDATE'),
+          'Last Note': aiResult.worker_summary || 'Field submission verified.',
+          'Cleared Milestones': uniqueVerifiedGates
+        };
+
+        // If installation is 100% complete, switch site to MAINTENANCE mode automatically!
+        if (autoHandoverToMaintenance) {
+          siteUpdateFields['Workflow Mode'] = 'MAINTENANCE';
+          siteUpdateFields['Site Status'] = 'ACTIVE';
+          siteUpdateFields['Last Note'] = '100% Installation complete. Handed over to operational maintenance.';
+          console.log(`[Handover] ${siteInfo.siteName} reached 12/12 gates. Switched Workflow Mode to MAINTENANCE.`);
+        }
+
         await airtableWrite('Sites', [{
           id: siteInfo.siteRecordId,
-          fields: {
-            'Last Intent': aiResult.action_intent || 'INSTALL_UPDATE',
-            'Last Note': aiResult.worker_summary || 'Field submission verified.',
-            'Cleared Milestones': uniqueVerifiedGates
-          }
+          fields: siteUpdateFields
         }], true);
       } catch (err) {
         console.error('[Airtable Sites Update Error]', err.message);
