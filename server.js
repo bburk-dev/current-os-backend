@@ -111,17 +111,19 @@ async function airtableWrite(tableName, records, isUpdate = false) {
 
     const errorBody = await res.text();
 
-    // Auto-drop schema recovery: intercept unknown, invalid, or computed fields
+    // Auto-drop schema recovery: intercept unknown, invalid, computed, or missing select options
     const isRecoverableSchemaError =
       res.status === 422 &&
       (errorBody.includes('UNKNOWN_FIELD_NAME') ||
        errorBody.includes('cannot accept provided value') ||
-       errorBody.includes('because the field is computed'));
+       errorBody.includes('because the field is computed') ||
+       errorBody.includes('INVALID_MULTIPLE_CHOICE_OPTIONS'));
 
     if (isRecoverableSchemaError) {
       const fieldMatch =
         errorBody.match(/Unknown field name: "([^"]+)"/) ||
-        errorBody.match(/Field "([^"]+)" cannot accept/);
+        errorBody.match(/Field "([^"]+)" cannot accept/) ||
+        errorBody.match(/select option ""([^"]+)""/);
 
       if (fieldMatch && fieldMatch[1]) {
         const offendingField = fieldMatch[1];
@@ -304,6 +306,22 @@ function getExtensionFromMime(mimeType) {
   return map[mimeType?.toLowerCase()] || 'bin';
 }
 
+function getSupabaseHeaders(mimeType) {
+  const cleanKey = (SUPABASE_SERVICE_ROLE_KEY || '').trim().replace(/^["']|["']$/g, '');
+
+  const headers = {
+    'apikey': cleanKey,
+    'Authorization': `Bearer ${cleanKey}`,
+    'x-upsert': 'true'
+  };
+
+  if (mimeType) {
+    headers['Content-Type'] = mimeType;
+  }
+
+  return { headers, cleanKey };
+}
+
 async function uploadToSupabase(mediaBuffer, mimeType) {
   const now = new Date();
   const year = now.getUTCFullYear();
@@ -314,15 +332,13 @@ async function uploadToSupabase(mediaBuffer, mimeType) {
   const anonymousKey = crypto.randomUUID();
   const storagePath = `${year}/${month}/${anonymousKey}.${ext}`;
 
-  const uploadEndpoint = `${SUPABASE_URL}/storage/v1/object/inbound-media/${storagePath}`;
+  const cleanUrl = (SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const uploadEndpoint = `${cleanUrl}/storage/v1/object/inbound-media/${storagePath}`;
+  const { headers, cleanKey } = getSupabaseHeaders(mimeType);
 
   const uploadRes = await fetch(uploadEndpoint, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      'Content-Type': mimeType,
-      'x-upsert': 'true'
-    },
+    headers,
     body: mediaBuffer
   });
 
@@ -332,11 +348,12 @@ async function uploadToSupabase(mediaBuffer, mimeType) {
   }
 
   // 7-day signed playback URL (604,800 seconds)
-  const signEndpoint = `${SUPABASE_URL}/storage/v1/object/sign/inbound-media/${storagePath}`;
+  const signEndpoint = `${cleanUrl}/storage/v1/object/sign/inbound-media/${storagePath}`;
   const signRes = await fetch(signEndpoint, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      'apikey': cleanKey,
+      'Authorization': `Bearer ${cleanKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ expiresIn: 604800 })
@@ -345,7 +362,7 @@ async function uploadToSupabase(mediaBuffer, mimeType) {
   let signedUrl = '';
   if (signRes.ok) {
     const signData = await signRes.json();
-    signedUrl = `${SUPABASE_URL}/storage/v1${signData.signedURL}`;
+    signedUrl = `${cleanUrl}/storage/v1${signData.signedURL}`;
   }
 
   console.log(`[Storage] uploaded ${storagePath} (${mediaBuffer.length} bytes)`);
