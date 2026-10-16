@@ -500,11 +500,13 @@ async function evaluateSubmissionWithGemini(workerInfo, siteInfo, captionText, m
   }
 }
 
-// Format structured WhatsApp status reply
-function formatReply(worker, siteInfo, aiResult) {
+// Format structured WhatsApp status reply with signed playback link
+function formatReply(worker, siteInfo, aiResult, mediaUrl) {
   const siteName = siteInfo ? siteInfo.siteName : 'Unlinked Location';
   const gates = aiResult.mentioned_gates.length > 0 ? aiResult.mentioned_gates.join(', ') : 'None explicitly detected';
-  return `🤖 *Titan OS | ${aiResult.workflow_mode} Update*\n\n📍 *Site:* ${siteName}\n👷 *Worker:* ${worker.fullName}\n⚡ *Status:* ${aiResult.overall_status}\n🎯 *Gates:* ${gates}\n\n📝 *Summary:*\n${aiResult.worker_summary}`;
+  const mediaLink = mediaUrl ? `\n\n🔗 *Media Link:* ${mediaUrl}` : '';
+
+  return `🤖 *Titan OS | ${aiResult.workflow_mode} Update*\n\n📍 *Site:* ${siteName}\n👷 *Worker:* ${worker.fullName}\n⚡ *Status:* ${aiResult.overall_status}\n🎯 *Gates:* ${gates}\n\n📝 *Summary:*\n${aiResult.worker_summary}${mediaLink}`;
 }// ---------- 9. Core Inbound Message Pipeline ----------
 async function processIncomingMessage(message, value) {
   const msgId = message.id;
@@ -589,10 +591,10 @@ async function processIncomingMessage(message, value) {
 
   const inboundRecordId = await airtableWrite('post', 'Inbound Messages 2', inboundFields);
 
-  // J. Airtable: Reports 2 Write (Mentioned Gates joined as comma-separated string)
+  // J. Airtable: Reports 2 Write (Mentioned Gates joined as string)
   let replyText = '';
   if (!aiResult.fallback) {
-    replyText = formatReply(worker, siteInfo, aiResult);
+    replyText = formatReply(worker, siteInfo, aiResult, mediaUrl);
   }
 
   const gatesString = Array.isArray(aiResult.mentioned_gates)
