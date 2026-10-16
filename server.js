@@ -111,23 +111,25 @@ async function airtableWrite(tableName, records, isUpdate = false) {
 
     const errorBody = await res.text();
 
-    // Auto-drop schema recovery: intercept unknown, invalid, computed, or missing select options
+    // Auto-drop schema recovery: intercept unknown, computed, read-only or invalid fields
     const isRecoverableSchemaError =
       res.status === 422 &&
       (errorBody.includes('UNKNOWN_FIELD_NAME') ||
-       errorBody.includes('cannot accept provided value') ||
+       errorBody.includes('cannot accept') ||
        errorBody.includes('because the field is computed') ||
+       errorBody.includes('is computed') ||
        errorBody.includes('INVALID_MULTIPLE_CHOICE_OPTIONS'));
 
     if (isRecoverableSchemaError) {
       const fieldMatch =
         errorBody.match(/Unknown field name: "([^"]+)"/) ||
         errorBody.match(/Field "([^"]+)" cannot accept/) ||
+        errorBody.match(/Field "([^"]+)" is computed/) ||
         errorBody.match(/select option "([^"]+)"/);
 
       if (fieldMatch && fieldMatch[1]) {
         const offendingField = fieldMatch[1];
-        console.warn(`[Airtable] ${tableName}: dropping field "${offendingField}" (COMPUTED_OR_UNKNOWN); preserving record write.`);
+        console.warn(`[Airtable] ${tableName}: auto-dropping read-only/computed/unknown field "${offendingField}"; retrying write.`);
 
         for (const record of currentRecords) {
           if (record.fields && offendingField in record.fields) {
@@ -182,7 +184,7 @@ async function verifyWorkerBouncer(rawSenderPhone) {
   }
 }
 
-// --- 5. SITE RESOLUTION ENGINE (WITH CUMULATIVE MEMORY) ---
+// --- 5. SITE RESOLUTION ENGINE (WITH CUMULATIVE MEMORY & GATE TIMESTAMPS) ---
 
 async function resolveSiteByChatId(chatId) {
   if (!chatId) return null;
@@ -206,13 +208,29 @@ async function resolveSiteByChatId(chatId) {
       clearedGates = rawMilestones.split(',').map(s => s.trim()).filter(Boolean);
     }
 
+    // Parse milestone timestamps JSON for duration and lead-time analytics
+    let milestoneTimestamps = {};
+    const rawTimestamps = site.fields['Milestone Timestamps JSON'] || site.fields['Gate Timestamps JSON'];
+    if (typeof rawTimestamps === 'object' && rawTimestamps !== null) {
+      milestoneTimestamps = rawTimestamps;
+    } else if (typeof rawTimestamps === 'string' && rawTimestamps.trim()) {
+      try {
+        milestoneTimestamps = JSON.parse(rawTimestamps);
+      } catch {
+        milestoneTimestamps = {};
+      }
+    }
+
     return {
       siteRecordId: site.id,
       siteName: site.fields['Site Name'] || 'Unlinked Site',
       workflowMode: (site.fields['Workflow Mode'] || 'INSTALLATION').toUpperCase(),
       siteStatus: site.fields['Site Status'] || 'ACTIVE',
       siteLocation: site.fields['Site location'] || '',
-      clearedMilestones: clearedGates
+      clearedMilestones: clearedGates,
+      installStarted: site.fields['Install Started'] || null,
+      installCompleted: site.fields['Install Completed'] || null,
+      milestoneTimestamps
     };
   } catch (err) {
     console.error(`[Site Lookup Error] Could not query site for chat ${chatId}:`, err.message);
@@ -443,8 +461,6 @@ Instructions:
   "site_conditions": "Short ambient weather / court surface status",
   "servicing_completed": ["Serviced sand redistribution", "Net center strap adjusted"],
   "action_items": ["Glass: Minor silicone peeling at bottom of panel 3"],
-  "action_headline": "3 to 6 word maintenance status headline",
-  "action_summary": "1 sentence executive summary of maintenance findings",
   "verified_gates": ${JSON.stringify(previouslyCleared)},
   "worker_summary": "1-2 sentence concise operational summary of maintenance visit.",
   "confidence_score": 0.0 to 1.0
@@ -477,8 +493,6 @@ Instructions:
   "site_conditions": "Short ambient weather / court surface status",
   "servicing_completed": [],
   "action_items": [],
-  "action_headline": "Court Playable & Ready" or "Court Unsafe / Blocked",
-  "action_summary": "1 sentence spot audit summary",
   "verified_gates": ${JSON.stringify(previouslyCleared)},
   "worker_summary": "1 sentence spot inspection summary.",
   "confidence_score": 0.0 to 1.0
@@ -529,8 +543,6 @@ Instructions:
   "site_conditions": "Short ambient weather / court surface status",
   "servicing_completed": [],
   "action_items": ["Category: Specific task or blocker requiring attention"],
-  "action_headline": "3 to 6 word punch-list status headline",
-  "action_summary": "1 sentence executive summary of outstanding issues or milestone completions",
   "verified_gates": ["List", "Of", "Detected", "Milestone", "Names"],
   "worker_summary": "1-2 sentence concise operational summary of physical work verified.",
   "confidence_score": 0.0 to 1.0
@@ -599,8 +611,6 @@ Instructions:
       site_conditions: 'Dry surface observed',
       servicing_completed: [],
       action_items: [],
-      action_headline: 'Site Submission Processed',
-      action_summary: 'Media verified. Operational log updated.',
       verified_gates: previouslyCleared,
       worker_summary: 'Media verified. Operational log recorded.',
       confidence_score: 0.8
@@ -610,15 +620,20 @@ Instructions:
 
 // --- 10. DYNAMIC MULTI-MODE STATUS CARD FORMATTER ---
 
-function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, siteConditions, actionItems, servicingCompleted, verifiedGates, workerSummary }) {
+function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, siteConditions, actionItems, servicingCompleted, verifiedGates, workerSummary, installDuration, isHandover }) {
   const mode = (workflowMode || 'INSTALLATION').toUpperCase();
   const isActionRequired = overallStatus === 'ACTION_REQUIRED' || overallStatus === 'FLAGGED';
   const statusEmoji = isActionRequired ? '⚠️' : '✅';
   const statusLabel = overallStatus || 'CLEARED';
 
   let title = 'Installation Update';
-  if (mode === 'MAINTENANCE') title = 'Maintenance Visit';
-  if (mode === 'SPOT_VISIT') title = 'Spot Audit';
+  if (isHandover) {
+    title = '100% Complete — Handover';
+  } else if (mode === 'MAINTENANCE') {
+    title = 'Maintenance Visit';
+  } else if (mode === 'SPOT_VISIT') {
+    title = 'Spot Audit';
+  }
 
   const sections = [
     `🤖 *Titan OS | ${title}*`,
@@ -627,6 +642,10 @@ function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallSt
     `👷 *Worker:* ${workerName || 'Bob'}`,
     `⚡ *Status:* ${statusEmoji} ${statusLabel}`
   ];
+
+  if (installDuration) {
+    sections.push(`⏱️ *Elapsed Install Time:* ${installDuration}`);
+  }
 
   if (siteConditions) {
     sections.push(`🌤️ *Conditions:* ${siteConditions}`);
@@ -651,8 +670,13 @@ function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallSt
 
   if (mode === 'INSTALLATION' && verifiedGates && verifiedGates.length > 0) {
     sections.push('');
-    sections.push(`✅ *Verified Milestones (${verifiedGates.length}):*`);
+    sections.push(`✅ *Verified Milestones (${verifiedGates.length}/12):*`);
     sections.push(verifiedGates.join(', '));
+  }
+
+  if (isHandover) {
+    sections.push('');
+    sections.push('🎉 *Court fully commissioned! Automatically transitioned to Maintenance Mode.*');
   }
 
   if (workerSummary) {
@@ -723,6 +747,19 @@ app.get('/webhook', (req, res) => {
 
   return res.status(403).send('Verification failed');
 });
+
+// Duration Helper
+function formatDuration(startMs, endMs = Date.now()) {
+  const diffMs = Math.max(0, endMs - startMs);
+  const totalMinutes = Math.floor(diffMs / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
 
 // --- 13. MASTER INBOUND ORCHESTRATOR ---
 
@@ -889,21 +926,22 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       return;
     }
 
-    // Step G: Milestone, Transient Cleanliness & Handover Logic
+    // Step G: Milestone, Transient Cleanliness, Timestamp & Handover Logic
     const currentMode = (siteInfo?.workflowMode || aiResult.workflow_mode || 'INSTALLATION').toUpperCase();
     const previouslyCleared = siteInfo?.clearedMilestones || [];
+    let milestoneTimestamps = { ...(siteInfo?.milestoneTimestamps || {}) };
 
     let uniqueVerifiedGates = previouslyCleared;
     let filteredActionItems = aiResult.action_items || [];
     let computedStatus = aiResult.overall_status;
     let autoHandoverToMaintenance = false;
+    let installDurationText = null;
 
     if (currentMode === 'INSTALLATION') {
       const newlyDetected = aiResult.verified_gates || [];
       const mergedSet = new Set([...previouslyCleared, ...newlyDetected]);
 
       // Transient Cleanliness Demotion Check:
-      // If any action item flags construction debris, packaging wrap, tools, or trash, demote Gate 12
       const hasCleanlinessDebris = filteredActionItems.some(item => {
         const lower = item.toLowerCase();
         return lower.includes('cleanliness') || lower.includes('debris') || lower.includes('tools') || lower.includes('trash');
@@ -911,9 +949,18 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
 
       if (hasCleanlinessDebris) {
         mergedSet.delete('Site Cleanliness & Final Walkthrough');
+        delete milestoneTimestamps['Site Cleanliness & Final Walkthrough'];
       }
 
       uniqueVerifiedGates = Array.from(mergedSet);
+
+      // Record first-verified timestamp for every newly cleared milestone
+      const nowIso = new Date().toISOString();
+      uniqueVerifiedGates.forEach(gate => {
+        if (!milestoneTimestamps[gate]) {
+          milestoneTimestamps[gate] = nowIso;
+        }
+      });
 
       // Filter out punch list items for gates that are verified (preserving active cleanliness blockers)
       filteredActionItems = filteredActionItems.filter(item => {
@@ -926,10 +973,19 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
         );
       });
 
+      // Calculate elapsed install duration if installation has begun
+      const startTimeIso = siteInfo?.installStarted || (uniqueVerifiedGates.length > 0 ? milestoneTimestamps[uniqueVerifiedGates[0]] || nowIso : null);
+      if (startTimeIso) {
+        installDurationText = formatDuration(new Date(startTimeIso).getTime());
+      }
+
       // Handover Check: All 12 gates verified with zero punch list items
       if (uniqueVerifiedGates.length === 12 && filteredActionItems.length === 0) {
         computedStatus = 'CLEARED';
         autoHandoverToMaintenance = true;
+        if (startTimeIso) {
+          installDurationText = formatDuration(new Date(startTimeIso).getTime(), Date.now());
+        }
       } else if (filteredActionItems.length === 0 && computedStatus === 'ACTION_REQUIRED') {
         computedStatus = 'CLEARED';
       }
@@ -944,7 +1000,9 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       actionItems: filteredActionItems,
       servicingCompleted: aiResult.servicing_completed,
       verifiedGates: uniqueVerifiedGates,
-      workerSummary: aiResult.worker_summary
+      workerSummary: aiResult.worker_summary,
+      installDuration: installDurationText,
+      isHandover: autoHandoverToMaintenance
     });
 
     const allGates = [
@@ -975,7 +1033,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       .then(async (inboundRes) => {
         const inboundRecordId = inboundRes?.records?.[0]?.id || null;
 
-        // Persist to Reports 2 with link to Inbound Message
+        // Persist to Reports 2 (Excludes read-only computed Headline/Summary fields to prevent 422 errors)
         const reportPayload = [{
           fields: {
             'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
@@ -985,13 +1043,15 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
             'Worker Summary': aiResult.worker_summary,
             'Site Conditions': aiResult.site_conditions || '',
             'Action Items': filteredActionItems.length > 0 ? filteredActionItems.map(i => `• ${i}`).join('\n') : '',
-            'Headline (Action Items)': aiResult.action_headline || '',
-            'Summary (Action Items)': aiResult.action_summary || '',
             'Status Observed': computedStatus,
             'Action Intent': aiResult.action_intent,
             'Mentioned Gates': allGates.length > 0 ? allGates.join(', ') : '',
             'WhatsApp Reply Text': replyCard,
-            'Clean JSON': JSON.stringify(aiResult)
+            'Clean JSON': JSON.stringify({
+              ...aiResult,
+              milestone_timestamps: milestoneTimestamps,
+              elapsed_install_time: installDurationText || 'N/A'
+            })
           }
         }];
 
@@ -1001,19 +1061,25 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
         console.error('[Airtable Inbound/Report Write Error]', err.message);
       });
 
-    // 3. Persist State to Parent Sites Record
+    // 3. Persist State to Parent Sites Record (Milestones, Gate Timestamps, and Auto-Handover)
     let sitesPromise = Promise.resolve();
     if (siteInfo?.siteRecordId) {
       const siteUpdateFields = {
         'Last Intent': aiResult.action_intent || (currentMode === 'MAINTENANCE' ? 'MAINTENANCE_UPDATE' : 'INSTALL_UPDATE'),
         'Last Note': aiResult.worker_summary || 'Field submission verified.',
-        'Cleared Milestones': uniqueVerifiedGates
+        'Cleared Milestones': uniqueVerifiedGates,
+        'Milestone Timestamps JSON': JSON.stringify(milestoneTimestamps)
       };
+
+      if (!siteInfo.installStarted && uniqueVerifiedGates.length > 0) {
+        siteUpdateFields['Install Started'] = new Date().toISOString();
+      }
 
       if (autoHandoverToMaintenance) {
         siteUpdateFields['Workflow Mode'] = 'MAINTENANCE';
         siteUpdateFields['Site Status'] = 'ACTIVE';
-        siteUpdateFields['Last Note'] = '100% Installation complete. Handed over to operational maintenance.';
+        siteUpdateFields['Install Completed'] = new Date().toISOString();
+        siteUpdateFields['Last Note'] = `100% Installation complete. Total install time: ${installDurationText || 'Complete'}. Handed over to operational maintenance.`;
         console.log(`[Handover] ${siteInfo.siteName} reached 12/12 gates. Switched Workflow Mode to MAINTENANCE.`);
       }
 
