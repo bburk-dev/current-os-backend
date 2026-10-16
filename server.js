@@ -426,7 +426,7 @@ function normalizeAi(raw, siteInfo, hasVisual) {
     ? raw.workflow_mode
     : (siteInfo ? siteInfo.workflowMode : 'INSTALLATION');
   
-  // Zero-Airtable-Change: Maps BLOCKED to NEEDS_ATTENTION to protect unmodified Airtable schema
+  // Safe single-select mapping for legacy schema
   const isBlocked = raw.overall_status === 'BLOCKED';
   const resolvedStatus = raw.overall_status === 'CLEARED' ? 'CLEARED' : 'NEEDS_ATTENTION';
   const baseSummary = String(raw.worker_summary || '').slice(0, 1500);
@@ -500,13 +500,19 @@ async function evaluateSubmissionWithGemini(workerInfo, siteInfo, captionText, m
   }
 }
 
-// Clean WhatsApp status reply (no raw URL clutter or token truncations)
+// Clean WhatsApp status reply (no bearer link in chat)
 function formatReply(worker, siteInfo, aiResult) {
   const siteName = siteInfo ? siteInfo.siteName : 'Unlinked Location';
   const gates = aiResult.mentioned_gates.length > 0 ? aiResult.mentioned_gates.join(', ') : 'None explicitly detected';
 
   return `🤖 *Titan OS | ${aiResult.workflow_mode} Update*\n\n📍 *Site:* ${siteName}\n👷 *Worker:* ${worker.fullName}\n⚡ *Status:* ${aiResult.overall_status}\n🎯 *Gates:* ${gates}\n\n📝 *Summary:*\n${aiResult.worker_summary}`;
-}// ---------- 9. Core Inbound Message Pipeline ----------
+}// ---------- 9. Serialized Execution Queue ----------
+let chain = Promise.resolve();
+const enqueue = (fn) => {
+  chain = chain.then(fn).catch((e) => console.error('[Pipeline] error:', e));
+};
+
+// ---------- 10. Core Inbound Message Pipeline ----------
 async function processIncomingMessage(message, value) {
   const msgId = message.id;
   const senderPhone = message.from;
@@ -565,6 +571,12 @@ async function processIncomingMessage(message, value) {
     console.error(`[Media] download error for ${mediaType}:`, err.message);
   }
 
+  // Filter out reactions, stickers, or empty messages (Fix 1)
+  if (!mediaData && !captionText.trim()) {
+    console.log(`[Skip] nothing to evaluate (type ${mediaType})`);
+    return;
+  }
+
   // G. Storage: Upload to Supabase and generate signed 7-day URL
   let mediaPath = null;
   let mediaUrl = null;
@@ -578,7 +590,7 @@ async function processIncomingMessage(message, value) {
   // H. AI Evaluation with Gemini
   const aiResult = await evaluateSubmissionWithGemini(worker, siteInfo, captionText, mediaData);
 
-  // I. Airtable: Inbound Messages 2 Write (Media URL preserves the full signed 7-day link)
+  // I. Airtable: Inbound Messages 2 Write (Preserves permanent Media Path - Fix 3)
   const inboundFields = {
     'Message ID': msgId,
     'Worker Phone Raw': senderPhone,
@@ -588,9 +600,13 @@ async function processIncomingMessage(message, value) {
     'Raw Payload JSON': JSON.stringify(message)
   };
 
+  if (mediaPath) {
+    inboundFields['Media Path'] = mediaPath;
+  }
+
   const inboundRecordId = await airtableWrite('post', 'Inbound Messages 2', inboundFields);
 
-  // J. Airtable: Reports 2 Write (Clean stringified gates and structured JSON)
+  // J. Airtable: Reports 2 Write
   let replyText = '';
   if (!aiResult.fallback) {
     replyText = formatReply(worker, siteInfo, aiResult);
@@ -621,31 +637,20 @@ async function processIncomingMessage(message, value) {
   }
 }
 
-// ---------- 10. Webhook Receiver Endpoint ----------
-app.post('/webhook', verifyWhatsAppSignature, async (req, res) => {
-  // Respond immediately with 200 to satisfy Meta and prevent retry storms
+// ---------- 11. Webhook Receiver Endpoint (Fix 2: Nested Loops & Enqueue) ----------
+app.post('/webhook', verifyWhatsAppSignature, (req, res) => {
   res.status(200).send('EVENT_RECEIVED');
 
-  const entry = req.body?.entry?.[0];
-  const changes = entry?.changes?.[0];
-  const value = changes?.value;
-  const messages = value?.messages;
-
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return;
-  }
-
-  // Sequentially process each incoming message in background
-  for (const message of messages) {
-    try {
-      await processIncomingMessage(message, value);
-    } catch (err) {
-      console.error('[Pipeline] unexpected message processing error:', err);
+  for (const entry of req.body?.entry || []) {
+    for (const change of entry.changes || []) {
+      for (const message of change.value?.messages || []) {
+        enqueue(() => processIncomingMessage(message, change.value));
+      }
     }
   }
 });
 
-// ---------- 11. Server Initialization ----------
+// ---------- 12. Server Initialization ----------
 app.listen(PORT, async () => {
   console.log(`[Titan V4.3] listening on port ${PORT}`);
   console.log(`[Config] model=${GEMINI_MODEL} max_media=${MAX_MEDIA_BYTES} inline_limit=${INLINE_LIMIT_BYTES}`);
