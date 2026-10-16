@@ -123,7 +123,7 @@ async function airtableWrite(tableName, records, isUpdate = false) {
       const fieldMatch =
         errorBody.match(/Unknown field name: "([^"]+)"/) ||
         errorBody.match(/Field "([^"]+)" cannot accept/) ||
-        errorBody.match(/select option ""([^"]+)""/);
+        errorBody.match(/select option "([^"]+)"/);
 
       if (fieldMatch && fieldMatch[1]) {
         const offendingField = fieldMatch[1];
@@ -804,7 +804,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       ...filteredActionItems
     ];
 
-    // Step G: Persist to Reports 2 (Source Batch ID excluded because Airtable computes it)
+    // Step G: Persist to Reports 2 (Includes Action Items plain text & Site Conditions)
     try {
       const reportPayload = [{
         fields: {
@@ -814,6 +814,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
           'Overall Status': computedStatus,
           'Worker Summary': aiResult.worker_summary,
           'Site Conditions': aiResult.site_conditions || '',
+          'Action Items': filteredActionItems.length > 0 ? filteredActionItems.map(i => `• ${i}`).join('\n') : '',
           'Status Observed': computedStatus,
           'Action Intent': aiResult.action_intent,
           'Mentioned Gates': allGates.length > 0 ? allGates.join(', ') : '',
