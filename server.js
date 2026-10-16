@@ -577,10 +577,9 @@ async function processIncomingMessage(message, value) {
   // H. AI Evaluation with Gemini
   const aiResult = await evaluateSubmissionWithGemini(worker, siteInfo, captionText, mediaData);
 
-  // I. Airtable: Inbound Messages 2 Write (Zero-Airtable-Change: writes signed link to Media URL)
+  // I. Airtable: Inbound Messages 2 Write (Sender Phone removed, Media URL carries signed link)
   const inboundFields = {
     'Message ID': msgId,
-    'Sender Phone': senderPhone,
     'Worker Phone Raw': senderPhone,
     'Message Type': mediaType,
     'Caption Text': captionText || '',
@@ -590,11 +589,15 @@ async function processIncomingMessage(message, value) {
 
   const inboundRecordId = await airtableWrite('post', 'Inbound Messages 2', inboundFields);
 
-  // J. Airtable: Reports 2 Write (Zero-Airtable-Change: retains existing single-select options)
+  // J. Airtable: Reports 2 Write (Mentioned Gates joined as comma-separated string)
   let replyText = '';
   if (!aiResult.fallback) {
     replyText = formatReply(worker, siteInfo, aiResult);
   }
+
+  const gatesString = Array.isArray(aiResult.mentioned_gates)
+    ? aiResult.mentioned_gates.join(', ')
+    : String(aiResult.mentioned_gates || '');
 
   const reportFields = {
     'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
@@ -604,7 +607,7 @@ async function processIncomingMessage(message, value) {
     'Worker Summary': aiResult.worker_summary,
     'Status Observed': aiResult.status_observed,
     'Action Intent': aiResult.action_intent,
-    'Mentioned Gates': aiResult.mentioned_gates,
+    'Mentioned Gates': gatesString,
     'WhatsApp Reply Text': replyText,
     'Clean JSON': JSON.stringify(aiResult, null, 2)
   };
