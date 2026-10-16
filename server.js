@@ -48,7 +48,7 @@ for (const cfg of REQUIRED_CONFIGS) {
 // --- 2. SEQUENTIAL FIFO TASK QUEUE ---
 let taskQueue = Promise.resolve();
 
-export function enqueue(task) {
+function enqueue(task) {
   taskQueue = taskQueue
     .then(async () => {
       try {
@@ -66,7 +66,7 @@ export function enqueue(task) {
 // --- 3. RESILIENT AIRTABLE REST CLIENT ---
 const AIRTABLE_BASE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
 
-export async function airtableQuery(tableName, filterByFormula = '', maxRecords = 10) {
+async function airtableQuery(tableName, filterByFormula = '', maxRecords = 10) {
   let url = `${AIRTABLE_BASE_URL}/${encodeURIComponent(tableName)}?maxRecords=${maxRecords}`;
   if (filterByFormula) {
     url += `&filterByFormula=${encodeURIComponent(filterByFormula)}`;
@@ -89,7 +89,7 @@ export async function airtableQuery(tableName, filterByFormula = '', maxRecords 
   return data.records || [];
 }
 
-export async function airtableWrite(tableName, records, isUpdate = false) {
+async function airtableWrite(tableName, records, isUpdate = false) {
   const method = isUpdate ? 'PATCH' : 'POST';
   const url = `${AIRTABLE_BASE_URL}/${encodeURIComponent(tableName)}`;
 
@@ -127,21 +127,32 @@ export async function airtableWrite(tableName, records, isUpdate = false) {
         const offendingField = fieldMatch[1];
         console.warn(`[Airtable] ${tableName}: dropping field "${offendingField}" (COMPUTED_OR_UNKNOWN); preserving record write.`);
 
-        for (/**
+        for (const record of currentRecords) {
+          if (record.fields && offendingField in record.fields) {
+            delete record.fields[offendingField];
+          }
+        }
+        continue;
+      }
+    }
+
+    throw new Error(`Airtable Write Failed [${tableName}]: ${res.status} - ${errorBody}`);
+  }
+}/**
  * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
  * Chunk 2 of 5: Worker Bouncer, Site Resolution & WhatsApp Dispatch
  */
 
 // --- 4. PHONE NUMBER NORMALIZATION & WORKER BOUNCER ---
 
-export function normalizePhone(rawPhone) {
+function normalizePhone(rawPhone) {
   if (!rawPhone) return '';
   const cleaned = String(rawPhone).replace(/[^\d+]/g, '');
   if (cleaned.startsWith('+')) return cleaned;
   return `+${cleaned}`;
 }
 
-export async function verifyWorkerBouncer(rawSenderPhone) {
+async function verifyWorkerBouncer(rawSenderPhone) {
   const normalizedPhone = normalizePhone(rawSenderPhone);
   const plainDigits = normalizedPhone.replace(/^\+/, '');
   const maskedPhone = `***${plainDigits.slice(-4)}`;
@@ -171,7 +182,7 @@ export async function verifyWorkerBouncer(rawSenderPhone) {
 
 // --- 5. SITE RESOLUTION ENGINE ---
 
-export async function resolveSiteByChatId(chatId) {
+async function resolveSiteByChatId(chatId) {
   if (!chatId) return null;
 
   try {
@@ -198,7 +209,7 @@ export async function resolveSiteByChatId(chatId) {
 
 // --- 6. OUTBOUND WHATSAPP DISPATCH (META GRAPH API) ---
 
-export async function sendWhatsAppMessage(to, bodyText) {
+async function sendWhatsAppMessage(to, bodyText) {
   if (!PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
     throw new Error('Cannot dispatch WhatsApp message: Missing PHONE_NUMBER_ID or WHATSAPP_TOKEN');
   }
@@ -238,7 +249,7 @@ export async function sendWhatsAppMessage(to, bodyText) {
 
 // --- 7. META MEDIA RETRIEVAL ENGINE ---
 
-export async function getWhatsAppMediaUrl(mediaId) {
+async function getWhatsAppMediaUrl(mediaId) {
   const url = `https://graph.facebook.com/v21.0/${mediaId}`;
   const res = await fetch(url, {
     method: 'GET',
@@ -260,7 +271,7 @@ export async function getWhatsAppMediaUrl(mediaId) {
   };
 }
 
-export async function downloadMediaBuffer(downloadUrl) {
+async function downloadMediaBuffer(downloadUrl) {
   const res = await fetch(downloadUrl, {
     method: 'GET',
     headers: {
@@ -293,7 +304,7 @@ function getExtensionFromMime(mimeType) {
   return map[mimeType?.toLowerCase()] || 'bin';
 }
 
-export async function uploadToSupabase(mediaBuffer, mimeType) {
+async function uploadToSupabase(mediaBuffer, mimeType) {
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
@@ -365,7 +376,7 @@ const PADEL_MILESTONES = [
   'Site Cleanliness & Final Walkthrough'
 ];
 
-export async function evaluateFieldSubmission({ mediaBuffer, mimeType, captionText, siteContext, workerContext }) {
+async function evaluateFieldSubmission({ mediaBuffer, mimeType, captionText, siteContext, workerContext }) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   const promptSystem = `
@@ -451,7 +462,7 @@ Instructions:
 
 // --- 10. STRUCTURED CARD FORMATTER ---
 
-export function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, mentionedGates, workerSummary }) {
+function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, mentionedGates, workerSummary }) {
   const gatesLine = mentionedGates && mentionedGates.length > 0 
     ? mentionedGates.join(', ') 
     : 'None explicitly detected';
