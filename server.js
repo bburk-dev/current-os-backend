@@ -391,7 +391,7 @@ app.post('/webhook', verifyWhatsAppSignature, async (req, res) => {
     // Step E: Gemini Multimodal Evaluation
     const aiOutput = await evaluateSubmissionWithGemini(workerInfo, siteInfo, captionText, mediaData);
 
-    // Step F: Persist Record to "Inbound Messages 2" (Mapped directly to 'Worker Phone Raw')
+    // Step F: Persist Record to "Inbound Messages 2" (Using 'Worker Phone Raw' and 'Media URL')
     const inboundFields = {
       'Message ID': message.id,
       'Worker Phone Raw': whatsappChatId,
@@ -400,8 +400,8 @@ app.post('/webhook', verifyWhatsAppSignature, async (req, res) => {
       'Raw Payload JSON': JSON.stringify(req.body)
     };
 
-    if (mediaData?.storagePath) {
-      inboundFields['Media Path'] = mediaData.storagePath;
+    if (mediaData?.publicUrl) {
+      inboundFields['Media URL'] = mediaData.publicUrl;
     }
 
     const inboundRecordResponse = await axios.post(
