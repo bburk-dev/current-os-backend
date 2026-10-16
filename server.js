@@ -10,7 +10,6 @@ import crypto from 'crypto';
 const PORT = process.env.PORT || 3000;
 const META_APP_SECRET = process.env.META_APP_SECRET;
 
-// Support common naming variations for Meta credentials across deployment environments
 const WHATSAPP_TOKEN =
   process.env.WHATSAPP_TOKEN ||
   process.env.META_ACCESS_TOKEN ||
@@ -112,28 +111,23 @@ export async function airtableWrite(tableName, records, isUpdate = false) {
 
     const errorBody = await res.text();
 
-    // Auto-drop schema recovery for schema drift
-    if (res.status === 422 && (errorBody.includes('UNKNOWN_FIELD_NAME') || errorBody.includes('cannot accept provided value'))) {
+    // Auto-drop schema recovery: intercept unknown, invalid, or computed fields
+    const isRecoverableSchemaError =
+      res.status === 422 &&
+      (errorBody.includes('UNKNOWN_FIELD_NAME') ||
+       errorBody.includes('cannot accept provided value') ||
+       errorBody.includes('because the field is computed'));
+
+    if (isRecoverableSchemaError) {
       const fieldMatch =
         errorBody.match(/Unknown field name: "([^"]+)"/) ||
         errorBody.match(/Field "([^"]+)" cannot accept/);
 
       if (fieldMatch && fieldMatch[1]) {
         const offendingField = fieldMatch[1];
-        console.warn(`[Airtable] ${tableName}: dropping field "${offendingField}" (UNKNOWN_FIELD_NAME); preserving record write.`);
+        console.warn(`[Airtable] ${tableName}: dropping field "${offendingField}" (COMPUTED_OR_UNKNOWN); preserving record write.`);
 
-        for (const record of currentRecords) {
-          if (record.fields && offendingField in record.fields) {
-            delete record.fields[offendingField];
-          }
-        }
-        continue;
-      }
-    }
-
-    throw new Error(`Airtable Write Failed [${tableName}]: ${res.status} - ${errorBody}`);
-  }
-}/**
+        for (/**
  * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
  * Chunk 2 of 5: Worker Bouncer, Site Resolution & WhatsApp Dispatch
  */
@@ -305,7 +299,7 @@ export async function uploadToSupabase(mediaBuffer, mimeType) {
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
   const ext = getExtensionFromMime(mimeType);
 
-  // UUID object key to anonymize storage paths
+  // UUID object key eliminates phone number exposure
   const anonymousKey = crypto.randomUUID();
   const storagePath = `${year}/${month}/${anonymousKey}.${ext}`;
 
@@ -392,8 +386,9 @@ ${PADEL_MILESTONES.map((m, idx) => `${idx + 1}.${m}`).join('\n')}
 
 Instructions:
 1. Examine media and caption text. Determine observable milestone progress, repair actions, or inspection notes.
-2. Even if worker provides NO narration, perform pure visual verification on physical structures (posts, mesh, glass, turf, sand, net).
-3. Return output STRICTLY as valid JSON matching this schema:
+2. If the message is purely conversational or social (e.g. food, drinks, general chatter without site work updates), classify action_intent as "CHATTER" and overall_status as "NEEDS_REVIEW".
+3. If visual media is provided without caption, perform visual verification on physical structures (posts, mesh, glass, turf, sand, net).
+4. Return output STRICTLY as valid JSON matching this schema:
 {
   "workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT",
   "overall_status": "CLEARED" | "FLAGGED" | "NEEDS_REVIEW" | "ACTION_REQUIRED",
@@ -472,7 +467,7 @@ export function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, ov
 ${workerSummary}`.trim();
 }/**
  * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
- * Chunk 5 of 5: Webhook HMAC, Slash Command Engine, & Orchestration
+ * Chunk 5 of 5: Webhook HMAC, Slash Command Engine, Chatter Filter & Orchestration
  */
 
 const app = express();
@@ -536,7 +531,7 @@ app.get('/webhook', (req, res) => {
 // --- 13. MASTER INBOUND ORCHESTRATOR ---
 
 app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
-  // Acknowledge receipt to Meta immediately within 2000ms
+  // Fast ACK to Meta within 2000ms
   res.status(200).send('EVENT_RECEIVED');
 
   enqueue(async () => {
@@ -560,7 +555,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       console.log(`[Message] group_id absent (fallback to ***${senderPhone.slice(-4)})`);
     }
 
-    // Step A: Bouncer Check
+    // Step A: Worker Identity Gate
     const worker = await verifyWorkerBouncer(senderPhone);
     if (!worker) return;
 
@@ -593,7 +588,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
 
       const targetSite = matchingSites[0];
 
-      // Update Sites record with WhatsApp chat ID and direct status notes
+      // Update Sites record with chat binding and notes
       await airtableWrite('Sites', [{
         id: targetSite.id,
         fields: {
@@ -632,7 +627,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       }
     }
 
-    // Step E: Persist to Inbound Messages 2
+    // Step E: Persist to Inbound Messages 2 (Audit log preserved)
     let inboundRecordId = null;
     try {
       const inboundPayload = [{
@@ -653,9 +648,9 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       console.error('[Airtable Inbound Write Error]', err.message);
     }
 
-    // Drop text chatter if there is no media to inspect and no link command
+    // Pre-filter: Drop sub-5 character noise if no media attached
     if (!mediaBuffer && (!textBody || textBody.length < 5)) {
-      console.log('[Skip] Non-informational payload without media.');
+      console.log('[Skip] Short non-informational payload without media.');
       return;
     }
 
@@ -668,6 +663,18 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       workerContext: worker
     });
 
+    // --- CHATTER FILTER ---
+    // Suppress status card and report creation for social chatter
+    const actionIntent = (aiResult.action_intent || '').toUpperCase();
+    const isSocialChatter =
+      actionIntent === 'CHATTER' ||
+      (!mediaBuffer && (!aiResult.mentioned_gates || aiResult.mentioned_gates.length === 0) && aiResult.overall_status === 'NEEDS_REVIEW');
+
+    if (isSocialChatter) {
+      console.log(`[Chatter] Suppressed non-operational chatter from ${worker.fullName}: "${textBody}"`);
+      return;
+    }
+
     const replyCard = buildWhatsAppStatusCard({
       siteName: siteInfo?.siteName,
       workerName: worker.fullName,
@@ -677,14 +684,10 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       workerSummary: aiResult.worker_summary
     });
 
-    // Step G: Persist to Reports 2
-    const cleanDate = new Date().toISOString().slice(0, 10);
-    const primaryTitle = `${siteInfo?.siteName || 'Unlinked'} | ${aiResult.workflow_mode} | ${cleanDate}`;
-
+    // Step G: Persist to Reports 2 (Source Batch ID excluded because Airtable computes it)
     try {
       const reportPayload = [{
         fields: {
-          'Source Batch ID': primaryTitle,
           'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
           'Sites': siteInfo?.siteRecordId ? [siteInfo.siteRecordId] : [],
           'Workflow Mode': aiResult.workflow_mode,
@@ -703,7 +706,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       console.error('[Airtable Report Write Error]', err.message);
     }
 
-    // Step H: Update Parent Sites Record Directly (Last Intent & Last Note)
+    // Step H: Direct Write to Parent Sites Record ({Last Intent} & {Last Note})
     if (siteInfo?.siteRecordId) {
       try {
         await airtableWrite('Sites', [{
