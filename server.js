@@ -373,7 +373,7 @@ async function uploadToSupabase(mediaBuffer, mimeType) {
   };
 }/**
  * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
- * Chunk 4 of 5: Gemini Multimodal Verification & Card Assembly
+ * Chunk 4 of 5: Gemini Multimodal Verification & Exception-First Card Assembly
  */
 
 // --- 9. MULTIMODAL AI EVALUATION ENGINE ---
@@ -414,14 +414,19 @@ ${PADEL_MILESTONES.map((m, idx) => `${idx + 1}.${m}`).join('\n')}
 
 Instructions:
 1. Examine media and caption text. Determine observable milestone progress, repair actions, or inspection notes.
-2. If the message is purely conversational or social (e.g. food, drinks, general chatter without site work updates), classify action_intent as "CHATTER" and overall_status as "NEEDS_REVIEW".
-3. If visual media is provided without caption, perform visual verification on physical structures (posts, mesh, glass, turf, sand, net).
-4. Return output STRICTLY as valid JSON matching this schema:
+2. Ambient Site & Weather Observation: Note observable court ambient conditions (e.g., "Dry indoor court", "Clear sky, dry slab", "Damp concrete, light rain risk", "Outdoor windy conditions").
+3. Exception-First Auditing:
+   - Separate fully completed/verified gates into "verified_gates".
+   - Separate incomplete punch-list items, blocked tasks, missing bolts/anchors, or requested reviews into "action_items" (each with format: "Category / Component: specific issue").
+4. If the message is purely conversational or social (food, drinks, general chatter without site work updates), classify action_intent as "CHATTER" and overall_status as "NEEDS_REVIEW".
+5. Return output STRICTLY as valid JSON matching this schema:
 {
   "workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT",
   "overall_status": "CLEARED" | "FLAGGED" | "NEEDS_REVIEW" | "ACTION_REQUIRED",
   "action_intent": "INSTALL_UPDATE" | "MAINTENANCE_UPDATE" | "QUALITY_AUDIT" | "CHATTER",
-  "mentioned_gates": ["List", "Of", "Detected", "Milestone", "Names"],
+  "site_conditions": "Short ambient weather / court surface status (e.g., Dry surface, good lighting)",
+  "action_items": ["Category: Specific task or blocker requiring attention"],
+  "verified_gates": ["List", "Of", "Detected", "Milestone", "Names"],
   "worker_summary": "1-2 sentence concise operational summary of physical work verified.",
   "confidence_score": 0.0 to 1.0
 }
@@ -470,29 +475,54 @@ Instructions:
       workflow_mode: siteContext?.workflowMode || 'INSTALLATION',
       overall_status: 'CLEARED',
       action_intent: 'INSTALL_UPDATE',
-      mentioned_gates: [],
+      site_conditions: 'Dry surface observed',
+      action_items: [],
+      verified_gates: [],
       worker_summary: 'Media verified. Operational milestone logged.',
       confidence_score: 0.8
     };
   }
 }
 
-// --- 10. STRUCTURED CARD FORMATTER ---
+// --- 10. STRUCTURED EXCEPTION-FIRST CARD FORMATTER ---
 
-function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, mentionedGates, workerSummary }) {
-  const gatesLine = mentionedGates && mentionedGates.length > 0 
-    ? mentionedGates.join(', ') 
-    : 'None explicitly detected';
+function buildWhatsAppStatusCard({ siteName, workerName, workflowMode, overallStatus, siteConditions, actionItems, verifiedGates, workerSummary }) {
+  const isActionRequired = overallStatus === 'ACTION_REQUIRED' || overallStatus === 'FLAGGED';
+  const statusEmoji = isActionRequired ? '⚠️' : '✅';
+  const statusLabel = overallStatus || 'CLEARED';
 
-  return `🤖 *Titan OS | ${workflowMode} Update*
+  const sections = [
+    `🤖 *Titan OS | ${workflowMode || 'Installation'} Update*`,
+    '',
+    `📍 *Site:* ${siteName || 'Unlinked Location'}`,
+    `👷 *Worker:* ${workerName || 'Bob'}`,
+    `⚡ *Status:* ${statusEmoji} ${statusLabel}`
+  ];
 
-📍 *Site:* ${siteName || 'Unlinked Location'}
-👷 *Worker:* ${workerName || 'Bob'}
-⚡ *Status:* ${overallStatus || 'CLEARED'}
-🎯 *Gates:* ${gatesLine}
+  if (siteConditions) {
+    sections.push(`🌤️ *Conditions:* ${siteConditions}`);
+  }
 
-📝 *Summary:*
-${workerSummary}`.trim();
+  if (actionItems && actionItems.length > 0) {
+    sections.push('');
+    sections.push(`⚠️ *Needs Attention (${actionItems.length}):*`);
+    actionItems.forEach(item => {
+      sections.push(`• ${item}`);
+    });
+  }
+
+  if (verifiedGates && verifiedGates.length > 0) {
+    sections.push('');
+    sections.push(`✅ *Verified Milestones (${verifiedGates.length}):*`);
+    sections.push(verifiedGates.join(', '));
+  }
+
+  if (workerSummary) {
+    sections.push('');
+    sections.push(`📝 *Notes:*\n${workerSummary}`);
+  }
+
+  return sections.join('\n').trim();
 }/**
  * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
  * Chunk 5 of 5: Webhook HMAC, Slash Command Engine, Chatter Filter & Orchestration
@@ -694,9 +724,10 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
     // --- CHATTER FILTER ---
     // Suppress status card and report creation for social chatter
     const actionIntent = (aiResult.action_intent || '').toUpperCase();
+    const hasMilestones = (aiResult.verified_gates?.length > 0) || (aiResult.action_items?.length > 0);
     const isSocialChatter =
       actionIntent === 'CHATTER' ||
-      (!mediaBuffer && (!aiResult.mentioned_gates || aiResult.mentioned_gates.length === 0) && aiResult.overall_status === 'NEEDS_REVIEW');
+      (!mediaBuffer && !hasMilestones && aiResult.overall_status === 'NEEDS_REVIEW');
 
     if (isSocialChatter) {
       console.log(`[Chatter] Suppressed non-operational chatter from ${worker.fullName}: "${textBody}"`);
@@ -708,9 +739,17 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       workerName: worker.fullName,
       workflowMode: aiResult.workflow_mode,
       overallStatus: aiResult.overall_status,
-      mentionedGates: aiResult.mentioned_gates,
+      siteConditions: aiResult.site_conditions,
+      actionItems: aiResult.action_items,
+      verifiedGates: aiResult.verified_gates,
       workerSummary: aiResult.worker_summary
     });
+
+    // Combine verified gates and action items for historical Airtable tracking
+    const allGates = [
+      ...(aiResult.verified_gates || []),
+      ...(aiResult.action_items || [])
+    ];
 
     // Step G: Persist to Reports 2 (Source Batch ID excluded because Airtable computes it)
     try {
@@ -723,7 +762,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
           'Worker Summary': aiResult.worker_summary,
           'Status Observed': aiResult.overall_status,
           'Action Intent': aiResult.action_intent,
-          'Mentioned Gates': Array.isArray(aiResult.mentioned_gates) ? aiResult.mentioned_gates.join(', ') : '',
+          'Mentioned Gates': allGates.length > 0 ? allGates.join(', ') : '',
           'WhatsApp Reply Text': replyCard,
           'Clean JSON': JSON.stringify(aiResult)
         }
