@@ -123,7 +123,7 @@ async function airtableWrite(tableName, records, isUpdate = false) {
       const fieldMatch =
         errorBody.match(/Unknown field name: "([^"]+)"/) ||
         errorBody.match(/Field "([^"]+)" cannot accept/) ||
-        errorBody.match(/select option ""([^"]+)""/);
+        errorBody.match(/select option "([^"]+)"/);
 
       if (fieldMatch && fieldMatch[1]) {
         const offendingField = fieldMatch[1];
@@ -132,7 +132,15 @@ async function airtableWrite(tableName, records, isUpdate = false) {
         for (const record of currentRecords) {
           if (record.fields && offendingField in record.fields) {
             delete record.fields[offendingField];
-          }/**
+          }
+        }
+        continue;
+      }
+    }
+
+    throw new Error(`Airtable Write Failed [${tableName}]: ${res.status} - ${errorBody}`);
+  }
+}/**
  * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
  * Chunk 2 of 5: Worker Bouncer, Site Resolution & WhatsApp Dispatch
  */
@@ -189,7 +197,7 @@ async function resolveSiteByChatId(chatId) {
 
     const site = records[0];
 
-    // Parse cumulative milestones safely from Multi-Select or Text field
+    // Parse cumulative milestones safely from Multi-Select or string field
     let clearedGates = [];
     const rawMilestones = site.fields['Cleared Milestones'];
     if (Array.isArray(rawMilestones)) {
