@@ -132,15 +132,7 @@ async function airtableWrite(tableName, records, isUpdate = false) {
         for (const record of currentRecords) {
           if (record.fields && offendingField in record.fields) {
             delete record.fields[offendingField];
-          }
-        }
-        continue;
-      }
-    }
-
-    throw new Error(`Airtable Write Failed [${tableName}]: ${res.status} - ${errorBody}`);
-  }
-}/**
+          }/**
  * Titan OS V4.3 — Autonomous Industrial Webhook Gateway
  * Chunk 2 of 5: Worker Bouncer, Site Resolution & WhatsApp Dispatch
  */
@@ -182,7 +174,7 @@ async function verifyWorkerBouncer(rawSenderPhone) {
   }
 }
 
-// --- 5. SITE RESOLUTION ENGINE ---
+// --- 5. SITE RESOLUTION ENGINE (WITH CUMULATIVE MEMORY) ---
 
 async function resolveSiteByChatId(chatId) {
   if (!chatId) return null;
@@ -196,12 +188,23 @@ async function resolveSiteByChatId(chatId) {
     }
 
     const site = records[0];
+
+    // Parse cumulative milestones safely from Multi-Select or Text field
+    let clearedGates = [];
+    const rawMilestones = site.fields['Cleared Milestones'];
+    if (Array.isArray(rawMilestones)) {
+      clearedGates = rawMilestones;
+    } else if (typeof rawMilestones === 'string') {
+      clearedGates = rawMilestones.split(',').map(s => s.trim()).filter(Boolean);
+    }
+
     return {
       siteRecordId: site.id,
       siteName: site.fields['Site Name'] || 'Unlinked Site',
       workflowMode: site.fields['Workflow Mode'] || 'INSTALLATION',
       siteStatus: site.fields['Site Status'] || 'ACTIVE',
-      siteLocation: site.fields['Site location'] || ''
+      siteLocation: site.fields['Site location'] || '',
+      clearedMilestones: clearedGates
     };
   } catch (err) {
     console.error(`[Site Lookup Error] Could not query site for chat ${chatId}:`, err.message);
@@ -396,6 +399,8 @@ const PADEL_MILESTONES = [
 async function evaluateFieldSubmission({ mediaBuffer, mimeType, captionText, siteContext, workerContext }) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
+  const previouslyCleared = siteContext?.clearedMilestones || [];
+
   const promptSystem = `
 You are Titan OS, an autonomous industrial QA inspector for padel court construction and maintenance operations.
 Evaluate incoming multimodal site updates (photos, walkthrough videos, voice notes, captions).
@@ -412,12 +417,17 @@ Authorized Worker Context:
 Standard 12 Installation Milestone Gates:
 ${PADEL_MILESTONES.map((m, idx) => `${idx + 1}.${m}`).join('\n')}
 
+**CUMULATIVE MEMORY:**
+Previously Cleared Milestones for this site (DO NOT UN-VERIFY THESE):
+${previouslyCleared.length > 0 ? previouslyCleared.join(', ') : 'None yet.'}
+
 Instructions:
 1. Examine media and caption text. Determine observable milestone progress, repair actions, or inspection notes.
 2. Ambient Site & Weather Observation: Note observable court ambient conditions (e.g., "Dry indoor court", "Clear sky, dry slab", "Damp concrete, light rain risk", "Outdoor windy conditions").
 3. Exception-First Auditing:
-   - Separate fully completed/verified gates into "verified_gates".
-   - Separate incomplete punch-list items, blocked tasks, missing bolts/anchors, or requested reviews into "action_items" (each with format: "Category / Component: specific issue").
+   - Automatically carry forward all "Previously Cleared Milestones" into the "verified_gates" array.
+   - Add any NEWLY verified milestones from this submission into "verified_gates".
+   - Separate incomplete punch-list items, blocked tasks, missing bolts/anchors, or requested reviews into "action_items" (each with format: "Category / Component: specific issue"). Do NOT list issues for gates that are already fully complete.
 4. If the message is purely conversational or social (food, drinks, general chatter without site work updates), classify action_intent as "CHATTER" and overall_status as "NEEDS_REVIEW".
 5. Return output STRICTLY as valid JSON matching this schema:
 {
@@ -477,7 +487,7 @@ Instructions:
       action_intent: 'INSTALL_UPDATE',
       site_conditions: 'Dry surface observed',
       action_items: [],
-      verified_gates: [],
+      verified_gates: previouslyCleared,
       worker_summary: 'Media verified. Operational milestone logged.',
       confidence_score: 0.8
     };
@@ -751,6 +761,9 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       ...(aiResult.action_items || [])
     ];
 
+    // Deduplicate verified gates to save back to the Sites table
+    const uniqueVerifiedGates = Array.from(new Set(aiResult.verified_gates || []));
+
     // Step G: Persist to Reports 2 (Source Batch ID excluded because Airtable computes it)
     try {
       const reportPayload = [{
@@ -760,6 +773,7 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
           'Workflow Mode': aiResult.workflow_mode,
           'Overall Status': aiResult.overall_status,
           'Worker Summary': aiResult.worker_summary,
+          'Site Conditions': aiResult.site_conditions || '',
           'Status Observed': aiResult.overall_status,
           'Action Intent': aiResult.action_intent,
           'Mentioned Gates': allGates.length > 0 ? allGates.join(', ') : '',
@@ -773,14 +787,15 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       console.error('[Airtable Report Write Error]', err.message);
     }
 
-    // Step H: Direct Write to Parent Sites Record ({Last Intent} & {Last Note})
+    // Step H: Direct Write to Parent Sites Record ({Last Intent}, {Last Note}, & {Cleared Milestones})
     if (siteInfo?.siteRecordId) {
       try {
         await airtableWrite('Sites', [{
           id: siteInfo.siteRecordId,
           fields: {
             'Last Intent': aiResult.action_intent || 'INSTALL_UPDATE',
-            'Last Note': aiResult.worker_summary || 'Field submission verified.'
+            'Last Note': aiResult.worker_summary || 'Field submission verified.',
+            'Cleared Milestones': uniqueVerifiedGates
           }
         }], true);
       } catch (err) {
