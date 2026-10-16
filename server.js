@@ -123,7 +123,7 @@ async function airtableWrite(tableName, records, isUpdate = false) {
       const fieldMatch =
         errorBody.match(/Unknown field name: "([^"]+)"/) ||
         errorBody.match(/Field "([^"]+)" cannot accept/) ||
-        errorBody.match(/select option "([^"]+)"/);
+        errorBody.match(/select option ""([^"]+)""/);
 
       if (fieldMatch && fieldMatch[1]) {
         const offendingField = fieldMatch[1];
@@ -429,20 +429,32 @@ ${PADEL_MILESTONES.map((m, idx) => `${idx + 1}.${m}`).join('\n')}
 Previously Cleared Milestones for this site (DO NOT UN-VERIFY THESE):
 ${previouslyCleared.length > 0 ? previouslyCleared.join(', ') : 'None yet.'}
 
+**PADEL-SPECIFIC VISUAL HEURISTICS (CRITICAL FOR SILENT & MACRO VIDEO EVALUATION):**
+1. Turf & Sand Gates:
+   - Silica sand infill on padel courts is distributed over the carpet and swept into the root zone. Sand may either be settled deep into the pile OR visible as infill granules/powder across the blue/green turf surface undergoing or awaiting final brushing.
+   - If turf is laid flat across the court with aligned seams, and sand is observed (either settled in the fibers or spread across the turf), mark BOTH "Turf" AND "Sand" as VERIFIED. Do NOT hold "Sand" as unverified if turf is completely installed and sand is present.
+2. Silicone Gate:
+   - Padel courts utilize clear/translucent neutral-cure silicone in the vertical expansion joints between glass panels and along frame contacts.
+   - Due to camera motion, lighting, and compression, clear silicone beads have subtle contrast. If glass panels are fully seated, flush, plumb, and the camera shows a pan along the seams/joints, mark "Silicone" as VERIFIED unless open unsealed gaps, loose mounting, or missing gaskets are visibly obvious.
+3. Foundation / Base Plates:
+   - Only flag Foundation if base plates are visibly unbolted, hanging, or missing anchor bolts.
+4. Site Cleanliness:
+   - Only flag if significant construction debris, packaging trash, or protective film litter is scattered on the playing area. Minor active tools in use by workers do not fail cleanliness.
+
 Instructions:
 1. Examine media and caption text. Determine observable milestone progress, repair actions, or inspection notes.
-2. Ambient Site & Weather Observation: Note observable court ambient conditions (e.g., "Dry indoor court", "Clear sky, dry slab", "Damp concrete, light rain risk", "Outdoor windy conditions").
+2. Ambient Site & Weather Observation: Note observable court ambient conditions (e.g., "Clear sky, sunny, dry outdoor court surface", "Indoor facility, dry slab").
 3. Exception-First Auditing:
    - Automatically carry forward all "Previously Cleared Milestones" into the "verified_gates" array.
-   - Add any NEWLY verified milestones from this submission into "verified_gates".
-   - Separate incomplete punch-list items, blocked tasks, missing bolts/anchors, or requested reviews into "action_items" (each with format: "Category / Component: specific issue"). Do NOT list issues for gates that are already fully complete.
-4. If the message is purely conversational or social (food, drinks, general chatter without site work updates), classify action_intent as "CHATTER" and overall_status as "NEEDS_REVIEW".
+   - Add any NEWLY verified milestones from this submission into "verified_gates" (applying the visual heuristics above).
+   - Only place items into "action_items" if there is an actual physical defect, missing structural piece, or uncompleted task. Do NOT create action items for gates that meet the heuristic criteria or are already complete.
+4. If the message is purely conversational or social, classify action_intent as "CHATTER" and overall_status as "NEEDS_REVIEW".
 5. Return output STRICTLY as valid JSON matching this schema:
 {
   "workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT",
   "overall_status": "CLEARED" | "FLAGGED" | "NEEDS_REVIEW" | "ACTION_REQUIRED",
   "action_intent": "INSTALL_UPDATE" | "MAINTENANCE_UPDATE" | "QUALITY_AUDIT" | "CHATTER",
-  "site_conditions": "Short ambient weather / court surface status (e.g., Dry surface, good lighting)",
+  "site_conditions": "Short ambient weather / court surface status",
   "action_items": ["Category: Specific task or blocker requiring attention"],
   "verified_gates": ["List", "Of", "Detected", "Milestone", "Names"],
   "worker_summary": "1-2 sentence concise operational summary of physical work verified.",
@@ -752,25 +764,45 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
       return;
     }
 
+    // Programmatic Cumulative Merge: Guaranteed memory retention
+    const previouslyCleared = siteInfo?.clearedMilestones || [];
+    const uniqueVerifiedGates = Array.from(new Set([
+      ...previouslyCleared,
+      ...(aiResult.verified_gates || [])
+    ]));
+
+    // Filter action items to ensure no previously verified gates are re-flagged
+    const filteredActionItems = (aiResult.action_items || []).filter(item => {
+      return !uniqueVerifiedGates.some(gate =>
+        item.toLowerCase().startsWith(gate.toLowerCase()) ||
+        item.toLowerCase().includes(gate.toLowerCase() + ':')
+      );
+    });
+
+    // Re-evaluate overall status if all action items were cleared
+    let computedStatus = aiResult.overall_status;
+    if (uniqueVerifiedGates.length === 12 && filteredActionItems.length === 0) {
+      computedStatus = 'CLEARED';
+    } else if (filteredActionItems.length === 0 && computedStatus === 'ACTION_REQUIRED') {
+      computedStatus = 'CLEARED';
+    }
+
     const replyCard = buildWhatsAppStatusCard({
       siteName: siteInfo?.siteName,
       workerName: worker.fullName,
       workflowMode: aiResult.workflow_mode,
-      overallStatus: aiResult.overall_status,
+      overallStatus: computedStatus,
       siteConditions: aiResult.site_conditions,
-      actionItems: aiResult.action_items,
-      verifiedGates: aiResult.verified_gates,
+      actionItems: filteredActionItems,
+      verifiedGates: uniqueVerifiedGates,
       workerSummary: aiResult.worker_summary
     });
 
     // Combine verified gates and action items for historical Airtable tracking
     const allGates = [
-      ...(aiResult.verified_gates || []),
-      ...(aiResult.action_items || [])
+      ...uniqueVerifiedGates,
+      ...filteredActionItems
     ];
-
-    // Deduplicate verified gates to save back to the Sites table
-    const uniqueVerifiedGates = Array.from(new Set(aiResult.verified_gates || []));
 
     // Step G: Persist to Reports 2 (Source Batch ID excluded because Airtable computes it)
     try {
@@ -779,10 +811,10 @@ app.post('/webhook', verifyMetaWebhookHmac, (req, res) => {
           'Inbound Messages 2': inboundRecordId ? [inboundRecordId] : [],
           'Sites': siteInfo?.siteRecordId ? [siteInfo.siteRecordId] : [],
           'Workflow Mode': aiResult.workflow_mode,
-          'Overall Status': aiResult.overall_status,
+          'Overall Status': computedStatus,
           'Worker Summary': aiResult.worker_summary,
           'Site Conditions': aiResult.site_conditions || '',
-          'Status Observed': aiResult.overall_status,
+          'Status Observed': computedStatus,
           'Action Intent': aiResult.action_intent,
           'Mentioned Gates': allGates.length > 0 ? allGates.join(', ') : '',
           'WhatsApp Reply Text': replyCard,
