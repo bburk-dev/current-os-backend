@@ -37,15 +37,16 @@ app.use(express.json({
 let taskQueue = Promise.resolve();
 
 // ============================================================================
-// SUBSYSTEM 1: META GRAPH API CLIENT (WITH DETAILED LOGGING)
+// SUBSYSTEM 1: META GRAPH API CLIENT
 // ============================================================================
 async function sendWhatsAppMessage(to, text) {
   try {
     const cleanTo = to.replace(/[^0-9]/g, '');
-    const response = await fetch(`https://graph.facebook.com/v21.0/${META_PHONE_NUMBER_ID}/messages`, {
+    const url = 'https://graph.facebook.com/v21.0/' + META_PHONE_NUMBER_ID + '/messages';
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${META_ACCESS_TOKEN}`,
+        'Authorization': 'Bearer ' + META_ACCESS_TOKEN,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -59,7 +60,7 @@ async function sendWhatsAppMessage(to, text) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[META API ERROR] HTTP ${response.status} Message dispatch failed:`, errorText);
+      console.error(`[META API ERROR] HTTP ${response.status}:`, errorText);
     }
   } catch (err) {
     console.error('[META API] Network error during dispatch:', err);
@@ -67,14 +68,15 @@ async function sendWhatsAppMessage(to, text) {
 }
 
 async function downloadMetaMedia(mediaId) {
-  const metaUrlRes = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, {
-    headers: { 'Authorization': `Bearer ${META_ACCESS_TOKEN}` }
+  const metaUrl = 'https://graph.facebook.com/v21.0/' + mediaId;
+  const metaUrlRes = await fetch(metaUrl, {
+    headers: { 'Authorization': 'Bearer ' + META_ACCESS_TOKEN }
   });
   
   if (!metaUrlRes.ok) {
     const errorDetail = await metaUrlRes.text();
     console.error(`[META MEDIA RESOLVE ERROR] HTTP ${metaUrlRes.status}:`, errorDetail);
-    throw new Error(`Failed to resolve media URL for ID: ${mediaId} -${errorDetail}`);
+    throw new Error(`Failed to resolve media URL for ID: ${mediaId} - ${errorDetail}`);
   }
   
   const metaUrlData = await metaUrlRes.json();
@@ -82,13 +84,13 @@ async function downloadMetaMedia(mediaId) {
   const mimeType = metaUrlData.mime_type;
 
   const mediaRes = await fetch(directUrl, {
-    headers: { 'Authorization': `Bearer ${META_ACCESS_TOKEN}` }
+    headers: { 'Authorization': 'Bearer ' + META_ACCESS_TOKEN }
   });
 
   if (!mediaRes.ok) {
     const streamError = await mediaRes.text();
     console.error(`[META CDN STREAM ERROR] HTTP ${mediaRes.status}:`, streamError);
-    throw new Error(`Failed to stream media bytes from Meta CDN`);
+    throw new Error('Failed to stream media bytes from Meta CDN');
   }
 
   const arrayBuffer = await mediaRes.arrayBuffer();
@@ -286,7 +288,16 @@ Output raw JSON conforming strictly to this structure:
 
   parts.push({ text: prompt });
 
-  const response = await fetch(`// ============================================================================
+  const geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + GEMINI_API_KEY;
+  const response = await fetch(geminiEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: parts }],
+      generationConfig: {
+        temperature: 0.0,
+        responseMimeType: 'application/json',
+        thinkingConfig:// ============================================================================
 // SUBSYSTEM 4: STATE MACHINE, RESILIENT BOUNCER & AIRTABLE INTEGRATION
 // ============================================================================
 async function airtableWrite(tableName, recordId, fields, method = 'PATCH') {
@@ -549,4 +560,153 @@ async function handleIncomingMessage(message, metadata) {
 
   // Calculate Elapsed Install Time
   let installStarted = siteRecord?.fields['Install Started'];
-  if (!installStarted && activeMilestones.length
+  if (!installStarted && activeMilestones.length > 0) {
+    installStarted = nowISO;
+  }
+
+  let elapsedDisplay = '0m';
+  if (installStarted) {
+    const diffMs = Math.max(0, new Date() - new Date(installStarted));
+    const hours = Math.floor(diffMs / 3600000);
+    const mins = Math.floor((diffMs % 3600000) / 60000);
+    elapsedDisplay = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+  }
+
+  // 5. Construct Status Card & Dispatch WhatsApp Immediately
+  const statusEmoji = aiResult.status_observed === 'ACTION_REQUIRED' ? '⚠️' : '✅';
+  let card = `🤖 *Titan OS | ${currentMode === 'INSTALLATION' ? 'Installation Update' : 'Maintenance Audit'}*\n\n` +
+             `📍 *Site:* ${siteName}\n` +
+             `👷 *Worker:* ${worker.name}\n` +
+             `⚡ *Status:* ${statusEmoji} ${aiResult.status_observed}\n` +
+             `⏱️ *Elapsed Install Time:* ${elapsedDisplay}\n` +
+             `🌤️ *Conditions:* ${aiResult.site_conditions || 'Dry / Indoor'}\n\n`;
+
+  if (needsAttentionList.length > 0) {
+    card += `⚠️ *Needs Attention (${needsAttentionList.length}):*\n`;
+    needsAttentionList.forEach(item => {
+      card += ` • ${item}\n`;
+    });
+    card += `\n`;
+  }
+
+  card += `✅ *Verified Milestones (${activeMilestones.length}/12):*\n` +
+          `${activeMilestones.join(', ') || 'None'}\n\n` +
+          `📝 *Notes:*\n${aiResult.notes}`;
+
+  await sendWhatsAppMessage(senderNumber, card);
+
+  // 6. Asynchronous Persistence to Airtable Base
+  const isComplete = activeMilestones.length === 12 && needsAttentionList.length === 0;
+
+  await airtableWrite('Reports 2', null, {
+    'Sites': siteRecord ? [siteRecord.id] : [],
+    'Workflow Mode': currentMode,
+    'Overall Status': aiResult.status_observed,
+    'Site Conditions': aiResult.site_conditions,
+    'Action Items': needsAttentionList.join('\n'),
+    'Action Intent': aiResult.action_intent,
+    'Status Observed': aiResult.status_observed,
+    'Mentioned Gates': activeMilestones,
+    'WhatsApp Reply Text': card,
+    'Clean JSON': JSON.stringify(aiResult, null, 2)
+  });
+
+  await airtableWrite('Inbound Messages 2', null, {
+    'Message ID': message.id,
+    'Worker Phone Raw': senderNumber,
+    'Message Type': messageType,
+    'Caption Text': textContent,
+    'Media URL': uploadResult.signedUrl,
+    'Media Path': uploadResult.storagePath,
+    'Raw Payload JSON': JSON.stringify(message)
+  });
+
+  if (siteRecord) {
+    const siteUpdate = {
+      'Cleared Milestones': activeMilestones,
+      'Milestone Timestamps JSON': JSON.stringify(existingTimestamps),
+      'Last Intent': aiResult.action_intent,
+      'Last Note': aiResult.notes
+    };
+
+    if (installStarted && !siteRecord.fields['Install Started']) {
+      siteUpdate['Install Started'] = installStarted;
+    }
+
+    if (isComplete) {
+      siteUpdate['Workflow Mode'] = 'MAINTENANCE';
+      siteUpdate['Site Status'] = 'ACTIVE';
+      siteUpdate['Install Completed'] = nowISO;
+    }
+
+    await airtableWrite('Sites', siteRecord.id, siteUpdate);
+  }
+}
+
+// ============================================================================
+// SUBSYSTEM 5: WEBHOOK GATEWAY & SERVER LISTEN
+// ============================================================================
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode && token === META_VERIFY_TOKEN) {
+    console.log('[SECURITY] Webhook challenge verified successfully.');
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+app.post('/webhook', (req, res) => {
+  const signature = req.headers['x-hub-signature-256'];
+
+  if (!signature && META_APP_SECRET) {
+    console.warn('[SECURITY] Missing x-hub-signature-256 header.');
+    return res.sendStatus(401);
+  }
+
+  if (META_APP_SECRET && req.rawBody) {
+    const expectedSignature = 'sha256=' + crypto
+      .createHmac('sha256', META_APP_SECRET)
+      .update(req.rawBody)
+      .digest('hex');
+
+    const sigBuffer = Buffer.from(signature || '');
+    const expectedBuffer = Buffer.from(expectedSignature);
+
+    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+      console.error('[SECURITY] Invalid webhook signature detected.');
+      return res.sendStatus(403);
+    }
+  }
+
+  res.status(200).send('EVENT_RECEIVED');
+
+  const body = req.body;
+  if (body.object === 'whatsapp_business_account') {
+    const entries = body.entry || [];
+    for (const entry of entries) {
+      const changes = entry.changes || [];
+      for (const change of changes) {
+        if (change.field === 'messages') {
+          const value = change.value;
+          const messages = value.messages || [];
+          for (const message of messages) {
+            taskQueue = taskQueue
+              .then(() => handleIncomingMessage(message, value.metadata))
+              .catch(err => console.error('[ORCHESTRATOR ERROR]:', err));
+          }
+        }
+      }
+    }
+  }
+});
+
+app.get('/', (req, res) => {
+  res.send('Titan OS V4.4 | Operational');
+});
+
+app.listen(PORT, () => {
+  console.log(`[BOOT] Titan OS running on port ${PORT}`);
+});
