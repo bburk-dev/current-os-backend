@@ -297,7 +297,30 @@ Output raw JSON conforming strictly to this structure:
       generationConfig: {
         temperature: 0.0,
         responseMimeType: 'application/json',
-        thinkingConfig:// ============================================================================
+        thinkingConfig: {
+          thinkingBudget: 0
+        }
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Gemini 2.5 Flash API error: ${errorBody}`);
+  }
+
+  const result = await response.json();
+  const textOutput = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  try {
+    return JSON.parse(textOutput);
+  } catch (err) {
+    console.error('[AI PARSE ERROR] Raw Output:', textOutput);
+    throw new Error('Failed to parse Gemini output as JSON');
+  }
+}
+
+// ============================================================================
 // SUBSYSTEM 4: STATE MACHINE, RESILIENT BOUNCER & AIRTABLE INTEGRATION
 // ============================================================================
 async function airtableWrite(tableName, recordId, fields, method = 'PATCH') {
