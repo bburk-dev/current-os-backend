@@ -1,6 +1,6 @@
 /**
  * TITAN OS V4.4 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
- * Commit: b4af695 / 6bc915d Integration
+ * Production Build — Hardened Media Ingestion & Token Guarding
  * 
  * Architecture Features:
  * - Meta WhatsApp Cloud API v21.0 with HMAC SHA-256 verification
@@ -41,13 +41,13 @@ const CONFIG = {
     verifyToken: process.env.META_VERIFY_TOKEN,
     accessToken: process.env.META_ACCESS_TOKEN,
     appSecret: process.env.META_APP_SECRET,
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID,
+    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
     graphApiUrl: 'https://graph.facebook.com/v21.0'
   },
   supabase: {
     url: process.env.SUPABASE_URL,
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
-    bucket: 'inbound-media'
+    bucket: process.env.STORAGE_BUCKET || 'inbound-media'
   },
   gemini: {
     apiKey: process.env.GEMINI_API_KEY,
@@ -256,7 +256,6 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
     const errorMsg = errBody?.error?.message || '';
     console.warn(`[Auto-Healer] 422 on ${table} (Attempt ${attempt}): ${errorMsg}`);
 
-    // Regex extracts column names from escaped and unescaped quotes
     const match = errorMsg.match(/field\s*["\\]+([^"\\]+)["\\]+/i) ||
                   errorMsg.match(/column\s*["\\]+([^"\\]+)["\\]+/i) ||
                   errorMsg.match(/Unknown field:?\s*["\\]+([^"\\]+)["\\]+/i);
@@ -285,7 +284,7 @@ async function lookupWorker(phoneRaw) {
   });
 
   if (!res.ok) return null;
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   return data.records?.[0] || null;
 }
 
@@ -306,7 +305,7 @@ async function lookupSite(groupId, siteName = null) {
   });
 
   if (!res.ok) return null;
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   return data.records?.[0] || null;
 }
 
@@ -543,22 +542,51 @@ app.post('/webhook', async (req, res) => {
     const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
     });
-    const metaMediaData = await metaMediaRes.json();
+    const metaMediaData = await metaMediaRes.json().catch(() => ({}));
+
+    // DEFENSIVE URL GUARD: Prevent process crash on expired token or missing media URL
+    if (!metaMediaRes.ok || !metaMediaData?.url) {
+      const errorMsg = metaMediaData?.error?.message || `HTTP ${metaMediaRes.status}`;
+      console.error(`[Meta Graph Error] Failed to resolve media URL for mediaId ${mediaId}:`, errorMsg);
+
+      if (metaMediaData?.error?.code === 190) {
+        console.error('[Security Alert] META_ACCESS_TOKEN has expired! Update to a permanent system token in Render.');
+      }
+
+      await sendWhatsAppMessage(
+        fromPhone,
+        `⚠️ *Titan Media Error*: Unable to download media from Meta. (${errorMsg}). Please contact project admin.`
+      );
+      return;
+    }
 
     // 2. Stream Binary Bytes into Buffer
     const mediaBufferRes = await fetch(metaMediaData.url, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
     });
+
+    if (!mediaBufferRes.ok) {
+      console.error(`[Media Download Error] Failed to stream binary from Meta CDN (${mediaBufferRes.status})`);
+      return;
+    }
+
     const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
 
-    // 3. Prepare Cumulative Context
+    // 3. Prepare Cumulative Context (Safe JSON parsing)
+    let parsedTimestamps = {};
+    if (site?.fields?.['Milestone Timestamps JSON']) {
+      try {
+        parsedTimestamps = JSON.parse(site.fields['Milestone Timestamps JSON']);
+      } catch (err) {
+        console.warn('[Titan OS] Malformed Milestone Timestamps JSON, falling back to empty object.');
+      }
+    }
+
     const cumulativeContext = {
       siteName: site?.fields?.['Site Name'] || 'BPC Court',
       workflowMode: site?.fields?.['Workflow Mode'] || 'INSTALLATION',
       clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
-      milestoneTimestamps: site?.fields?.['Milestone Timestamps JSON']
-        ? JSON.parse(site.fields['Milestone Timestamps JSON'])
-        : {}
+      milestoneTimestamps: parsedTimestamps
     };
 
     // 4. Concurrent Multi-Hop Streaming (Supabase + Gemini parallelized)
