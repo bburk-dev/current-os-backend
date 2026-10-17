@@ -6,19 +6,23 @@ const crypto = require('crypto');
 // ENVIRONMENT VARIABLES & AUTO-SANITIZATION
 // ============================================================================
 const PORT = process.env.PORT || 3000;
-const META_VERIFY_TOKEN = (process.env.META_VERIFY_TOKEN || '').trim();
+const META_VERIFY_TOKEN = (process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN || '').trim();
 const META_APP_SECRET = (process.env.META_APP_SECRET || '').trim();
 
 // Auto-strip quotes, whitespace, and accidental "Bearer " prefixes
-const rawToken = process.env.META_ACCESS_TOKEN || '';
+const rawToken = process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN || '';
 const META_ACCESS_TOKEN = rawToken.replace(/^Bearer\s+/i, '').replace(/["'\r\n\t]/g, '').trim();
 
-const rawPhoneId = process.env.META_PHONE_NUMBER_ID || '';
+const rawPhoneId = process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || '';
 const META_PHONE_NUMBER_ID = rawPhoneId.replace(/["'\r\n\t]/g, '').trim();
 
-const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
-const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-const SUPABASE_BUCKET = (process.env.SUPABASE_BUCKET || 'inbound-media').trim();
+const rawSupabaseUrl = process.env.SUPABASE_URL || '';
+const SUPABASE_URL = rawSupabaseUrl.replace(/["'\r\n\t]/g, '').trim().replace(/\/+$/, '');
+
+const rawSupabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_SERVICE_ROLE_KEY = rawSupabaseKey.replace(/^Bearer\s+/i, '').replace(/["'\r\n\t]/g, '').trim();
+
+const SUPABASE_BUCKET = (process.env.SUPABASE_BUCKET || process.env.STORAGE_BUCKET || 'inbound-media').replace(/["'\r\n\t]/g, '').trim();
 
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
 const AIRTABLE_API_KEY = (process.env.AIRTABLE_API_KEY || '').trim();
@@ -101,7 +105,7 @@ async function downloadMetaMedia(mediaId) {
 }
 
 // ============================================================================
-// SUBSYSTEM 2: SUPABASE PRIVATE STORAGE ENGINE
+// SUBSYSTEM 2: SUPABASE STORAGE ENGINE (HYBRID sb_secret_ & JWT SUPPORT)
 // ============================================================================
 async function uploadToSupabase(buffer, mimeType) {
   const date = new Date();
@@ -112,13 +116,20 @@ async function uploadToSupabase(buffer, mimeType) {
   const fileName = `${crypto.randomUUID()}.${ext}`;
   const filePath = `${year}/${month}/${fileName}`;
 
+  // Modern opaque keys (sb_secret_...) must be passed via `apikey`, not `Authorization: Bearer`
+  const uploadHeaders = {
+    'apikey': SUPABASE_SERVICE_ROLE_KEY,
+    'Content-Type': mimeType,
+    'x-upsert': 'true'
+  };
+
+  if (SUPABASE_SERVICE_ROLE_KEY.startsWith('eyJ')) {
+    uploadHeaders['Authorization'] = `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`;
+  }
+
   const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${filePath}`, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      'Content-Type': mimeType,
-      'x-upsert': 'true'
-    },
+    headers: uploadHeaders,
     body: buffer
   });
 
@@ -127,12 +138,18 @@ async function uploadToSupabase(buffer, mimeType) {
     throw new Error(`Supabase upload failed: ${err}`);
   }
 
+  const signHeaders = {
+    'apikey': SUPABASE_SERVICE_ROLE_KEY,
+    'Content-Type': 'application/json'
+  };
+
+  if (SUPABASE_SERVICE_ROLE_KEY.startsWith('eyJ')) {
+    signHeaders['Authorization'] = `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`;
+  }
+
   const signRes = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${SUPABASE_BUCKET}/${filePath}`, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      'Content-Type': 'application/json'
-    },
+    headers: signHeaders,
     body: JSON.stringify({ expiresIn: 604800 })
   });
 
