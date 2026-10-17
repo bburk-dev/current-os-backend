@@ -12,7 +12,13 @@
  * - Self-Healing Recursive 422 Airtable Schema Auto-Drop Wrapper
  */
 
-require('dotenv').config();
+// Safely load dotenv if present; Render injects process.env natively
+try {
+  require('dotenv').config();
+} catch (e) {
+  // Dotenv is not installed in package.json; continuing with native process.env
+}
+
 const express = require('express');
 const crypto = require('crypto');
 
