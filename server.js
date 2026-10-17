@@ -3,21 +3,26 @@ const express = require('express');
 const crypto = require('crypto');
 
 // ============================================================================
-// ENVIRONMENT VARIABLES & CORE INITIALIZATION
+// ENVIRONMENT VARIABLES & AUTO-SANITIZATION
 // ============================================================================
 const PORT = process.env.PORT || 3000;
-const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
-const META_APP_SECRET = process.env.META_APP_SECRET;
-const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
-const META_PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
+const META_VERIFY_TOKEN = (process.env.META_VERIFY_TOKEN || '').trim();
+const META_APP_SECRET = (process.env.META_APP_SECRET || '').trim();
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'inbound-media';
+// Auto-strip quotes, whitespace, and accidental "Bearer " prefixes
+const rawToken = process.env.META_ACCESS_TOKEN || '';
+const META_ACCESS_TOKEN = rawToken.replace(/^Bearer\s+/i, '').replace(/["'\r\n\t]/g, '').trim();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
+const rawPhoneId = process.env.META_PHONE_NUMBER_ID || '';
+const META_PHONE_NUMBER_ID = rawPhoneId.replace(/["'\r\n\t]/g, '').trim();
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
+const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+const SUPABASE_BUCKET = (process.env.SUPABASE_BUCKET || 'inbound-media').trim();
+
+const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
+const AIRTABLE_API_KEY = (process.env.AIRTABLE_API_KEY || '').trim();
+const AIRTABLE_BASE_ID = (process.env.AIRTABLE_BASE_ID || '').trim();
 
 const app = express();
 
@@ -36,6 +41,7 @@ let taskQueue = Promise.resolve();
 // ============================================================================
 async function sendWhatsAppMessage(to, text) {
   try {
+    const cleanTo = to.replace(/[^0-9]/g, '');
     const response = await fetch(`https://graph.facebook.com/v21.0/${META_PHONE_NUMBER_ID}/messages`, {
       method: 'POST',
       headers: {
@@ -45,7 +51,7 @@ async function sendWhatsAppMessage(to, text) {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to: to,
+        to: cleanTo,
         type: 'text',
         text: { body: text }
       })
@@ -306,7 +312,7 @@ Output raw JSON conforming strictly to this structure:
     throw new Error('Failed to parse Gemini output as JSON');
   }
 }// ============================================================================
-// SUBSYSTEM 4: STATE MACHINE, DUAL SCANNER & AIRTABLE INTEGRATION
+// SUBSYSTEM 4: STATE MACHINE, RESILIENT BOUNCER & AIRTABLE INTEGRATION
 // ============================================================================
 async function airtableWrite(tableName, recordId, fields, method = 'PATCH') {
   let activeFields = { ...fields };
@@ -349,9 +355,20 @@ async function airtableWrite(tableName, recordId, fields, method = 'PATCH') {
   return null;
 }
 
+/**
+ * Robust Worker Bouncer: Matches phone digits with or without leading '+'
+ */
 async function lookupWorker(phone) {
-  const cleanPhone = phone.replace(/[^0-9+]/g, '');
-  const filterFormula = `OR({Phone E164} = '${cleanPhone}', {WhatsApp Number} = '${cleanPhone}')`;
+  const cleanDigits = phone.replace(/[^0-9]/g, '');
+  const withPlus = `+${cleanDigits}`;
+  
+  const filterFormula = `OR(
+    {Phone E164} = '${cleanDigits}',
+    {Phone E164} = '${withPlus}',
+    {WhatsApp Number} = '${cleanDigits}',
+    {WhatsApp Number} = '${withPlus}'
+  )`;
+
   const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Worker?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=1`;
   
   const res = await fetch(url, {
@@ -362,22 +379,30 @@ async function lookupWorker(phone) {
     const data = await res.json();
     if (data.records && data.records.length > 0) {
       const record = data.records[0];
+      const activeRaw = record.fields['Active'];
+      const isActive = activeRaw === true || activeRaw === 1 || String(activeRaw).toLowerCase() === 'true';
+
       return {
         id: record.id,
         name: record.fields['Full Name'] || 'Worker',
-        active: record.fields['Active'] === true,
+        active: isActive,
         role: record.fields['Role'] || 'Installer',
         defaultSite: record.fields['Default Project']?.[0]
       };
     }
+  } else {
+    console.error('[AIRTABLE WORKER QUERY ERROR]:', res.status, await res.text());
   }
   return null;
 }
 
 async function resolveSite(chatId, siteOverrideName) {
+  const cleanDigits = chatId ? chatId.replace(/[^0-9]/g, '') : '';
+  const withPlus = `+${cleanDigits}`;
+
   let filterFormula = siteOverrideName 
     ? `{Site Name} = '${siteOverrideName}'`
-    : `{WhatsApp Group ID} = '${chatId}'`;
+    : `OR({WhatsApp Group ID} = '${chatId}', {WhatsApp Group ID} = '${cleanDigits}', {WhatsApp Group ID} = '${withPlus}')`;
 
   let url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Sites?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=1`;
   let res = await fetch(url, { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
