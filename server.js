@@ -1,16 +1,16 @@
 /**
- * TITAN OS V4.5.5 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
- * Production Build — Native Voice Notes, Weather Safeguards & Proactive Geofencing
+ * TITAN OS V4.5.6 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
+ * Production Build — Map Cache Decoding, Dew Point Chemistry & Voice Telemetry
  * 
  * Architecture Features:
  * - Meta WhatsApp Cloud API v21.0 with HMAC SHA-256 verification
  * - Google Gemini 2.5 Flash with clamped zero-thinking budget (ZDR compliance)
- * - Native Voice Note Ingestion: Audio walkthroughs & spoken defect reports evaluated directly
- * - Proactive Onboarding: Digital Site Pass & map link on group binding (/l, /map)
- * - Hyperlocal Weather Engine: Sub-50ms keyless Open-Meteo telemetry (/w, /weather)
- * - Environmental Tripwires: Automated wind alarms (Gate 7) and rain holds (Gates 9/10)
+ * - Map Cache Base64 Decoder: Auto-extracts {lat, lng} from Airtable Google Maps cache
+ * - Hyperlocal Weather & Dew Point Engine: Sub-50ms Open-Meteo telemetry (/w, /weather)
+ * - Microclimate Tripwires: Gate 7 wind gusts (>37 km/h) & Gate 9 dew point condensation
  * - Clustered Maintenance Sweeps: In-memory Haversine distance dispatch routing (/nearby)
  * - Proof-of-Presence Check-in: 300m geofence verification on native WhatsApp location drops
+ * - Native Voice Note Ingestion: Audio walkthroughs & spoken defect reports evaluated directly
  * - Parallel Gate Architecture: Concurrency-aware construction verification
  * - Maintenance & Joy Cannon Triage: Defect logging & P1/P2 auto-dispatch
  * - Multi-Tier Bouncer: Authorizes field workers and Joy Cannon VIP facility clients
@@ -205,30 +205,65 @@ const COMMAND_MAP = {
 // ==========================================
 
 /**
- * Extracts {lat, lon} floats from raw strings, GPS pairs, or Google Maps URLs
+ * Extracts {lat, lon} floats from Airtable Map Cache, raw strings, GPS pairs, or Google Maps URLs
  */
-function extractCoordinates(rawLocation) {
-  if (!rawLocation) return null;
+function extractCoordinates(rawLocationOrSite, mapCache = null) {
+  let rawLocation = rawLocationOrSite;
+  let cache = mapCache;
+
+  if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
+    const fields = rawLocationOrSite.fields || rawLocationOrSite;
+    rawLocation = fields['Site location'];
+    cache = fields['Map Cache'];
+  }
+
+  // 1. Primary: Base64-decode Airtable's native Google Maps Cache
+  if (cache && typeof cache === 'string') {
+    try {
+      const decoded = Buffer.from(cache, 'base64').toString('utf8');
+      const parsed = JSON.parse(decoded);
+      if (parsed?.l?.lat && (parsed?.l?.lng || parsed?.l?.lon)) {
+        return {
+          lat: parseFloat(parsed.l.lat),
+          lon: parseFloat(parsed.l.lng || parsed.l.lon)
+        };
+      }
+    } catch (e) {
+      // Map Cache not base64 JSON; fallback to regex
+    }
+  }
+
+  // 2. Fallback: Parse raw decimal coordinate pairs or Maps URLs
+  if (!rawLocation || typeof rawLocation !== 'string') return null;
   const trimmed = rawLocation.trim();
 
-  // Match direct coordinate pairs: 45.115872, -79.673537
   const directMatch = trimmed.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
   if (directMatch) {
     return { lat: parseFloat(directMatch[1]), lon: parseFloat(directMatch[2]) };
   }
 
-  // Match URL coordinate patterns: ?q=lat,lon or /@lat,lon or /place/lat,lon or ll=lat,lon
   const urlMatch = trimmed.match(/[@?&/=](-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
   if (urlMatch) {
     return { lat: parseFloat(urlMatch[1]), lon: parseFloat(urlMatch[2]) };
   }
+
   return null;
 }
 
 /**
- * Normalizes raw 'Site location' strings into universal clickable navigation links
+ * Normalizes raw 'Site location' strings or site objects into universal clickable navigation links
  */
-function formatMapUrl(rawLocation) {
+function formatMapUrl(rawLocationOrSite) {
+  let rawLocation = rawLocationOrSite;
+  if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
+    const coords = extractCoordinates(rawLocationOrSite);
+    if (coords) {
+      return `https://www.google.com/maps/search/?api=1&query=${coords.lat},${coords.lon}`;
+    }
+    const fields = rawLocationOrSite.fields || rawLocationOrSite;
+    rawLocation = fields['Site location'];
+  }
+
   if (!rawLocation) return null;
   const trimmed = rawLocation.trim();
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -253,19 +288,21 @@ function haversineDistanceKm(lat1, lon1, lat2, lon2) {
 }
 
 /**
- * Keyless, sub-50ms hyperlocal weather telemetry via Open-Meteo
+ * Sub-50ms Hyperlocal Weather & Dew Point Telemetry via Open-Meteo
  */
 async function getHyperlocalWeather(lat, lon) {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=precipitation,relative_humidity_2m,wind_speed_10m,wind_gusts_10m&hourly=precipitation_probability&forecast_hours=6`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,wind_speed_10m,wind_gusts_10m&hourly=precipitation_probability&forecast_hours=6`;
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
 
     const maxPrecipProb = Math.max(...(data.hourly?.precipitation_probability || [0]));
     return {
-      precip: data.current?.precipitation || 0,
+      temp: data.current?.temperature_2m || 0,
+      dewPoint: data.current?.dew_point_2m || 0,
       humidity: data.current?.relative_humidity_2m || 0,
+      precip: data.current?.precipitation || 0,
       windSpeed: data.current?.wind_speed_10m || 0,
       windGusts: data.current?.wind_gusts_10m || 0,
       precipProbability4h: maxPrecipProb
@@ -494,7 +531,7 @@ async function sendWhatsAppMessage(toPhone, messageBody) {
     const errData = await res.text();
     console.error(`WhatsApp dispatch failed (${res.status}): ${errData}`);
     if (errData.includes('131005')) {
-      console.error('[Meta Auth Alert] Error 131005: Assign WhatsApp Business Account asset full permissions to your System User token.');
+      console.error('[Meta Auth Alert] Error 131005: Assign WhatsApp Business Account asset full control to your System User token in Business Settings.');
     }
   }
 }
@@ -574,11 +611,11 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      const siteCoords = extractCoordinates(site.fields['Site location']);
+      const siteCoords = extractCoordinates(site);
       if (!siteCoords) {
         await sendWhatsAppMessage(
           fromPhone,
-          `⚠️ Court *${site.fields['Site Name']}* does not have GPS coordinates configured in Airtable. Update 'Site location'.`
+          `⚠️ Court *${site.fields['Site Name']}* does not have GPS coordinates or Map Cache geocoded in Airtable.`
         );
         return;
       }
@@ -598,13 +635,13 @@ app.post('/webhook', async (req, res) => {
           `📏 *Radius:* ${Math.round(distanceMeters)}m from court center\n` +
           `🔒 *Ledger:* Shift timestamp sealed on digital twin.`;
 
-        // Proactive silent weather check on check-in
+        // Proactive weather sweep on check-in
         const weather = await getHyperlocalWeather(siteCoords.lat, siteCoords.lon);
         if (weather) {
           if (weather.windGusts > 37) {
-            checkinResponse += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Glass crane rigging suspended.`;
-          } else if (weather.humidity > 85 || weather.precip > 0) {
-            checkinResponse += `\n\n⚠️ *WEATHER NOTICE:* Humidity at ${weather.humidity}%. Hold Gate 9 turf glue application.`;
+            checkinResponse += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 7 glass rigging suspended.`;
+          } else if (weather.humidity > 85 || weather.precip > 0 || (weather.temp - weather.dewPoint) <= 2) {
+            checkinResponse += `\n\n⚠️ *WEATHER NOTICE:* High moisture/condensation risk (${weather.humidity}% RH). Hold Gate 9 turf adhesive.`;
           }
         }
 
@@ -643,7 +680,7 @@ app.post('/webhook', async (req, res) => {
           await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': groupId }, targetSite.id);
 
           const siteLoc = targetSite.fields['Site location'] || 'Location pending';
-          const mapUrl = formatMapUrl(targetSite.fields['Site location']);
+          const mapUrl = formatMapUrl(targetSite);
           const mode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
 
           let welcomeCard = `✅ *TITAN OS | SITE TWIN BOUND*\n` +
@@ -675,7 +712,7 @@ app.post('/webhook', async (req, res) => {
         // /map, /loc, /gps — INSTANT NAVIGATION LINK
         if (intent === 'LOCATION') {
           const siteLoc = site.fields['Site location'] || 'Location pending';
-          const mapUrl = formatMapUrl(site.fields['Site location']);
+          const mapUrl = formatMapUrl(site);
 
           if (!mapUrl) {
             await sendWhatsAppMessage(
@@ -697,11 +734,11 @@ app.post('/webhook', async (req, res) => {
 
         // /w, /weather — HYPERLOCAL ENVIRONMENTAL TELEMETRY
         if (intent === 'WEATHER') {
-          const coords = extractCoordinates(site.fields['Site location']);
+          const coords = extractCoordinates(site);
           if (!coords) {
             await sendWhatsAppMessage(
               fromPhone,
-              `⚠️ Court *${site.fields['Site Name']}* does not have GPS coordinates in 'Site location' (e.g. 45.1158, -79.6735) to fetch weather.`
+              `⚠️ Court *${site.fields['Site Name']}* does not have valid coordinates or Map Cache geocoded in Airtable.`
             );
             return;
           }
@@ -712,20 +749,22 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
+          const dewPointDelta = (weather.temp - weather.dewPoint).toFixed(1);
           let weatherCard = `🌤️ *TITAN OS | HYPERLOCAL WEATHER TELEMETRY*\n` +
             `🏟️ *Court:* ${site.fields['Site Name']}\n` +
+            `🌡️ *Air Temp:* ${weather.temp}°C (Dew Point: ${weather.dewPoint}°C)\n` +
             `💨 *Wind Speed:* ${weather.windSpeed} km/h (Gusts: ${weather.windGusts} km/h)\n` +
             `💧 *Relative Humidity:* ${weather.humidity}%\n` +
             `🌧️ *Precipitation:* ${weather.precip} mm (4h Rain Risk: ${weather.precipProbability4h}%)\n\n`;
 
           if (weather.windGusts > 37) {
             weatherCard += `⛔ *CRANE / GLASS RIGGING HALT:* Wind gusts exceed 20 knots (37 km/h). Gate 7 glass seating suspended under safety protocol.\n`;
-          } else if (weather.humidity > 85 || weather.precip > 0) {
-            weatherCard += `⚠️ *ADHESIVE WARNING:* Humidity >85% or active moisture. Do NOT spread Gate 9 polyurethane turf glue.\n`;
+          } else if (weather.humidity > 85 || weather.precip > 0 || dewPointDelta <= 2) {
+            weatherCard += `⚠️ *ADHESIVE WARNING:* Surface condensation risk (Temp-DewPoint delta ${dewPointDelta}°C, ${weather.humidity}% RH). Do NOT spread Gate 9 polyurethane turf glue.\n`;
           } else if (weather.precipProbability4h > 50) {
             weatherCard += `⚠️ *SAND WARNING:* Rain risk >50% within 4 hours. Keep Gate 10 silica sand pallets covered.\n`;
           } else {
-            weatherCard += `✅ *CONDITIONS NOMINAL:* Green light for all physical assembly and outdoor gluing.`;
+            weatherCard += `✅ *CONDITIONS NOMINAL:* Green light for all physical assembly, glass rigging, and outdoor gluing.`;
           }
 
           await sendWhatsAppMessage(fromPhone, weatherCard);
@@ -734,9 +773,9 @@ app.post('/webhook', async (req, res) => {
 
         // /nearby, /route — CLUSTERED ROUTE SWEEPS
         if (intent === 'NEARBY_SWEEP') {
-          const coords = extractCoordinates(site.fields['Site location']);
+          const coords = extractCoordinates(site);
           if (!coords) {
-            await sendWhatsAppMessage(fromPhone, `⚠️ Current site has no GPS coordinates to calculate proximity vectors.`);
+            await sendWhatsAppMessage(fromPhone, `⚠️ Current site has no GPS coordinates or Map Cache to calculate proximity vectors.`);
             return;
           }
 
@@ -748,7 +787,7 @@ app.post('/webhook', async (req, res) => {
 
           const nearbySites = [];
           for (const c of candidates) {
-            const cCoords = extractCoordinates(c.fields['Site location']);
+            const cCoords = extractCoordinates(c);
             if (cCoords) {
               const distKm = haversineDistanceKm(coords.lat, coords.lon, cCoords.lat, cCoords.lon);
               if (distKm <= 75) {
@@ -757,7 +796,7 @@ app.post('/webhook', async (req, res) => {
                   distance: distKm.toFixed(1),
                   tickets: c.fields['Open Tickets'] || 1,
                   condition: c.fields['Maintenance Condition'] || '🟡 Action Required',
-                  mapUrl: formatMapUrl(c.fields['Site location'])
+                  mapUrl: formatMapUrl(c)
                 });
               }
             }
@@ -827,7 +866,7 @@ app.post('/webhook', async (req, res) => {
           const helpCard = `🤖 *TITAN OS COMMAND MATRIX*\n\n` +
             `*/s* — Court Twin Status & Progress\n` +
             `*/map* — Real-Time GPS Navigation Link\n` +
-            `*/w* — Hyperlocal Weather & Wind Tripwires\n` +
+            `*/w* — Hyperlocal Weather, Wind & Dew Point Tripwires\n` +
             `*/nearby* — Clustered Maintenance Sweeps (75km radius)\n` +
             `*/m* — Switch to Maintenance Mode\n` +
             `*/i* — Switch to Installation Mode\n` +
@@ -915,16 +954,17 @@ app.post('/webhook', async (req, res) => {
         ? `🛠️ *TITAN MAINTENANCE REPORT*\n📍 *Status:* ${forensicAudit.status_observed}\n🚨 *Priority:* ${forensicAudit.priority || 'MEDIUM'}\n${forensicAudit.worker_summary}`
         : `📊 *TITAN OS AUDIT*\n📍 *Status:* ${forensicAudit.status_observed}\n🎯 *Gates:* ${forensicAudit.verified_gates?.length || 0}/12\n${forensicAudit.worker_summary}`);
 
-    // Automated Weather Tripwire Injection on Installation Evaluations
-    if (currentMode === 'INSTALLATION' && site?.fields?.['Site location']) {
-      const coords = extractCoordinates(site.fields['Site location']);
+    // Automated Weather & Dew Point Tripwire Injection on Installation Walkthroughs
+    if (currentMode === 'INSTALLATION' && site) {
+      const coords = extractCoordinates(site);
       if (coords) {
         const weather = await getHyperlocalWeather(coords.lat, coords.lon);
         if (weather) {
+          const dewDelta = weather.temp - weather.dewPoint;
           if (weather.windGusts > 37) {
-            replyText += `\n\n⛔ *SAFETY HALT:* Wind gusts are ${weather.windGusts} km/h (>20 kts). Glass crane rigging suspended.`;
-          } else if (weather.humidity > 85 || weather.precip > 0) {
-            replyText += `\n\n⚠️ *WEATHER NOTICE:* Humidity ${weather.humidity}% / Rain ${weather.precip}mm. Gate 9 turf glue hold in effect.`;
+            replyText += `\n\n⛔ *SAFETY HALT:* Wind gusts are ${weather.windGusts} km/h (>20 kts). Gate 7 glass rigging suspended.`;
+          } else if (weather.humidity > 85 || weather.precip > 0 || dewDelta <= 2) {
+            replyText += `\n\n⚠️ *WEATHER NOTICE:* High moisture/condensation risk (Dew point delta ${dewDelta.toFixed(1)}°C). Gate 9 turf glue hold in effect.`;
           }
         }
       }
@@ -1052,9 +1092,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.5', engine: 'Titan OS V4.5.5 (Voice, Weather & Geofence Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.6', engine: 'Titan OS V4.5.6 (Voice, Weather & Map Cache Engine)' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Titan OS V4.5.5 Clean Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.6 Clean Engine listening on Port ${PORT}`);
 });
