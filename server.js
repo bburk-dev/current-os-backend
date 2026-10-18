@@ -1,16 +1,13 @@
 /**
- * TITAN OS V4.5.16 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Worker WhatsApp Dispatch, Seasonal Closeout Disambiguation & Sub-Second Reactions
+ * TITAN OS V4.5.18 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Ambient Supply Chain, Warehouse Inventory & Worker Dispatch
  * 
- * Target Alignment:
- * - Commercial & Leads: Assignment Type = "Sales"
- * - Hardware & Material Runs: Assignment Type = "Expense"
- * - VIP & Pre-Tournament Sweeps: Assignment Type = "Audit / Inspection"
- * - Ambiguous / Triage: Assignment Type = "Unknown"
- * - Critical Structural Halts: Assignment Type = "Emergency Repair"
- * - Standard Maintenance: Assignment Type = "Service"
- * - Punch Items: Assignment Type = "Spot Visit Punch"
- * - Pallet / Part Drops: Assignment Type = "Supply Delivery"
+ * Active Hubs & Modes:
+ * - Executive Leadership: Ambient chatter filter, sales lead capture, high-level directives.
+ * - Logistics & Freight: Container ETAs, BOL tracking, flatbed drops, pallet counts.
+ * - Factory & Production: Structural steel fabrication, powder coating, glass tempering.
+ * - Central Warehouse & Inventory: Stock counts, receiving, damage write-offs, part allocations.
+ * - Active Job Sites: 12-gate physical audits, microclimate tripwires, spoken punchdown closeouts.
  */
 
 process.on('uncaughtException', (err) => {
@@ -71,8 +68,11 @@ const CONFIG = {
 const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3000;
 
+// Modes permitted to run ambient natural-language background evaluation
+const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];
+
 // ====================================================================
-// 2. INDUSTRIAL & COMMERCIAL SCHEMAS (PROMPTS)
+// 2. INDUSTRIAL & AMBIENT PROMPTS
 // ====================================================================
 
 const INDUSTRIAL_SYSTEM_PROMPT = `
@@ -109,7 +109,6 @@ SEMANTIC DISAMBIGUATION RULES:
   - intent: "DISPATCH_CREATE"
   - assignment_type: "Service"
   - task_category: "Season Closing"
-  - This is a maintenance service, NOT a commercial quote.
 
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
@@ -248,15 +247,6 @@ const GATE_NAMES = {
   11: 'Net Posts & Calibration',
   12: 'Site Cleanliness & Handover'
 };
-
-function getNextTargetGate(clearedGates = []) {
-  for (let i = 1; i <= 12; i++) {
-    if (!clearedGates.includes(`Gate ${i}`)) {
-      return `Gate ${i} — ${GATE_NAMES[i]}`;
-    }
-  }
-  return 'All Milestones Cleared (Ready for Handover)';
-}
 
 // ====================================================================
 // 4. UNIVERSAL GEOSPATIAL & WEATHER UTILITIES
@@ -733,55 +723,56 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
 }
 
 // ====================================================================
-// 7. AUTONOMOUS DISPATCH, COMMERCIAL & TEXT TRIAGE
+// 7. AMBIENT DISPATCH, COMMERCIAL & CHAT TRIAGE
 // ====================================================================
 
 async function triageDispatchText(text, workerRecord, currentSite = null) {
   const activeSites = await getAllActiveSitesList();
   const siteListStr = activeSites.join(', ') || 'BPC HLD Lewinsky, BPC RCOR Court 1, BPC RCOR Court 2, BPC Camp Salter, BPC David Cynamon';
+  const siteWorkflowMode = currentSite?.fields?.['Workflow Mode'] || 'INSTALLATION';
 
   const prompt = `
-You are the Titan OS Operational Dispatch, Commercial Ingestion & Closeout Engine. You ingest unstructured field maintenance notes, partner texts, client screenshots, or construction inquiries.
-
+You are the Titan OS Ambient Intelligence Scribe, Operational Dispatch & Commercial Intake Engine.
+Current Operational Context: [Site Mode: ${siteWorkflowMode}]
 Active Padel Court Registry: [${siteListStr}]
 Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
 
-CRITICAL INTENT & DISAMBIGUATION RULES:
-1. "SEASONAL_CLOSING / DECOMMISSIONING": Mentions of "court closing", "closing the padel court", "camp david closing", "winterizing", or "shut down for the season".
-   - THIS IS PHYSICAL MAINTENANCE, NOT A SALES QUOTE!
-   - Set "intent": "DISPATCH_CREATE"
-   - Set "assignment_type": "Service"
-   - Set "task_category": "Season Closing"
-   - Match court name if present (e.g. "Camp David" -> find best match or "BPC David Cynamon").
+CRITICAL OPERATIONAL RULES:
+1. BANTER VS ACTION DISCRIMINATOR:
+   - If the input is casual conversation, status check between colleagues, banter, humor, or generic chatter (e.g. "hey where are you", "stuck in traffic", "sounds good", "thanks", "heading out now", "coffee time"):
+     Set "is_actionable": false
+   - If the input contains a real task, delivery update, bill of lading, container status, manufacturing milestone, punchdown, client lead, or maintenance request:
+     Set "is_actionable": true
 
-2. "COMMERCIAL_QUOTE": Inquiries regarding pricing, quotes, adding padel over tennis courts, building brand new courts, or greenfield club construction.
-   - Set "intent": "COMMERCIAL_QUOTE"
-   - Extract "quote_type": "Tennis Conversion" | "Greenfield Club Build" | "Court Expansion" | "General Pricing"
-   - Set "assignment_type": "Sales"
-   - Leave "matched_site_name": null if general or new facility.
+2. LOGISTICS INTENT:
+   - Mention of freight, containers, customs, trucking, flatbed delivery, sand drop, or hardware shipment:
+     intent: "LOGISTICS_DELIVERY", assignment_type: "Supply Delivery", task_category: "Supply Delivery (Joy Cannon)"
 
-3. "WORK_ORDER_CLOSEOUT": Completed punchdown work (e.g. "finished up at Camp Salter").
-4. "PRE_TOURNAMENT_AUDIT": Requests for pre-event, pre-tournament, or weekend sweep checks. Set "assignment_type": "Audit / Inspection".
-5. "EXPENSE_LOG": Hardware purchases with store/cost details. Set "assignment_type": "Expense".
-6. "DISPATCH_CREATE": Maintenance defects or repairs on EXISTING active courts.
-   - Critical shutdowns -> "Emergency Repair"
-   - Physical maintenance -> "Service"
-   - Minor punch -> "Spot Visit Punch"
-   - Supplies -> "Supply Delivery"
-   - Ambiguous -> "Unknown"
+3. PRODUCTION INTENT:
+   - Mention of factory fabrication, steel welding, powder coating, glass tempering batches, or factory holds:
+     intent: "PRODUCTION_UPDATE", assignment_type: "Installation", task_category: "Glass & Structure"
 
-Valid Assignment Types (MUST BE EXACT):
-["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
+4. INVENTORY INTENT:
+   - Mention of warehouse stock, inventory count, replacement glass crates on hand, turf rolls in yard, damaged stock write-off, or reorder needs:
+     intent: "INVENTORY_UPDATE", assignment_type: "Supply Delivery", task_category: "Hardware: Caps & Fasteners"
 
-Valid Task Categories:
-["Turf: Sand & Grooming", "Net: Tension & Hardware", "Glass & Structure", "Hardware: Caps & Fasteners", "Lighting & Electrical", "Supply Delivery (Joy Cannon)", "Site Cleanliness & Sweep", "Season Opening", "Season Closing", "Quarterly Maintenance", "Annual Structural & Torque Audit", "Post-Storm / High-Wind Inspection"]
+5. SEASONAL CLOSING:
+   - "court closing", "closing the padel court", "camp david closing", "winterizing", or "shut down for season":
+     intent: "DISPATCH_CREATE", assignment_type: "Service", task_category: "Season Closing"
+
+6. COMMERCIAL QUOTE:
+   - Pricing inquiries, quotes, adding padel over tennis, or new club builds:
+     intent: "COMMERCIAL_QUOTE", assignment_type: "Sales", matched_site_name: null
+
+Valid Assignment Types: ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
+Valid Task Categories: ["Turf: Sand & Grooming", "Net: Tension & Hardware", "Glass & Structure", "Hardware: Caps & Fasteners", "Lighting & Electrical", "Supply Delivery (Joy Cannon)", "Site Cleanliness & Sweep", "Season Opening", "Season Closing", "Quarterly Maintenance", "Annual Structural & Torque Audit", "Post-Storm / High-Wind Inspection"]
 
 Input Text: "${text}"
 
 Output JSON only:
 {
-  "is_work_order": true,
-  "intent": "COMMERCIAL_QUOTE" | "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG",
+  "is_actionable": boolean,
+  "intent": "INVENTORY_UPDATE" | "LOGISTICS_DELIVERY" | "PRODUCTION_UPDATE" | "COMMERCIAL_QUOTE" | "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
   "resolution_summary": "string in English",
@@ -851,11 +842,12 @@ Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 DYNAMIC INTENT CLASSIFICATION RULES:
 1. "COMMERCIAL_QUOTE": Commercial build/pricing request. Set "assignment_type": "Sales".
 2. "SEASONAL_CLOSING": Mentions of "court closing", "winterizing", or seasonal shutdown. Set "assignment_type": "Service" and "task_category": "Season Closing".
-3. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
-4. "PRE_TOURNAMENT_AUDIT": Sweep checks. Set "assignment_type": "Audit / Inspection".
-5. "EXPENSE_LOG": Hardware receipt. Set "assignment_type": "Expense".
-6. "DISPATCH_CREATE": Maintenance defects on existing courts.
-7. "INSTALLATION_INSPECTION": Standard physical build audit.`;
+3. "INVENTORY_UPDATE": Pallets in warehouse, stock check, hardware bins, turf storage. Set "assignment_type": "Supply Delivery".
+4. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
+5. "PRE_TOURNAMENT_AUDIT": Sweep checks. Set "assignment_type": "Audit / Inspection".
+6. "EXPENSE_LOG": Hardware receipt. Set "assignment_type": "Expense".
+7. "DISPATCH_CREATE": Maintenance defects on existing courts.
+8. "INSTALLATION_INSPECTION": Standard physical build audit.`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -1362,9 +1354,12 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
+    const isAmbientChannel = AMBIENT_CHAT_MODES.includes(currentMode);
+
     const senderSource = isAuthorizedClient
       ? 'Joy Cannon (Client)'
-      : (site?.fields['Workflow Mode'] === 'SPOT_VISIT' ? 'Exec Visit (Bob)' : 'Dispatch');
+      : (currentMode === 'SPOT_VISIT' ? 'Exec Visit (Bob)' : 'Dispatch');
 
     const indoorSite = isIndoorSite(site);
 
@@ -1421,7 +1416,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ------------------------------------------------------------------
-    // TEXT COMMANDS & FORWARDING TRIAGE
+    // TEXT COMMANDS & AMBIENT SCRIBE TRIAGE
     // ------------------------------------------------------------------
     if (message.type === 'text') {
       const rawText = message.text.body.trim();
@@ -1444,22 +1439,30 @@ app.post('/webhook', async (req, res) => {
         }
 
         if (intent === 'HELP') {
-          await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n• */s* — Status\n• */w* — Weather\n• */map* — GPS Nav\n• Drop location pin to check in.\n• Forward audio, photos or screenshots to log work or quotes.`);
+          await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n• */s* — Status\n• */w* — Weather\n• */map* — GPS Nav\n• Drop location pin to check in.\n• Chat or forward memos/photos to log work or quotes.`);
           return;
         }
       }
 
       // ------------------------------------------------------------------
-      // TEXT & FORWARDED SCREENSHOT TRIAGE
+      // AMBIENT SCRIBE & NATURAL TEXT PROCESSING
       // ------------------------------------------------------------------
-      const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || (site && site.fields['Workflow Mode'] !== 'INSTALLATION');
+      const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || isAmbientChannel;
 
-      if (isDirectOrAdmin && rawText.length > 6) {
-        console.log(`[Dispatch Triage] Evaluating text: "${rawText}"`);
+      if (isDirectOrAdmin && rawText.length > 5) {
+        console.log(`[Dispatch Triage] Evaluating text (${currentMode}): "${rawText}"`);
         try {
           const triage = await triageDispatchText(rawText, worker, site);
 
-          // BRANCH 1: COMMERCIAL QUOTE & BUILD INQUIRY
+          // Gate 1: Check if this was just banter/casual chat in an ambient group
+          if (triage && triage.is_actionable === false) {
+            console.log(`[Ambient Scribe] Filtered non-actionable chatter: "${rawText}"`);
+            return; // 🤫 Silent drop: zero tokens wasted, zero noise in group
+          }
+
+          // Gate 2: Actionable Directives
+
+          // BRANCH: COMMERCIAL QUOTE & BUILD INQUIRY
           if (triage && triage.intent === 'COMMERCIAL_QUOTE') {
             const comm = triage.commercial_quote_details || {};
             const directedTo = comm.directed_to || (rawText.toLowerCase().includes('rob') ? 'Rob' : 'Bob');
@@ -1513,7 +1516,7 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
-          // BRANCH 2: WORK ORDER CLOSEOUT
+          // BRANCH: WORK ORDER CLOSEOUT
           if (triage && triage.intent === 'WORK_ORDER_CLOSEOUT') {
             await executeWorkOrderCloseout({
               site,
@@ -1527,8 +1530,8 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
-          // BRANCH 3: STANDARD DISPATCH TICKET (INCLUDING SEASON CLOSING)
-          if (triage && triage.is_work_order) {
+          // BRANCH: STANDARD DISPATCH, INVENTORY, LOGISTICS, OR PRODUCTION DIRECTIVES
+          if (triage && triage.is_actionable) {
             let targetSite = null;
             if (triage.matched_site_name) targetSite = await lookupSite(null, triage.matched_site_name);
             if (!targetSite && site) targetSite = site;
@@ -1543,9 +1546,9 @@ app.post('/webhook', async (req, res) => {
               'Date': new Date().toISOString().split('T')[0],
               'Assignment Type': triage.assignment_type || 'Service',
               'Priority': triage.priority || 'Medium',
-              'Source': 'Dispatch',
+              'Source': senderSource || 'Dispatch',
               'Status': 'Open',
-              'Notes': triage.notes
+              'Notes': triage.notes || rawText
             };
 
             if (triage.task_category) assignmentPayload['Task Category'] = triage.task_category;
@@ -1554,18 +1557,35 @@ app.post('/webhook', async (req, res) => {
 
             const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
             const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
-            const courtLabel = targetSite?.fields?.['Site Name'] || triage.matched_site_name || 'Assigned Court';
+            const courtLabel = targetSite?.fields?.['Site Name'] || triage.matched_site_name || 'Assigned Channel / Court';
 
-            const dispatchVoucher = `🧾 *TITAN OS | DISPATCH VOUCHER*\n` +
+            // Distinct formatting based on channel operational mode
+            let headerEmoji = '🧾';
+            let headerTitle = 'DISPATCH VOUCHER';
+            if (currentMode === 'INVENTORY' || triage.intent === 'INVENTORY_UPDATE') {
+              headerEmoji = '📦';
+              headerTitle = 'INVENTORY & WAREHOUSE AUDIT';
+            } else if (currentMode === 'LOGISTICS' || triage.intent === 'LOGISTICS_DELIVERY') {
+              headerEmoji = '🚚';
+              headerTitle = 'LOGISTICS & FREIGHT MANIFEST';
+            } else if (currentMode === 'PRODUCTION' || triage.intent === 'PRODUCTION_UPDATE') {
+              headerEmoji = '🏭';
+              headerTitle = 'FACTORY PRODUCTION ORDER';
+            } else if (currentMode === 'EXECUTIVE') {
+              headerEmoji = '📌';
+              headerTitle = 'EXECUTIVE DIRECTIVE';
+            }
+
+            const dispatchVoucher = `${headerEmoji} *TITAN OS | ${headerTitle}*\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
               `🎫 *Ticket ${ticketId} Created*\n` +
-              `🏟️ *Court:* ${courtLabel}\n` +
-              `🔧 *Category:* ${triage.task_category || 'Service'}\n` +
+              `🏟️ *Target:* ${courtLabel}\n` +
+              `🔧 *Category:* ${triage.task_category || assignmentPayload['Assignment Type']}\n` +
               `⚡ *Priority:* ${assignmentPayload['Priority']}\n` +
               `👤 *Assigned:* ${assignedWorker?.fields?.['Full Name'] || 'Dispatch Queue'}\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
               `📝 *Directive:*\n` +
-              `${triage.notes}\n\n` +
+              `${triage.notes || rawText}\n\n` +
               `✅ *Logged to Daily Assignments • Status: Open*`;
 
             await dispatchReply(dispatchVoucher);
@@ -1574,9 +1594,9 @@ app.post('/webhook', async (req, res) => {
               notifyAssignedWorker(
                 ticketId,
                 courtLabel,
-                triage.task_category || 'Service',
+                triage.task_category || assignmentPayload['Assignment Type'],
                 assignmentPayload['Priority'],
-                triage.notes,
+                triage.notes || rawText,
                 assignedWorker
               ).catch(() => {});
             }
@@ -1732,9 +1752,9 @@ app.post('/api/notify-worker', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.16', engine: 'Titan OS V4.5.16 (Worker Dispatch & Seasonal Disambiguation)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.18', engine: 'Titan OS V4.5.18 (Omni-Hub Ambient Engine)' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.16 Clean Engine listening on Port 3000`);
+  console.log(`🚀 Titan OS V4.5.18 Clean Engine listening on Port 3000`);
 });
