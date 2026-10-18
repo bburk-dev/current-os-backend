@@ -1,19 +1,17 @@
 /**
  * TITAN OS V4.5.8 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
- * Production Build — "Be The Water" 4-Audience Ergonomic Edition
+ * Production Build — "Be The Water" Environmental & Auto-Anchor Edition
  * 
  * Audience Architecture:
- * 1. Field Worker (WhatsApp Edge): Zero cognitive friction, plain trade terms, immediate next targets.
- * 2. End User / Joy Cannon (Client Loop): Executive hospitality, playability status, rapid SLA dispatch.
- * 3. INOC Operations (Airtable Ledger): Standardized English normalization, ISO micro-gate clocks, signed media vault.
- * 4. Executive (Command Dashboard): Fleet health badges (🟢/🟡/🔴), insurance-grade forensic audit trail.
+ * 1. Field Worker: Plain trade terms, proactive weather-hold warnings, next physical target.
+ * 2. End User / Joy Cannon: Executive hospitality, playability reassurance, rapid SLA dispatch.
+ * 3. INOC Operations: Standardized English normalization, ISO micro-gate clocks, signed media vault.
+ * 4. Executive: Fleet health badges (🟢/🟡/🔴), zero chatter noise, real-time velocity metrics.
  */
 
 try {
   require('dotenv').config();
-} catch (e) {
-  // Render injects environment variables natively
-}
+} catch (e) {}
 
 const express = require('express');
 const crypto = require('crypto');
@@ -28,7 +26,7 @@ app.use(express.json({
 }));
 
 // ====================================================================
-// 1. CONFIGURATION & ENVIRONMENT VALIDATION
+// 1. CONFIGURATION
 // ====================================================================
 const CONFIG = {
   port: PORT,
@@ -61,31 +59,30 @@ const CONFIG = {
 // ====================================================================
 
 const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media (videos, photo batches, and spoken voice memos) against strict mechanical and safety tolerances.
+You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
 
 ### CORE OPERATING RULES:
-1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected. Strictly ignore background courts or adjacent club infrastructure.
+1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected. Ignore background courts.
 2. PARALLEL EXECUTION & REAL-WORLD CONCURRENCY:
    - Gates are NOT a strict waterfall. Different sub-trades work simultaneously on site.
-   - Any milestone meeting its quality standard must be verified independently, regardless of sequence.
+   - Any milestone meeting its quality standard must be verified independently.
    - ONLY hard structural prerequisites block a gate:
-     • Foundation Slab (Gate 1) must be cured and level before Frame Anchor Bolts (Gate 2) are verified.
-     • Frame Uprights (Gate 2) must be anchored before Glass Seating (Gate 4) can be verified.
-   - Concurrent tasks (Gate 3 Mesh Panels, Gate 5 Lighting Masts, Gate 6 Sub-base, Gate 7 Turf) can clear in parallel.
+     • Foundation Slab (Gate 1) must be cured before Frame Anchor Bolts (Gate 2).
+     • Frame Uprights (Gate 2) must be anchored before Glass Seating (Gate 4).
 3. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
-   - INDOOR: Verify minimum 6.0m clear ceiling height (min 8.0m preferred), check slab vapor barrier/moisture, check luminaire glare, verify ventilation during Gate 7 gluing.
-   - OUTDOOR: Verify drainage slope, perimeter curbstone run-off, expansion gaps, and corrosion protection.
+   - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
+   - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
 4. WEAR, RUST & MATERIAL INTEGRITY GUARDS:
    - Active rust, flaking coating, or weld oxidation flags Gate 2/3 as ACTION_REQUIRED.
    - Exposed turf backing, unbonded seam tape, or frayed fibers flags Gate 7/8 as ACTION_REQUIRED.
-   - Net center sagging below 88 cm (or posts below 92 cm) flags Gate 11 as ACTION_REQUIRED.
-5. TRANSIENT GATE 12 DEMOTION: Any active hand tools, wire trimmings, loose hardware, buckets, or trash automatically drops Gate 12 (Site Cleanliness), placing the court into ACTION_REQUIRED.
+   - Net center sagging below 88 cm flags Gate 11 as ACTION_REQUIRED.
+5. TRANSIENT GATE 12 DEMOTION: Any active hand tools, wire trimmings, loose hardware, buckets, or debris automatically drops Gate 12 (Site Cleanliness), placing the court into ACTION_REQUIRED.
 6. MULTILINGUAL & LEDGER NORMALIZATION:
-   - Ingest spoken/written input in English, Spanish, Kiswahili/Sheng, Hindi, Punjabi, Gujarati, or Hinglish.
-   - ALL INTERNAL FIELDS ("action_items", "worker_summary", "site_conditions", "defect_telemetry") MUST BE WRITTEN IN CONCISE, PROFESSIONAL ENGLISH for Airtable/INOC.
+   - Ingest input in English, Spanish, Kiswahili/Sheng, Hindi, Punjabi, Gujarati, or Hinglish.
+   - ALL INTERNAL FIELDS ("action_items", "worker_summary", "site_conditions", "defect_telemetry") MUST BE IN CONCISE, PROFESSIONAL ENGLISH for Airtable/INOC.
    - WHATSAPP STATUS TEXT (THE FIELD WORKER'S CARD):
      Generate "whatsapp_status_text" in the worker's detected language.
-     Format it using this clean, human, tool-in-hand layout (NO software jargon, NO "Build Twin", NO raw enums):
+     Format it using this clean layout (NO software jargon, NO "Build Twin", NO raw enums):
 
      🏗️ *[Site Name]*
      [🟢 Ready for Work | 🟡 Action Required | ⛔ Safety Blocker]
@@ -138,16 +135,16 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 const MAINTENANCE_TRIAGE_PROMPT = `
 You are the Titan OS Maintenance & Incident Concierge Engine. You evaluate media and text submitted by facility managers, club executives, and VIP court owners (the "Joy Cannon" relationship loop).
 
-Your objective is to assess court playability, reassure the client with five-star executive hospitality, assign priority, and dispatch tickets.
+Your objective is to assess court playability, reassure the client with executive hospitality, assign priority, and dispatch tickets.
 
 ### CORE OPERATING RULES:
 1. CLIENT-FIRST REASSURANCE: Speak with executive warmth, promptness, and clarity. Acknowledge what was seen immediately.
 2. TRIAGE PRIORITY CLASSIFICATION:
-   - "CRITICAL" (P1 - Emergency / Shut Down): Shattered/chipped glass, snapped net cable, exposed bolts, hanging light fixture. Court is marked PAUSED.
-   - "HIGH" (P2 - Action Required / Playable): Frayed turf seam, sagging net (<88cm), loose door latch, pooling condensation. Court remains playable but logged.
-   - "MEDIUM" (P3 - Routine / Cosmetic): Sand brushing needed, light water spotting on glass, ball/strap supply request.
+   - "CRITICAL" (P1 - Emergency / Shut Down): Shattered/chipped glass, snapped net cable, exposed bolts. Court is marked PAUSED.
+   - "HIGH" (P2 - Action Required / Playable): Frayed turf seam, sagging net (<88cm), loose door latch. Court remains playable.
+   - "MEDIUM" (P3 - Routine / Cosmetic): Sand brushing needed, light water spotting, ball/strap supply request.
 3. MULTILINGUAL & LEDGER NORMALIZATION:
-   - Internal ledger fields ("defects_identified", "action_items", "worker_summary") MUST BE IN STANDARDIZED ENGLISH.
+   - Internal ledger fields MUST BE IN STANDARDIZED ENGLISH.
    - "whatsapp_status_text" must acknowledge the client warmly in their detected language:
 
      🎾 *[Site Name]*
@@ -178,7 +175,7 @@ Your objective is to assess court playability, reassure the client with five-sta
 `;
 
 // ====================================================================
-// 3. ZERO-TOKEN COMMAND MATRIX & HUMAN-READABLE MAPS
+// 3. COMMAND MATRIX & HUMAN MAPS
 // ====================================================================
 const COMMAND_MAP = {
   '/s': 'STATUS',
@@ -235,7 +232,7 @@ function getNextTargetGate(clearedGates = []) {
 }
 
 // ====================================================================
-// 4. GEOSPATIAL, WEATHER & RESILIENT STORAGE UTILITIES
+// 4. GEOSPATIAL, WEATHER & UTILITIES
 // ====================================================================
 
 function isIndoorSite(site) {
@@ -268,12 +265,10 @@ function extractCoordinates(rawLocationOrSite, mapCache = null) {
           lon: parseFloat(parsed.l.lng || parsed.l.lon)
         };
       }
-    } catch (e) {
-      // Fall through to regex
-    }
+    } catch (e) {}
   }
 
-  // 2. Fallback: Parse decimal coordinate pairs or Maps URLs
+  // 2. Direct decimal coordinates or Maps URLs
   if (!rawLocation || typeof rawLocation !== 'string') return null;
   const trimmed = rawLocation.trim();
 
@@ -433,7 +428,7 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
 
     if (match && match[1]) {
       const badField = match[1];
-      console.warn(`[Auto-Healer] Pruning incompatible field from RAM: "${badField}"`);
+      console.warn(`[Auto-Healer] Pruning incompatible field: "${badField}"`);
       delete cleanFields[badField];
       return await airtableWriteWithAutoDrop(table, cleanFields, recordId, attempt + 1);
     }
@@ -629,7 +624,6 @@ app.post('/webhook', async (req, res) => {
     const dispatchTarget = groupJid || fromPhone;
     const messageId = message.id;
 
-    // Dispatches to group hive; falls back to 1-on-1 DM if needed
     const dispatchReply = async (text) => {
       const ok = await sendWhatsAppMessage(dispatchTarget, text);
       if (!ok && dispatchTarget !== fromPhone && fromPhone) {
@@ -638,7 +632,7 @@ app.post('/webhook', async (req, res) => {
     };
 
     // ------------------------------------------------------------------
-    // B. Resolve Court Digital Twin First
+    // B. Resolve Court Digital Twin
     // ------------------------------------------------------------------
     let site = await lookupSite(groupJid || fromPhone);
 
@@ -649,7 +643,6 @@ app.post('/webhook', async (req, res) => {
     const isBoundGroupMember = Boolean(site && isGroupMessage);
     const isAuthorizedClient = !worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE';
 
-    // Allow /l command through so an admin can bind a brand-new group
     const isLinkCommand = message.type === 'text' &&
       (message.text?.body?.trim().startsWith('/l') || message.text?.body?.trim().startsWith('/link'));
 
@@ -665,7 +658,7 @@ app.post('/webhook', async (req, res) => {
     const indoorSite = isIndoorSite(site);
 
     // ==================================================================
-    // 7. LOCATION PIN-DROP (PROOF-OF-PRESENCE & SHIFT CLOCK)
+    // 7. LOCATION PIN-DROP (AUTONOMOUS ANCHORING & CHECK-IN)
     // ==================================================================
     if (message.type === 'location') {
       const userLat = message.location.latitude;
@@ -676,10 +669,18 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      const siteCoords = extractCoordinates(site);
+      let siteCoords = extractCoordinates(site);
+
+      // AUTONOMOUS ANCHORING: If the court has no coordinates yet, anchor it
       if (!siteCoords) {
+        const coordString = `${userLat.toFixed(5)}, ${userLon.toFixed(5)}`;
+        await airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, site.id);
+        siteCoords = { lat: userLat, lon: userLon };
+
         await dispatchReply(
-          `⚠️ *${site.fields['Site Name']}* does not have GPS coordinates or Map Cache geocoded in Airtable.`
+          `📍 *COURT GPS ANCHORED*\n` +
+          `Locked coordinates (*${coordString}*) to *${site.fields['Site Name']}*.\n` +
+          `✅ 300m presence geofence and weather tripwires are now active!`
         );
         return;
       }
@@ -704,7 +705,7 @@ app.post('/webhook', async (req, res) => {
             if (weather.windGusts > 37) {
               checkinResponse += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Glass crane rigging suspended.`;
             } else if (weather.humidity > 85 || weather.precip > 0 || (weather.temp - weather.dewPoint) <= 2) {
-              checkinResponse += `\n\n⚠️ *WEATHER NOTICE:* High moisture risk (${weather.humidity}% RH). Hold Gate 9 turf adhesive.`;
+              checkinResponse += `\n\n⚠️ *WEATHER NOTICE:* High moisture risk (${weather.humidity}% RH). Hold Gate 7 turf adhesive.`;
             }
           }
         }
@@ -728,14 +729,11 @@ app.post('/webhook', async (req, res) => {
       const [trigger, ...args] = rawText.split(' ');
       const intent = COMMAND_MAP[trigger.toLowerCase()];
 
-      // CHATTER FILTER: If not a registered slash command, drop silently
-      if (!intent) {
-        return;
-      }
+      if (!intent) return; // Drop plain chatter silently
 
       console.log(`[Command Engine] Triggered: ${trigger} -> ${intent}`);
 
-      // /l or /link <Site Name> — DIGITAL SITE PASS ONBOARDING
+      // /l or /link <Site Name>
       if (intent === 'LINK_SITE') {
         const targetSiteName = args.join(' ');
         const targetSite = await lookupSite(null, targetSiteName);
@@ -775,7 +773,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // /map, /loc, /gps — INSTANT NAVIGATION
+      // /map, /loc, /gps
       if (intent === 'LOCATION') {
         const siteLoc = site.fields['Site location'] || 'Location on file';
         const mapUrl = formatMapUrl(site);
@@ -793,7 +791,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // /w, /weather, /clima — HYPERLOCAL ENVIRONMENTAL TELEMETRY
+      // /w, /weather, /clima
       if (intent === 'WEATHER') {
         if (indoorSite) {
           await dispatchReply(
@@ -825,10 +823,10 @@ app.post('/webhook', async (req, res) => {
 
         if (weather.windGusts > 37) {
           weatherCard += `⛔ *CRANE / GLASS RIGGING HALT:* Wind gusts exceed 20 knots (37 km/h). Gate 4 glass seating suspended.`;
-        } else if (weather.humidity > 85 || weather.precip > 0 || dewDelta <= 2) {
-          weatherCard += `⚠️ *ADHESIVE WARNING:* Condensation risk (Temp-DewPoint delta ${dewDelta}°C). Do NOT spread Gate 7 turf glue.`;
-        } else if (weather.precipProbability4h > 50) {
-          weatherCard += `⚠️ *SAND WARNING:* Rain risk >50% within 4 hours. Keep silica sand pallets covered.`;
+        } else if (weather.precip > 0 || weather.precipProbability4h > 60) {
+          weatherCard += `🌧️ *RAIN HOLD ACTIVE:* Precipitation detected or imminent (${weather.precipProbability4h}%). Outdoor assembly & gluing suspended.`;
+        } else if (weather.humidity > 85 || dewDelta <= 2) {
+          weatherCard += `⚠️ *ADHESIVE WARNING:* Surface condensation risk (Temp-DewPoint delta ${dewDelta}°C). Do NOT spread Gate 7 turf glue.`;
         } else {
           weatherCard += `✅ *CONDITIONS CLEAR:* Green light for assembly, glass rigging, and outdoor gluing.`;
         }
@@ -837,7 +835,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // /nearby, /route — CLUSTERED ROUTE SWEEPS
+      // /nearby, /route
       if (intent === 'NEARBY_SWEEP') {
         const coords = extractCoordinates(site);
         if (!coords) {
@@ -887,7 +885,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // /s, /sum, /status — LIVE OPERATIONAL PROGRESS
+      // /s, /sum, /status — PROACTIVE ENVIRONMENTAL BUILD STATUS
       if (intent === 'STATUS') {
         const mode = site.fields['Workflow Mode'] || 'INSTALLATION';
         const lastNote = site.fields['Last Note'] || 'No active punch items recorded.';
@@ -896,11 +894,7 @@ app.post('/webhook', async (req, res) => {
         let progressCard = '';
 
         if (mode === 'MAINTENANCE' || mode === 'SPOT_VISIT') {
-          // -------------------------------------------------------------
-          // Joy Cannon / Client & Facility Manager Presentation
-          // -------------------------------------------------------------
           const openTickets = site.fields['Open Tickets'] || 0;
-          const isPlayable = siteStatus === 'ACTIVE' && openTickets === 0;
           const isPaused = siteStatus === 'PAUSED';
 
           let statusBadge = isPaused
@@ -912,21 +906,42 @@ app.post('/webhook', async (req, res) => {
             `🎫 *Active Requests:* ${openTickets} open\n` +
             `📋 *Latest Note:* ${lastNote}`;
         } else {
-          // -------------------------------------------------------------
-          // Trade Contractor & Field Crew Presentation
-          // -------------------------------------------------------------
           const cleared = site.fields['Cleared Milestones'] || [];
           const nextTarget = getNextTargetGate(cleared);
           const isHalted = siteStatus === 'PAUSED';
 
-          let statusBadge = isHalted
-            ? '⛔ *Work Temporarily Halted*'
-            : '🟢 *Ready for Work*';
+          let statusBadge = isHalted ? '⛔ *Work Temporarily Halted*' : '🟢 *Ready for Work*';
+          let weatherLine = '';
+
+          // Proactively inspect weather for outdoor installations
+          if (!indoorSite) {
+            const coords = extractCoordinates(site);
+            if (coords) {
+              const weather = await getHyperlocalWeather(coords.lat, coords.lon);
+              if (weather) {
+                const dewDelta = (weather.temp - weather.dewPoint).toFixed(1);
+
+                if (weather.windGusts > 37) {
+                  statusBadge = '⛔ *Wind Hold: Crane/Glass Suspended*';
+                  weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Wind gusts ${weather.windGusts} km/h (>20 kts)\n⛔ Glass crane rigging prohibited until winds subside.\n\n`;
+                } else if (weather.precip > 0 || weather.precipProbability4h > 60) {
+                  statusBadge = '🌧️ *Weather Hold: Rain / Wet Slab*';
+                  weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Rain/Storms (${weather.precipProbability4h}% precip)\n⛔ Outdoor assembly & turf gluing suspended. Keep sand covered.\n\n`;
+                } else if (weather.humidity > 85 || dewDelta <= 2) {
+                  statusBadge = '⚠️ *Adhesive Hold: High Moisture*';
+                  weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • ${weather.humidity}% RH (Dew delta ${dewDelta}°C)\n⚠️ Slab surface condensation risk. Hold Gate 7 adhesive.\n\n`;
+                } else {
+                  weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Conditions Clear • Winds ${weather.windSpeed} km/h\n\n`;
+                }
+              }
+            }
+          }
 
           progressCard = `🏗️ *${site.fields['Site Name']}*\n` +
             `${statusBadge} (${indoorSite ? 'Indoor' : 'Outdoor'})\n\n` +
             `🎯 *Progress:* ${cleared.length} of 12 Milestones Cleared\n` +
             `👉 *Up Next:* ${nextTarget}\n\n` +
+            weatherLine +
             `📋 *Latest Field Update:*\n${lastNote}`;
         }
 
@@ -954,9 +969,9 @@ app.post('/webhook', async (req, res) => {
 
       if (intent === 'HELP') {
         const helpCard = `🤖 *TITAN OS COMMANDS*\n\n` +
-          `• */s* — Court progress & what to build next\n` +
+          `• */s* — Live court progress & weather-safe next target\n` +
+          `• */w* — Detailed microclimate telemetry & rain risk\n` +
           `• */map* — GPS navigation link\n` +
-          `• */w* — Weather & wind/moisture safety checks\n` +
           `• */nearby* — Nearby service calls (maintenance)\n` +
           `• Drop a WhatsApp location pin to check in on site.\n` +
           `• Send photos, videos, or voice memos anytime to log work.`;
@@ -966,7 +981,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ==================================================================
-    // 9. MULTIMODAL MEDIA PROCESSING (VIDEO, IMAGE & VOICE NOTES)
+    // 9. MULTIMODAL MEDIA PROCESSING
     // ==================================================================
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
@@ -1022,7 +1037,6 @@ app.post('/webhook', async (req, res) => {
       isIndoor: indoorSite
     };
 
-    // Parallel upload and forensic evaluation
     const [storageResult, forensicAudit] = await Promise.all([
       uploadToSupabase(mediaBuffer, mimeType),
       evaluateCourtMedia(mediaBuffer, mimeType, cumulativeContext)
@@ -1039,14 +1053,15 @@ app.post('/webhook', async (req, res) => {
           const dewDelta = weather.temp - weather.dewPoint;
           if (weather.windGusts > 37) {
             replyText += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 4 glass seating suspended.`;
-          } else if (weather.humidity > 85 || weather.precip > 0 || dewDelta <= 2) {
+          } else if (weather.precip > 0 || weather.precipProbability4h > 60) {
+            replyText += `\n\n🌧️ *WEATHER NOTICE:* Active rain/high precipitation risk. Hold outdoor gluing.`;
+          } else if (weather.humidity > 85 || dewDelta <= 2) {
             replyText += `\n\n⚠️ *WEATHER NOTICE:* Surface condensation risk. Hold Gate 7 turf adhesive.`;
           }
         }
       }
     }
 
-    // Immediately return the card to the team
     await dispatchReply(replyText);
 
     // ==================================================================
