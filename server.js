@@ -1,13 +1,16 @@
 /**
- * TITAN OS V4.5.14 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Commercial Quote Routing, Sub-Second Reactions & Hands-Free Punchdowns
+ * TITAN OS V4.5.15 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Clean Assignment Taxonomy, Sub-Second Reactions & Hands-Free Punchdowns
  * 
- * Audience Alignment:
- * 1. Field Worker: Zero jargon, sub-second emoji bubble reactions, hands-free spoken closeout vouchers.
- * 2. Joy Cannon / VIP Client: Executive hospitality receipts, playability confirmation, capacity-gated reviews.
- * 3. Commercial & Estimating: Dedicated pipeline for new club builds, court conversions, and pricing requests.
- * 4. INOC Operations: Standardized English normalization, ISO micro-gate telemetry, signed 7-day media vault.
- * 5. Executive Leadership: Live portfolio health badges (🟢/🟡/🔴), zero chatter noise, real-time velocity metrics.
+ * Target Alignment:
+ * - Commercial & Leads: Assignment Type = "Sales"
+ * - Hardware & Material Runs: Assignment Type = "Expense"
+ * - VIP & Pre-Tournament Sweeps: Assignment Type = "Audit / Inspection"
+ * - Ambiguous / Triage: Assignment Type = "Unknown"
+ * - Critical Structural Halts: Assignment Type = "Emergency Repair"
+ * - Standard Maintenance: Assignment Type = "Service"
+ * - Punch Items: Assignment Type = "Spot Visit Punch"
+ * - Pallet / Part Drops: Assignment Type = "Supply Delivery"
  */
 
 process.on('uncaughtException', (err) => {
@@ -77,12 +80,15 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 
 ### CORE OPERATING RULES:
 1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected.
-2. PARALLEL EXECUTION: Gates are verified independently unless a physical dependency blocks them.
+2. PARALLEL EXECUTION: Gates are verified independently unless a physical prerequisite blocks them.
 3. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
    - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
    - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
 4. GATE 12 DEMOTION: Tools, loose hardware, or debris drops Gate 12, placing site in ACTION_REQUIRED.
 5. MULTILINGUAL & LEDGER NORMALIZATION: Ingest in any language, mirror language on WhatsApp, normalize English in ledger.
+
+VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
+["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
 
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
@@ -92,7 +98,7 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
   "resolution_summary": "string in English",
   "transcription": "Verbatim English transcript of spoken audio",
   "task_category": "string or null",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | null,
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
   "commercial_quote_details": {
@@ -119,6 +125,9 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 const MAINTENANCE_TRIAGE_PROMPT = `
 You are the Titan OS Maintenance, Incident Concierge & Commercial Intake Engine.
 
+VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
+["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
+
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
   "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "MAINTENANCE_INSPECTION",
@@ -127,7 +136,7 @@ You are the Titan OS Maintenance, Incident Concierge & Commercial Intake Engine.
   "resolution_summary": "string in English",
   "transcription": "Verbatim English transcript of spoken audio",
   "task_category": "string or null",
-  "assignment_type": "Emergency Repair" | "Spot Visit Punch" | "Service" | "Supply Delivery",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
   "commercial_quote_details": {
@@ -671,31 +680,26 @@ Active Padel Court Registry: [${siteListStr}]
 Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
 
 CRITICAL INTENT CLASSIFICATION RULES:
-1. "COMMERCIAL_QUOTE": Any inquiry regarding pricing, quoting, building new courts, adding padel over existing tennis courts, or greenfield club construction (e.g. "how much would that cost", "build 6 new courts", "add two more padel courts over tennis courts").
-   - DO NOT classify this as maintenance or net repair.
+1. "COMMERCIAL_QUOTE": Inquiries regarding pricing, quotes, adding padel over tennis courts, building new courts, or greenfield club construction.
+   - DO NOT classify as maintenance or repair.
    - Extract "quote_type": "Tennis Conversion" | "Greenfield Club Build" | "Court Expansion" | "General Pricing"
    - Extract "scope_summary": Detailed breakdown of what the client wants priced.
    - Extract "directed_to": Name of person addressed (e.g. "Rob").
-   - DO NOT force match an existing court if the text refers to an unbuilt or general facility ("our facility"). Leave "matched_site_name": null.
+   - Leave "matched_site_name": null if general or new facility.
+   - Set "assignment_type": "Sales"
 
-2. "WORK_ORDER_CLOSEOUT": Completed or resolved work (e.g., "finished up at Camp Salter 2", "torqued net strap").
-3. "PRE_TOURNAMENT_AUDIT": Requests for pre-event, pre-tournament, or weekend sweep checks.
-4. "EXPENSE_LOG": Hardware purchases with store/cost details.
+2. "WORK_ORDER_CLOSEOUT": Completed or resolved work (e.g., "finished up at Camp Salter 2").
+3. "PRE_TOURNAMENT_AUDIT": Requests for pre-event, pre-tournament, or weekend sweep checks. Set "assignment_type": "Audit / Inspection".
+4. "EXPENSE_LOG": Hardware purchases with store/cost details. Set "assignment_type": "Expense".
 5. "DISPATCH_CREATE": Maintenance defects, sanding needs, or repairs on EXISTING active courts.
+   - Critical shutdowns -> "Emergency Repair"
+   - Physical maintenance -> "Service"
+   - Minor punch -> "Spot Visit Punch"
+   - Supplies / balls / sand -> "Supply Delivery"
+   - Unclear / Ambiguous -> "Unknown"
 
-Valid Task Categories (MUST choose exactly one):
-- "Turf: Sand & Grooming"
-- "Net: Tension & Hardware"
-- "Glass & Structure"
-- "Hardware: Caps & Fasteners"
-- "Lighting & Electrical"
-- "Supply Delivery (Joy Cannon)"
-- "Site Cleanliness & Sweep"
-- "Season Opening"
-- "Season Closing"
-- "Quarterly Maintenance"
-- "Annual Structural & Torque Audit"
-- "Post-Storm / High-Wind Inspection"
+Valid Assignment Types (MUST BE EXACT):
+["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
 
 Input Text: "${text}"
 
@@ -713,8 +717,8 @@ Output JSON only:
     "scope_summary": "Detailed English brief of requested build/pricing",
     "directed_to": "string or null"
   },
-  "task_category": "string from Valid Task Categories or Quarterly Maintenance",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery",
+  "task_category": "string or null",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
   "notes": "string in English"
@@ -770,13 +774,22 @@ Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilesto
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
 DYNAMIC INTENT CLASSIFICATION RULES:
-1. "COMMERCIAL_QUOTE": The image, screenshot, or audio discusses building new courts, converting tennis courts, or asking for pricing.
-   - DO NOT classify as maintenance. Set "intent": "COMMERCIAL_QUOTE".
-   - Extract full scope into "commercial_quote_details".
+1. "COMMERCIAL_QUOTE": Inquiries regarding building new courts, converting tennis courts, or general pricing.
+   - Set "intent": "COMMERCIAL_QUOTE"
+   - Set "assignment_type": "Sales"
 2. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
-3. "PRE_TOURNAMENT_AUDIT": Requesting pre-event or weekend sweep checks.
+3. "PRE_TOURNAMENT_AUDIT": Pre-event or weekend sweep checks.
+   - Set "intent": "PRE_TOURNAMENT_AUDIT"
+   - Set "assignment_type": "Audit / Inspection"
 4. "EXPENSE_LOG": Hardware receipt or supplier expense.
+   - Set "intent": "EXPENSE_LOG"
+   - Set "assignment_type": "Expense"
 5. "DISPATCH_CREATE": Maintenance defects on existing courts.
+   - Structural shutdown -> "Emergency Repair"
+   - Routine repair -> "Service"
+   - Minor punch -> "Spot Visit Punch"
+   - Supplies -> "Supply Delivery"
+   - Ambiguous / unclassifiable -> "Unknown"
 6. "INSTALLATION_INSPECTION": Standard physical build audit.`;
 
   const contentParts = [{ text: auditContextText }];
@@ -871,7 +884,7 @@ async function processMediaBatch(batch) {
 
     const assignmentPayload = {
       'Date': new Date().toISOString().split('T')[0],
-      'Assignment Type': 'Service',
+      'Assignment Type': 'Sales',
       'Priority': 'High',
       'Source': 'Joy Cannon (Client)',
       'Status': 'Open',
@@ -957,14 +970,14 @@ async function processMediaBatch(batch) {
 
     const assignmentPayload = {
       'Date': new Date().toISOString().split('T')[0],
-      'Task Category': 'Quarterly Maintenance',
-      'Assignment Type': 'Service',
+      'Assignment Type': 'Audit / Inspection',
       'Priority': 'High',
       'Source': senderSource || 'Joy Cannon (Client)',
       'Status': 'Open',
       'Notes': `[VIP SERVICE INTAKE]: Under Dispatch Review for scheduling.\nScope: ${forensicAudit.worker_summary || 'Pre-tournament playability inspection.'}`
     };
 
+    if (forensicAudit.task_category) assignmentPayload['Task Category'] = forensicAudit.task_category;
     if (worker?.id) assignmentPayload['Worker'] = [worker.id];
     if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
 
@@ -1000,7 +1013,7 @@ async function processMediaBatch(batch) {
     const expNotes = `[EXPENSE RECEIPT] ${expense.vendor || 'Supplier'}: ${expense.total || 'Total on file'}\nItems: ${(expense.items || []).join(', ')}`;
     const assignmentPayload = {
       'Date': new Date().toISOString().split('T')[0],
-      'Assignment Type': 'Supply Delivery',
+      'Assignment Type': 'Expense',
       'Priority': 'Low',
       'Source': senderSource || 'Dispatch',
       'Status': 'Complete',
@@ -1068,7 +1081,7 @@ async function processMediaBatch(batch) {
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `🎫 *Ticket ${ticketId} Created*\n` +
       `🏟️ *Court:* ${courtLabel}\n` +
-      `⚡ *Priority:* ${assignmentPayload['Priority']} (${assignmentPayload['Assignment Type']})\n` +
+      `⚡ *Priority:* ${assignmentPayload['Priority']}\n` +
       `👤 *Assigned:* ${assignedWorker?.fields?.['Full Name'] || 'Dispatch Queue'}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `📝 *Directive:*\n` +
@@ -1372,7 +1385,7 @@ app.post('/webhook', async (req, res) => {
 
             const assignmentPayload = {
               'Date': new Date().toISOString().split('T')[0],
-              'Assignment Type': 'Service',
+              'Assignment Type': 'Sales',
               'Priority': 'High',
               'Source': 'Joy Cannon (Client)',
               'Status': 'Open',
@@ -1555,9 +1568,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.14', engine: 'Titan OS V4.5.14 (Commercial Lead Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.15', engine: 'Titan OS V4.5.15 (Clean Single-Select Engine)' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.14 Clean Engine listening on Port 3000`);
+  console.log(`🚀 Titan OS V4.5.15 Clean Engine listening on Port 3000`);
 });
