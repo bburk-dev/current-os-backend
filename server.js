@@ -1,20 +1,16 @@
-Here is the complete, production-ready `server.js` updated to **V4.5.4**.
-
-This build integrates the three real-time environmental and geospatial engines—**Hyperlocal Weather & Wind Alarms (Open-Meteo)**, **Clustered Route Sweeps (`/nearby`)**, and **WhatsApp Pin-Drop Proof-of-Presence**—while embedding automated weather safety tripwires directly into the media evaluation pipeline.
-
-```javascript
 /**
- * TITAN OS V4.5.4 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
- * Production Build — Geospatial Telemetry, Weather Safeguards & Route Sweeps
+ * TITAN OS V4.5.5 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
+ * Production Build — Native Voice Notes, Weather Safeguards & Proactive Geofencing
  * 
  * Architecture Features:
  * - Meta WhatsApp Cloud API v21.0 with HMAC SHA-256 verification
  * - Google Gemini 2.5 Flash with clamped zero-thinking budget (ZDR compliance)
+ * - Native Voice Note Ingestion: Audio walkthroughs & spoken defect reports evaluated directly
  * - Proactive Onboarding: Digital Site Pass & map link on group binding (/l, /map)
  * - Hyperlocal Weather Engine: Sub-50ms keyless Open-Meteo telemetry (/w, /weather)
- * - Automated Environmental Tripwires: Gate 7 wind gusts & Gates 9/10 moisture warnings
+ * - Environmental Tripwires: Automated wind alarms (Gate 7) and rain holds (Gates 9/10)
  * - Clustered Maintenance Sweeps: In-memory Haversine distance dispatch routing (/nearby)
- * - Proof-of-Presence Check-in: 300m geofence validation on native WhatsApp location drops
+ * - Proof-of-Presence Check-in: 300m geofence verification on native WhatsApp location drops
  * - Parallel Gate Architecture: Concurrency-aware construction verification
  * - Maintenance & Joy Cannon Triage: Defect logging & P1/P2 auto-dispatch
  * - Multi-Tier Bouncer: Authorizes field workers and Joy Cannon VIP facility clients
@@ -74,7 +70,7 @@ const CONFIG = {
 // ==========================================
 
 const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media (continuous video walkthroughs or photo batches) against strict mechanical and safety tolerances.
+You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media (videos, photo batches, and spoken voice memos) against strict mechanical and safety tolerances.
 
 ### CORE OPERATING RULES:
 1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected. Strictly ignore background courts or adjacent club infrastructure.
@@ -215,14 +211,14 @@ function extractCoordinates(rawLocation) {
   if (!rawLocation) return null;
   const trimmed = rawLocation.trim();
 
-  // Match raw coordinate pairs: 45.115872, -79.673537
-  const coordMatch = trimmed.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
-  if (coordMatch) {
-    return { lat: parseFloat(coordMatch[1]), lon: parseFloat(coordMatch[2]) };
+  // Match direct coordinate pairs: 45.115872, -79.673537
+  const directMatch = trimmed.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+  if (directMatch) {
+    return { lat: parseFloat(directMatch[1]), lon: parseFloat(directMatch[2]) };
   }
 
-  // Match coordinates inside Google Maps URLs (?q=lat,lon or /@lat,lon)
-  const urlMatch = trimmed.match(/[?&@](?:q=)?(-?\d+\.\d+),(-?\d+\.\d+)/);
+  // Match URL coordinate patterns: ?q=lat,lon or /@lat,lon or /place/lat,lon or ll=lat,lon
+  const urlMatch = trimmed.match(/[@?&/=](-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
   if (urlMatch) {
     return { lat: parseFloat(urlMatch[1]), lon: parseFloat(urlMatch[2]) };
   }
@@ -291,7 +287,10 @@ function getSupabaseHeaders(contentType = 'application/json') {
 }
 
 async function uploadToSupabase(fileBuffer, mimeType) {
-  const ext = mimeType.split('/')[1]?.split(';')[0] || 'mp4';
+  let ext = 'mp4';
+  if (mimeType.includes('image')) ext = 'jpg';
+  if (mimeType.includes('audio') || mimeType.includes('ogg') || mimeType.includes('opus')) ext = 'ogg';
+
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
@@ -564,7 +563,7 @@ app.post('/webhook', async (req, res) => {
       : (site?.fields['Workflow Mode'] === 'SPOT_VISIT' ? 'Exec Visit (Bob)' : 'Dispatch');
 
     // ==========================================
-    // 7. LOCATION PIN-DROP (PROOF-OF-PRESENCE)
+    // 7. LOCATION PIN-DROP (PROOF-OF-PRESENCE + WEATHER CHECK)
     // ==========================================
     if (message.type === 'location') {
       const userLat = message.location.latitude;
@@ -592,15 +591,24 @@ app.post('/webhook', async (req, res) => {
         const checkinNote = `✅ Proof of Presence: ${workerName} checked in at ${timestamp} (within ${Math.round(distanceMeters)}m).`;
         await airtableWriteWithAutoDrop('Sites', { 'Last Note': checkinNote, 'Last Intent': 'PRESENCE_VERIFIED' }, site.id);
 
-        await sendWhatsAppMessage(
-          fromPhone,
-          `🎯 *TITAN OS | PRESENCE CONFIRMED*\n\n` +
+        let checkinResponse = `🎯 *TITAN OS | PRESENCE CONFIRMED*\n\n` +
           `👤 *Crew:* ${workerName}\n` +
           `🏟️ *Court:* ${site.fields['Site Name']}\n` +
           `⏱️ *Time:* ${timestamp}\n` +
           `📏 *Radius:* ${Math.round(distanceMeters)}m from court center\n` +
-          `🔒 *Ledger:* Shift timestamp sealed on digital twin.`
-        );
+          `🔒 *Ledger:* Shift timestamp sealed on digital twin.`;
+
+        // Proactive silent weather check on check-in
+        const weather = await getHyperlocalWeather(siteCoords.lat, siteCoords.lon);
+        if (weather) {
+          if (weather.windGusts > 37) {
+            checkinResponse += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Glass crane rigging suspended.`;
+          } else if (weather.humidity > 85 || weather.precip > 0) {
+            checkinResponse += `\n\n⚠️ *WEATHER NOTICE:* Humidity at ${weather.humidity}%. Hold Gate 9 turf glue application.`;
+          }
+        }
+
+        await sendWhatsAppMessage(fromPhone, checkinResponse);
       } else {
         await sendWhatsAppMessage(
           fromPhone,
@@ -652,7 +660,8 @@ app.post('/webhook', async (req, res) => {
             `• */w* — Hyperlocal Weather & Environmental Safety Check\n` +
             `• */nearby* — Proximity Route Sweeps for maintenance\n` +
             `• */s* — Live Milestone & Punch List Status\n` +
-            `• Drop a WhatsApp Location Pin to check in on-site.`;
+            `• Drop a WhatsApp Location Pin to check in on-site.\n` +
+            `• Send photos, videos, or voice memos directly for instant audit.`;
 
           await sendWhatsAppMessage(fromPhone, welcomeCard);
           return;
@@ -823,7 +832,8 @@ app.post('/webhook', async (req, res) => {
             `*/m* — Switch to Maintenance Mode\n` +
             `*/i* — Switch to Installation Mode\n` +
             `*/l <Name>* — Bind chat to Court Twin\n` +
-            `*Location Pin* — Send native WhatsApp location for proof-of-presence\n\n` +
+            `*Location Pin* — Send native WhatsApp location for proof-of-presence\n` +
+            `*Voice Note* — Send spoken memos directly for instant AI transcription & audit\n\n` +
             `_Send photo or video walkthroughs directly for AI forensic audit._`;
           await sendWhatsAppMessage(fromPhone, helpCard);
           return;
@@ -832,17 +842,18 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ==========================================
-    // 9. MULTIMODAL MEDIA PROCESSING PIPELINE
+    // 9. MULTIMODAL MEDIA PROCESSING (VIDEO, IMAGE & VOICE NOTES)
     // ==========================================
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
+    const isAudio = message.type === 'audio' || message.type === 'voice';
 
-    if (!isVideo && !isImage) return;
+    if (!isVideo && !isImage && !isAudio) return;
 
     const mediaObj = message[message.type];
     const mediaId = mediaObj.id;
-    const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : 'image/jpeg');
-    const caption = mediaObj.caption || '';
+    const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
+    const caption = mediaObj.caption || (isAudio ? '[Spoken Voice Memo]' : '');
 
     const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
@@ -1041,11 +1052,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.4', engine: 'Titan OS V4.5.4 (Weather & Geofence Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.5', engine: 'Titan OS V4.5.5 (Voice, Weather & Geofence Engine)' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Titan OS V4.5.4 Clean Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.5 Clean Engine listening on Port ${PORT}`);
 });
-
-```
