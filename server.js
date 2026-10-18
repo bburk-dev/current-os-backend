@@ -1,24 +1,22 @@
 /**
- * TITAN OS V4.5.11 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Hardened Calibrated Triage, Voice Transcription & Cross-Site Router
+ * TITAN OS V4.5.12 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Spoken Punchdown Closeout, VIP Concierge & Expense Edition
  * 
  * Audience Alignment:
- * 1. Field Worker: Zero jargon, plain trade vocabulary, proactive environmental holds, actionable next targets.
- * 2. Joy Cannon / VIP Client: Executive hospitality, playability confirmation, rapid maintenance ticket routing.
+ * 1. Field Worker: Zero jargon, plain trade vocabulary, proactive environmental holds, hands-free voice closeouts.
+ * 2. Joy Cannon / VIP Client: Executive hospitality, playability confirmation, pre-tournament sweeps.
  * 3. INOC Operations: Standardized English normalization, ISO micro-gate telemetry, signed 7-day media vault.
  * 4. Executive Leadership: Live portfolio health badges (🟢/🟡/🔴), zero chatter noise, real-time velocity metrics.
  * 
- * New V4.5.11 Capabilities:
- * - Calibrated Priority Matrix (Critical strictly isolated to structural/glass safety halts)
- * - Automatic Spoken Audio Transcription committed to Inbound Messages 2 Caption Text
- * - Schema Payload Sanitization (Eliminated legacy text 'Site' to bypass 422 retries)
- * - Intelligent Worker Auto-Linking from voice notes and messages (e.g., "Have Dee check...")
- * - Universal Regex Auto-Healer supporting all Airtable 422 error variants
+ * Core Capabilities:
+ * - Hands-Free Voice Closeout: Spoken resolution flips Daily Assignments from Open to Complete
+ * - VIP Pre-Tournament Sweeps: Automated scheduled audits with executive hospitality replies
+ * - Voice-Over Expense Capture: Multimodal receipt extraction bound to court twins
+ * - Cross-Site Voice Dispatch Router: Dispatches tickets across any thread dynamically
+ * - In-Memory Media Debouncer: 3-second sliding window prevents webhook race conditions
+ * - Self-Healing REST AST: Auto-heals 422 schema rejections in RAM
  */
 
-// --------------------------------------------------------------------
-// PROCESS CRASH GUARDS (PREVENTS "APPLICATION EXITED EARLY")
-// --------------------------------------------------------------------
 process.on('uncaughtException', (err) => {
   console.error('[CRITICAL] Uncaught Exception:', err);
 });
@@ -74,7 +72,6 @@ const CONFIG = {
   }
 };
 
-// In-Memory Debounce Buffer for Offline Media Bursts
 const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3000;
 
@@ -134,13 +131,20 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "is_cross_site_dispatch": boolean,
+  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "INSTALLATION_INSPECTION",
   "target_court_name": "string or null",
+  "ticket_id": integer or null,
+  "resolution_summary": "Concise English description of the work completed and court status",
   "transcription": "Verbatim English transcript of any spoken voice note or audio",
   "task_category": "string or null",
   "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | null,
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
+  "expense_details": {
+    "vendor": "string or null",
+    "total": "string or null",
+    "items": ["string array"]
+  },
   "detected_language": "string",
   "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
   "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED",
@@ -192,13 +196,20 @@ Your objective is to assess court playability, reassure the client with executiv
 
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "is_cross_site_dispatch": boolean,
+  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "MAINTENANCE_INSPECTION",
   "target_court_name": "string or null",
+  "ticket_id": integer or null,
+  "resolution_summary": "Concise English description of the work completed and court status",
   "transcription": "Verbatim English transcript of any spoken voice note or audio",
   "task_category": "string or null",
   "assignment_type": "Emergency Repair" | "Spot Visit Punch" | "Service" | "Supply Delivery",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
+  "expense_details": {
+    "vendor": "string or null",
+    "total": "string or null",
+    "items": ["string array"]
+  },
   "detected_language": "string",
   "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
   "status_observed": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
@@ -291,7 +302,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
     cache = fields['Map Cache'];
   }
 
-  // 1. Direct GPS numbers
   if (typeof rawLocation === 'string') {
     const directMatch = rawLocation.trim().match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
     if (directMatch) {
@@ -303,7 +313,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
     }
   }
 
-  // 2. Base64 Airtable Map Cache
   if (cache && typeof cache === 'string') {
     try {
       const decoded = Buffer.from(cache, 'base64').toString('utf8');
@@ -316,7 +325,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
     } catch (e) {}
   }
 
-  // 3. Address Fallback via Open-Meteo
   if (typeof rawLocation === 'string' && rawLocation.length > 5) {
     try {
       const cleanAddress = rawLocation.replace(/[^\w\s,]/gi, '').trim();
@@ -450,9 +458,6 @@ async function uploadToSupabase(fileBuffer, mimeType) {
   return { storagePath, signedUrl: `${CONFIG.supabase.url}/storage/v1${signData.signedURL}` };
 }
 
-/**
- * Universal Auto-Healer: Extracts field names from any 422 error string format
- */
 async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
   const cleanFields = { ...fields };
 
@@ -487,7 +492,6 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
     const errorMsg = errBody?.error?.message || '';
     console.warn(`[Auto-Healer] 422 on ${table} (Attempt ${attempt}): ${errorMsg}`);
 
-    // Universal regex matching "Unknown field name: 'X'", "Field 'X' cannot...", "column 'X'"
     const match = errorMsg.match(/(?:Unknown field name|Unknown field|Field|Column)\s*:?\s*["\\]+([^"\\]+)["\\]+/i) ||
                   errorMsg.match(/field\s*["\\]+([^"\\]+)["\\]+/i);
 
@@ -570,7 +574,86 @@ async function getAllActiveSitesList() {
 }
 
 // ====================================================================
-// 5. AUTONOMOUS DISPATCH & WORK ORDER FORWARDING TRIAGE
+// 5. WORK ORDER CLOSEOUT ENGINE (SPOKEN PUNCHDOWN)
+// ====================================================================
+
+async function findActiveTicketForSite(siteId, ticketId = null) {
+  if (ticketId) {
+    const formula = `{Assignment ID} = ${ticketId}`;
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (data.records && data.records.length > 0) return data.records[0];
+    }
+  }
+
+  if (siteId) {
+    const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc&maxRecords=20`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const records = data.records || [];
+      return records.find(r => {
+        const sites = r.fields['Sites'] || r.fields['Site'] || [];
+        return Array.isArray(sites) && sites.includes(siteId);
+      }) || null;
+    }
+  }
+
+  return null;
+}
+
+async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resolutionNotes, worker, dispatchTarget, fromPhone }) {
+  let targetSite = null;
+  if (targetCourtName) {
+    targetSite = await lookupSite(null, targetCourtName);
+  }
+  if (!targetSite && site) {
+    targetSite = site;
+  }
+
+  const activeTicket = await findActiveTicketForSite(targetSite?.id, ticketId);
+
+  if (!activeTicket) {
+    const siteLabel = targetSite?.fields?.['Site Name'] || targetCourtName || 'this facility';
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ No open work orders currently found for *${siteLabel}* to close.`);
+    return false;
+  }
+
+  const existingNotes = activeTicket.fields['Notes'] || '';
+  const workerName = worker?.fields?.['Full Name'] || (fromPhone ? `Tech (+${fromPhone.slice(-4)})` : 'Field Tech');
+  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const updatedNotes = `${existingNotes}\n\n[COMPLETED by ${workerName} at ${timeStr}]: ${resolutionNotes}`.trim();
+
+  await airtableWriteWithAutoDrop('Daily Assignments', {
+    'Status': 'Complete',
+    'Notes': updatedNotes
+  }, activeTicket.id);
+
+  if (targetSite) {
+    await airtableWriteWithAutoDrop('Sites', {
+      'Last Note': `Work Order #${activeTicket.fields['Assignment ID']} completed by ${workerName}: ${resolutionNotes}`,
+      'Last Intent': 'WORK_ORDER_COMPLETED'
+    }, targetSite.id);
+  }
+
+  const ticketNum = activeTicket.fields['Assignment ID'] ? `#${activeTicket.fields['Assignment ID']}` : '';
+  const courtLabel = targetSite?.fields?.['Site Name'] || 'Assigned Court';
+
+  const reply = `✅ *WORK ORDER CLOSED (${ticketNum})*\n` +
+    `🏟️ *Court:* ${courtLabel}\n` +
+    `👤 *Tech:* ${workerName}\n` +
+    `📋 *Resolution:* ${resolutionNotes}\n\n` +
+    `🟢 Status updated to Complete. Court marked nominal.`;
+
+  await sendWhatsAppMessage(dispatchTarget, reply);
+  return true;
+}
+
+// ====================================================================
+// 6. AUTONOMOUS DISPATCH & TEXT TRIAGE
 // ====================================================================
 
 async function triageDispatchText(text, workerRecord, currentSite = null) {
@@ -578,7 +661,7 @@ async function triageDispatchText(text, workerRecord, currentSite = null) {
   const siteListStr = activeSites.join(', ') || 'BPC HLD Lewinsky, BPC RCOR Court 1, BPC RCOR Court 2, BPC Camp Salter';
 
   const prompt = `
-You are the Titan OS Operational Dispatch Engine. You ingest unstructured field maintenance notes, forwarded WhatsApp texts, voice transcripts, or spot-check messages and convert them into structured Work Order tickets.
+You are the Titan OS Operational Dispatch & Closeout Engine. You ingest unstructured field maintenance notes, partner texts, or spot-check messages and convert them into structured Work Order operations.
 
 Active Padel Court Registry: [${siteListStr}]
 Field Technician Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
@@ -607,17 +690,19 @@ STRICT PRIORITY TOLERANCES:
 
 Input Message: "${text}"
 
-Instructions:
-1. Determine if this message describes a court maintenance need, repair request, inspection observation, or supply delivery. If it is completely irrelevant casual conversation (e.g., "see you tonight", "what's up"), set "is_work_order": false.
-2. Match the court name to the most likely site in the Active Padel Court Registry (e.g., "Lewinsky's", "at lewinsky", "court 2 at ocean reef", etc.). If ambiguous and current site is known, leave matched_site_name null.
-3. Choose the most specific Task Category, Assignment Type, and Priority strictly according to the tolerances above.
-4. If a technician's name is mentioned to handle the task, extract it in "suggested_worker_name".
-5. Formulate concise, professional English instructions in "notes" describing the physical directive.
+Determine Intent:
+1. "WORK_ORDER_CLOSEOUT": Spoken or written phrases indicating work was completed, finished, resolved, or repaired (e.g., "finished up at Camp Salter 2", "completed ticket 7", "done with net repair", "strap is torqued").
+2. "PRE_TOURNAMENT_AUDIT": Requests for pre-event, pre-tournament, or weekend sweep checks.
+3. "EXPENSE_LOG": Mentions of buying hardware or supplies with store names/costs.
+4. "DISPATCH_CREATE": All new tickets, issues, repairs, or supply requests.
 
 Output JSON only:
 {
   "is_work_order": true,
+  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG",
   "matched_site_name": "string or null",
+  "ticket_id": integer or null,
+  "resolution_summary": "Concise English description of work done",
   "task_category": "string from Valid Task Categories",
   "assignment_type": "string from Valid Assignment Types",
   "priority": "Critical" | "High" | "Medium" | "Low",
@@ -655,7 +740,7 @@ Output JSON only:
 }
 
 // ====================================================================
-// 6. BATCH MULTIMODAL FORENSIC EVALUATION WITH CROSS-SITE ROUTING
+// 7. BATCH MULTIMODAL FORENSIC EVALUATION
 // ====================================================================
 
 async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
@@ -674,16 +759,24 @@ Facility Type: ${facilityTypeDesc}
 Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilestones || [])}
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
-DYNAMIC CROSS-SITE DISPATCH OVERRIDE RULES:
-1. If the spoken audio or media caption explicitly mentions a DIFFERENT court from the current bound court (e.g., "at Lewinsky's", "at Camp Salter", "Court 1", "Lewinsky"), OR describes a maintenance request / punch item / supply need:
-   - Set "is_cross_site_dispatch": true
-   - Set "target_court_name" to the matched court name from the Active Padel Court Registry (e.g., "BPC HLD Lewinsky", "BPC Camp Salter")
-   - Transcribe spoken words verbatim into "transcription"
-   - Extract "task_category" from valid options: ["Turf: Sand & Grooming", "Net: Tension & Hardware", "Glass & Structure", "Hardware: Caps & Fasteners", "Lighting & Electrical", "Supply Delivery (Joy Cannon)", "Site Cleanliness & Sweep"]
-   - Extract "assignment_type": "Emergency Repair" (strictly for halts/shattered glass), "Service" (repairs/net calibration), "Spot Visit Punch" (hardware/rust), "Supply Delivery"
-   - Extract "priority": "Critical" (safety shutdown only), "High" (playability/net sag <88cm/rust), "Medium" (routine sand/caps), "Low" (supplies)
-   - If a technician is requested, extract their name into "suggested_worker_name"
-2. If the media is simply an installation progress walkthrough for the CURRENT bound court, set "is_cross_site_dispatch": false and "target_court_name": null.`;
+DYNAMIC INTENT CLASSIFICATION RULES:
+Analyze the audio, image, video, or caption and determine:
+1. "WORK_ORDER_CLOSEOUT": Technician completed work on a court (e.g., "finished up at Camp Salter 2", "retensioned center strap", "torqued the ratchet bolt, court good for play", "completed ticket 7").
+   - Set "intent": "WORK_ORDER_CLOSEOUT"
+   - Extract "target_court_name" (e.g., "BPC Camp Salter 2")
+   - Extract "ticket_id" if mentioned (e.g. 7)
+   - Formulate "resolution_summary" in concise English.
+2. "PRE_TOURNAMENT_AUDIT": Requesting a pre-tournament, pre-event, or weekend playability audit.
+   - Set "intent": "PRE_TOURNAMENT_AUDIT"
+   - Set "target_court_name" to the court(s) mentioned.
+3. "EXPENSE_LOG": Image is a receipt/invoice or speech notes hardware purchased at a store (Fastenal, Home Depot).
+   - Set "intent": "EXPENSE_LOG"
+   - Extract vendor, total, and item details.
+4. "DISPATCH_CREATE": An active defect or maintenance need is reported for any court.
+   - Set "intent": "DISPATCH_CREATE"
+   - Follow calibrated Priority & Category taxonomy.
+5. "INSTALLATION_INSPECTION": Standard physical build audit on the currently bound court.
+   - Set "intent": "INSTALLATION_INSPECTION"`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -765,17 +858,15 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
 }
 
 // ====================================================================
-// 7. BATCH PROCESSOR (DEBOUNCED MEDIA AGGREGATION & CROSS-ROUTING)
+// 8. BATCH PROCESSOR (DEBOUNCED MEDIA AGGREGATION & MULTI-INTENT)
 // ====================================================================
 
 async function processMediaBatch(batch) {
   const { items, site, worker, dispatchTarget, fromPhone, senderSource, indoorSite } = batch;
 
-  // 1. Parallel Upload to Supabase Vault
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
   const storageResults = await Promise.all(uploadPromises);
 
-  // 2. Build cumulative context
   let parsedTimestamps = {};
   if (site?.fields?.['Milestone Timestamps JSON']) {
     try {
@@ -797,13 +888,120 @@ async function processMediaBatch(batch) {
     isIndoor: indoorSite
   };
 
-  // 3. Multi-item multimodal evaluation pass with Gemini
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
   
   // ------------------------------------------------------------------
-  // 4. CROSS-SITE VOICE DISPATCH ROUTER (DAILY ASSIGNMENTS)
+  // BRANCH A: SPOKEN WORK ORDER CLOSEOUT
   // ------------------------------------------------------------------
-  const isCrossSite = forensicAudit.is_cross_site_dispatch ||
+  if (forensicAudit.intent === 'WORK_ORDER_CLOSEOUT') {
+    console.log(`[Punchdown Engine] Closing work order for "${forensicAudit.target_court_name || site?.fields['Site Name']}"`);
+    await executeWorkOrderCloseout({
+      site,
+      targetCourtName: forensicAudit.target_court_name,
+      ticketId: forensicAudit.ticket_id,
+      resolutionNotes: forensicAudit.resolution_summary || 'Task completed and verified on site.',
+      worker,
+      dispatchTarget,
+      fromPhone
+    });
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const storageResult = storageResults[i];
+      const transcript = forensicAudit.transcription ? `[Punchdown Voice]: ${forensicAudit.transcription}` : item.caption;
+
+      await airtableWriteWithAutoDrop('Inbound Messages 2', {
+        'Message ID': item.messageId,
+        'Worker Phone Raw': fromPhone,
+        'Message Type': item.type,
+        'Caption Text': transcript,
+        'Media URL': storageResult.signedUrl,
+        'Media Path': storageResult.storagePath,
+        'Raw Payload JSON': JSON.stringify(item.rawMessage)
+      });
+    }
+    return;
+  }
+
+  // ------------------------------------------------------------------
+  // BRANCH B: PRE-TOURNAMENT VIP SWEEP
+  // ------------------------------------------------------------------
+  if (forensicAudit.intent === 'PRE_TOURNAMENT_AUDIT') {
+    let targetSite = null;
+    if (forensicAudit.target_court_name) {
+      targetSite = await lookupSite(null, forensicAudit.target_court_name);
+    }
+    if (!targetSite) targetSite = site;
+
+    const assignmentPayload = {
+      'Date': new Date().toISOString().split('T')[0],
+      'Task Category': 'Quarterly Maintenance',
+      'Assignment Type': 'Service',
+      'Priority': 'High',
+      'Source': senderSource || 'Joy Cannon (Client)',
+      'Status': 'Scheduled',
+      'Notes': `[PRE-TOURNAMENT AUDIT]: ${forensicAudit.worker_summary || 'Inspect net height (88cm), glass clarity, and turf infill grooming.'}`
+    };
+
+    if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+    if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
+
+    const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+    const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
+    const courtLabel = targetSite?.fields?.['Site Name'] || 'Facility Courts';
+
+    const vipReply = `🎾 *${courtLabel}*\n` +
+      `🟡 *Pre-Tournament Playability Audit Scheduled (${ticketId})*\n\n` +
+      `📋 *Executive Concierge Update:*\n` +
+      `Our operations team has scheduled a pre-event sweep (net tensioning, glass polish, sand groom) ahead of tournament play.\n\n` +
+      `🎫 *Service Queue:* Work order logged in Daily Assignments.`;
+
+    await sendWhatsAppMessage(dispatchTarget, vipReply);
+    return;
+  }
+
+  // ------------------------------------------------------------------
+  // BRANCH C: RECEIPT / EXPENSE CAPTURE
+  // ------------------------------------------------------------------
+  if (forensicAudit.intent === 'EXPENSE_LOG') {
+    const expense = forensicAudit.expense_details || {};
+    let targetSite = null;
+    if (forensicAudit.target_court_name) {
+      targetSite = await lookupSite(null, forensicAudit.target_court_name);
+    }
+    if (!targetSite) targetSite = site;
+
+    const expNotes = `[EXPENSE RECEIPT] ${expense.vendor || 'Hardware Supplier'}: ${expense.total || 'Total on receipt'}\nItems: ${(expense.items || []).join(', ')}`;
+    const assignmentPayload = {
+      'Date': new Date().toISOString().split('T')[0],
+      'Task Category': 'Hardware: Caps & Fasteners',
+      'Assignment Type': 'Supply Delivery',
+      'Priority': 'Low',
+      'Source': senderSource || 'Dispatch',
+      'Status': 'Complete',
+      'Notes': expNotes
+    };
+
+    if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+    if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
+
+    await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+
+    const expReply = `🧾 *EXPENSE LOGGED*\n` +
+      `🏪 *Vendor:* ${expense.vendor || 'Supplier'}\n` +
+      `💰 *Total:* ${expense.total || 'Logged'}\n` +
+      `📦 *Items:* ${(expense.items || []).join(', ') || 'Hardware supplies'}\n` +
+      `📍 *Court Asset:* ${targetSite?.fields?.['Site Name'] || 'General Operations'}\n\n` +
+      `Receipt signed into vault and expense recorded.`;
+
+    await sendWhatsAppMessage(dispatchTarget, expReply);
+    return;
+  }
+
+  // ------------------------------------------------------------------
+  // BRANCH D: CROSS-SITE VOICE DISPATCH (NEW TICKET)
+  // ------------------------------------------------------------------
+  const isCrossSite = forensicAudit.intent === 'DISPATCH_CREATE' ||
     (forensicAudit.target_court_name && site && !site.fields['Site Name'].toLowerCase().includes(forensicAudit.target_court_name.toLowerCase()));
 
   if (isCrossSite) {
@@ -814,7 +1012,6 @@ async function processMediaBatch(batch) {
     }
     if (!targetSite) targetSite = site;
 
-    // Check if a specific worker was named (e.g. "Have Dee check...")
     let assignedWorker = worker;
     if (forensicAudit.suggested_worker_name) {
       const namedWorker = await lookupWorkerByName(forensicAudit.suggested_worker_name);
@@ -833,10 +1030,7 @@ async function processMediaBatch(batch) {
     };
 
     if (assignedWorker?.id) assignmentPayload['Worker'] = [assignedWorker.id];
-    if (targetSite?.id) {
-      // ONLY write relational 'Sites' field to eliminate 422 retry on legacy 'Site' text column
-      assignmentPayload['Sites'] = [targetSite.id];
-    }
+    if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
 
     const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
     const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
@@ -851,7 +1045,6 @@ async function processMediaBatch(batch) {
 
     await sendWhatsAppMessage(dispatchTarget, dispatchConfirmation);
 
-    // Persist media record referencing the target court with transcribed speech
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const storageResult = storageResults[i];
@@ -868,15 +1061,14 @@ async function processMediaBatch(batch) {
       });
     }
 
-    return; // Cross-site dispatch complete; do not mutate RCOR installation milestones
+    return;
   }
 
   // ------------------------------------------------------------------
-  // 5. STANDARD ON-SITE AUDIT EXECUTION
+  // BRANCH E: STANDARD ON-SITE AUDIT EXECUTION
   // ------------------------------------------------------------------
   let replyText = forensicAudit.whatsapp_status_text;
 
-  // Environmental safety tripwire append (Outdoor only)
   if (currentMode === 'INSTALLATION' && site && !indoorSite) {
     const coords = await resolveCoordinates(site);
     if (coords) {
@@ -894,13 +1086,11 @@ async function processMediaBatch(batch) {
     }
   }
 
-  // Dispatch status card to WhatsApp
   const ok = await sendWhatsAppMessage(dispatchTarget, replyText);
   if (!ok && dispatchTarget !== fromPhone && fromPhone) {
     await sendWhatsAppMessage(fromPhone, replyText);
   }
 
-  // Persist inbound media with transcribed speech
   const inboundRecordIds = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
@@ -919,7 +1109,6 @@ async function processMediaBatch(batch) {
     if (inboundRecord?.id) inboundRecordIds.push(inboundRecord.id);
   }
 
-  // Write single forensic report to Reports 2
   const reportsPayload = {
     'Inbound Messages 2': inboundRecordIds,
     'Sites': site ? [site.id] : [],
@@ -935,7 +1124,6 @@ async function processMediaBatch(batch) {
 
   const reportRecord = await airtableWriteWithAutoDrop('Reports 2', reportsPayload);
 
-  // Closed-loop dispatch to Daily Assignments for maintenance inspections with defects
   const isMaintenanceInspection = currentMode === 'MAINTENANCE' || currentMode === 'SPOT_VISIT';
   const hasActiveDefects = (forensicAudit.action_items && forensicAudit.action_items.length > 0) ||
                            forensicAudit.status_observed === 'ACTION_REQUIRED' ||
@@ -958,16 +1146,13 @@ async function processMediaBatch(batch) {
     };
 
     if (worker?.id) assignmentPayload['Worker'] = [worker.id];
-    if (site) {
-      assignmentPayload['Sites'] = [site.id];
-    }
+    if (site) assignmentPayload['Sites'] = [site.id];
     if (reportRecord?.id) assignmentPayload['Origin Report'] = [reportRecord.id];
 
     await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
     console.log(`[Work Order Dispatched] Ticket created for ${cumulativeContext.siteName}`);
   }
 
-  // Update Parent Digital Twin (Sites Table)
   if (site) {
     const nowIso = new Date().toISOString();
     const sitePatch = {
@@ -988,7 +1173,6 @@ async function processMediaBatch(batch) {
       const newlyVerified = (forensicAudit.verified_gates || []).map(g => `Gate ${g}`);
       let allClearedGates = Array.from(new Set([...previouslyCleared, ...newlyVerified]));
 
-      // Transient Gate 12 Demotion
       if (forensicAudit.needs_attention_gates?.includes(12)) {
         allClearedGates = allClearedGates.filter(g => g !== 'Gate 12');
         delete updatedTimestamps['Gate 12'];
@@ -1018,7 +1202,7 @@ async function processMediaBatch(batch) {
 }
 
 // ====================================================================
-// 8. WEBHOOK ROUTING & INGESTION ENGINE
+// 9. WEBHOOK ROUTING & INGESTION ENGINE
 // ====================================================================
 
 app.get('/webhook', (req, res) => {
@@ -1060,7 +1244,6 @@ app.post('/webhook', async (req, res) => {
 
     if (!message) return;
 
-    // A. Parse Group Hive JID vs. Individual Sender Phone
     const rawFrom = message.from || '';
     const rawAuthor = message.author || message.participant || '';
     const rawChatId = message.chat_id || message.group_id || changes?.metadata?.phone_number_id || '';
@@ -1084,10 +1267,8 @@ app.post('/webhook', async (req, res) => {
       }
     };
 
-    // B. Resolve Court Digital Twin
     let site = await lookupSite(groupJid || fromPhone);
 
-    // C. Multi-Tier Bouncer
     const worker = fromPhone ? await lookupWorker(fromPhone) : null;
     const isBoundGroupMember = Boolean(site && isGroupMessage);
     const isAuthorizedClient = !worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE';
@@ -1418,20 +1599,35 @@ app.post('/webhook', async (req, res) => {
             `• */map* — GPS navigation link\n` +
             `• */nearby* — Nearby service calls (maintenance)\n` +
             `• Drop a WhatsApp location pin to check in on site.\n` +
-            `• Send photos, videos, or voice memos anytime to log work.\n` +
-            `• Forward partner texts or voice memos to log Work Orders directly into Daily Assignments.`;
+            `• Send voice notes to log work orders or spoken ticket closeouts.`;
           await dispatchReply(helpCard);
           return;
         }
       }
 
-      // Autonomous Dispatch Triage for forwarded/unstructured texts
+      // ------------------------------------------------------------------
+      // TEXT DISPATCH & CLOSEOUT TRIAGE
+      // ------------------------------------------------------------------
       const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || (site && site.fields['Workflow Mode'] !== 'INSTALLATION');
 
       if (isDirectOrAdmin && rawText.length > 6) {
         console.log(`[Dispatch Triage] Evaluating text: "${rawText}"`);
         try {
           const triage = await triageDispatchText(rawText, worker, site);
+
+          if (triage && triage.intent === 'WORK_ORDER_CLOSEOUT') {
+            await executeWorkOrderCloseout({
+              site,
+              targetCourtName: triage.matched_site_name,
+              ticketId: triage.ticket_id,
+              resolutionNotes: triage.resolution_summary || 'Task completed and verified.',
+              worker,
+              dispatchTarget,
+              fromPhone
+            });
+            return;
+          }
+
           if (triage && triage.is_work_order) {
             let targetSite = null;
             if (triage.matched_site_name) {
@@ -1441,7 +1637,6 @@ app.post('/webhook', async (req, res) => {
               targetSite = site;
             }
 
-            // Check if worker was named in text
             let assignedWorker = worker;
             if (triage.suggested_worker_name) {
               const namedWorker = await lookupWorkerByName(triage.suggested_worker_name);
@@ -1462,15 +1657,12 @@ app.post('/webhook', async (req, res) => {
               'Assignment Type': triage.assignment_type || 'Service',
               'Priority': triage.priority || 'Medium',
               'Source': source,
-              'Status': 'Open',
+              'Status': triage.intent === 'PRE_TOURNAMENT_AUDIT' ? 'Scheduled' : 'Open',
               'Notes': triage.notes
             };
 
             if (assignedWorker?.id) assignmentPayload['Worker'] = [assignedWorker.id];
-            if (targetSite?.id) {
-              // Target only relational 'Sites' field
-              assignmentPayload['Sites'] = [targetSite.id];
-            }
+            if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
 
             const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
             const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
@@ -1530,7 +1722,6 @@ app.post('/webhook', async (req, res) => {
 
     const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
 
-    // Buffer into in-memory debouncer map
     const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
 
     if (!mediaDebounceQueues.has(queueKey)) {
@@ -1581,10 +1772,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.11', engine: 'Titan OS V4.5.11 (Calibrated Triage & Speech Transcription)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.12', engine: 'Titan OS V4.5.12 (Punchdown Closeout & Concierge)' });
 });
 
-// Explicit 0.0.0.0 host binding for Docker/Render container routing
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.11 Clean Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.12 Clean Engine listening on Port 3000`);
 });
