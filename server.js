@@ -1,13 +1,17 @@
 /**
- * TITAN OS V4.5.6 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
- * Production Build — Map Cache Decoding, Dew Point Chemistry & Voice Telemetry
+ * TITAN OS V4.5.7 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
+ * Production Build — Multilingual Ledger Translation, Indoor/Outdoor Telemetry & Voice Memos
  * 
  * Architecture Features:
  * - Meta WhatsApp Cloud API v21.0 with HMAC SHA-256 verification
  * - Google Gemini 2.5 Flash with clamped zero-thinking budget (ZDR compliance)
+ * - Multilingual Engine: Ingests English, Spanish, Kiswahili/Sheng, Hindi, Punjabi, Gujarati & Hinglish
+ * - English Ledger Normalization: Translates all DB records (Action Items, Summaries, Notes) into English for INOC
+ * - Field Edge Language Mirroring: Outbound WhatsApp status cards respond in the worker's native tongue
+ * - Indoor vs. Outdoor Climate Engine: Bypasses wind/rain halts for indoor facilities; audits indoor ceiling clearance & ventilation
+ * - Hyperlocal Weather & Dew Point Engine: Sub-50ms Open-Meteo telemetry (/w, /weather) for outdoor sites
+ * - Microclimate Tripwires: Gate 7 wind gusts (>37 km/h) & Gate 9 surface condensation holds
  * - Map Cache Base64 Decoder: Auto-extracts {lat, lng} from Airtable Google Maps cache
- * - Hyperlocal Weather & Dew Point Engine: Sub-50ms Open-Meteo telemetry (/w, /weather)
- * - Microclimate Tripwires: Gate 7 wind gusts (>37 km/h) & Gate 9 dew point condensation
  * - Clustered Maintenance Sweeps: In-memory Haversine distance dispatch routing (/nearby)
  * - Proof-of-Presence Check-in: 300m geofence verification on native WhatsApp location drops
  * - Native Voice Note Ingestion: Audio walkthroughs & spoken defect reports evaluated directly
@@ -81,18 +85,31 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
      • Foundation Slab (Gate 1) must be cured and level before Frame Anchor Bolts (Gate 2) are verified.
      • Frame Uprights (Gate 2) must be anchored before Glass Seating (Gate 4) can be verified.
    - Concurrent tasks (e.g., Gate 3 Mesh Panels, Gate 5 Lighting Masts, Gate 6 Sub-base, Gate 7 Turf) can clear in parallel or out of order.
-3. WEAR, RUST & MATERIAL INTEGRITY GUARDS:
+3. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
+   - If site context indicates an INDOOR court:
+     • Verify minimum vertical ceiling clearance (min 6.0m clear height, 8.0m preferred for competition). Obstructions (beams, HVAC ducts, low-hanging pendant lights) must be flagged in Gate 5.
+     • Inspect concrete vapor barrier and indoor slab moisture (sweating concrete ruins Gate 7 adhesive).
+     • Inspect indoor luminaire glare reduction and horizontal lux consistency across court floor.
+     • Verify ventilation/airflow exhaust during polyurethane adhesive (Gate 7) curing.
+   - If site context indicates an OUTDOOR court:
+     • Inspect slab drainage slope, perimeter curbstone run-off, and expansion gaps.
+     • Enforce corrosion protection audits on exposed hardware.
+4. WEAR, RUST & MATERIAL INTEGRITY GUARDS:
    - RUST & CORROSION AUDIT: Inspect steel uprights, baseplates, anchor bolts, and mesh weld joints. Active rust, flaking coating, or weld oxidation immediately flags Gate 2/3 as ACTION_REQUIRED.
    - TURF WEAR & FRAYING: Inspect carpet roll joints and line cuts. Exposed backing, unbonded seam tape, or unraveling fibers flags Gate 7/8 as ACTION_REQUIRED.
    - NET & STRAP CALIBRATION: Inspect posts, ratchet winch, cable, headband, and center strap. Center height sagging below 88 cm (or post height below 92 cm) flags Gate 11 as ACTION_REQUIRED.
-4. TRANSIENT GATE 12 DEMOTION: Any active hand tools, discarded wire trimmings, loose hardware, orange buckets, or construction debris automatically drops Gate 12 (Site Cleanliness), placing the court into ACTION_REQUIRED.
+5. TRANSIENT GATE 12 DEMOTION: Any active hand tools, discarded wire trimmings, loose hardware, orange buckets, or construction debris automatically drops Gate 12 (Site Cleanliness), placing the court into ACTION_REQUIRED.
+6. MULTILINGUAL INGESTION & LEDGER ENGLISH STANDARDIZATION:
+   - Comprehend speech, audio voice memos, and text in English, Spanish (Español), Swahili / Sheng (Kenya), Hindi, Punjabi, Gujarati, and Hinglish (India).
+   - LEDGER STANDARDIZATION (CRITICAL): All internal data fields ("action_items", "worker_summary", "site_conditions", "defect_telemetry", "action_intent") MUST BE WRITTEN IN CONCISE, PROFESSIONAL ENGLISH for Airtable and executive leadership visibility.
+   - FIELD EDGE MIRRORING: The "whatsapp_status_text" MUST be generated in the primary language detected from the user (e.g., reply in Spanish if spoken/written in Spanish, Swahili if in Swahili, Hindi/Punjabi if in Hindi/Punjabi, English if in English), keeping Titan OS operational formatting.
 
 ### THE 12 PHYSICAL INSTALLATION MILESTONES (CONCURRENT & INDEPENDENT):
-- Gate 1: Foundation & Anchor Slab (cured concrete, level surface, dry, no chemical puddling)
+- Gate 1: Foundation & Anchor Slab (cured concrete, level surface, dry, no chemical puddling, indoor vapor barrier intact)
 - Gate 2: Steel Frame Assembly (vertical uprights anchored, corner posts square, zero rust/corrosion)
 - Gate 3: Structural Mesh Panels (electro-welded mesh panels flush, welds intact, zero wire fraying/rust)
 - Gate 4: Toughened Glass Seating (10mm/12mm tempered glass seated on neoprene gaskets, tabs aligned)
-- Gate 5: Light Masts & LED Luminaires (floodlight columns erected, wiring channeled, fixtures seated)
+- Gate 5: Light Masts & LED Luminaires (floodlight columns erected, wiring channeled, fixtures seated, indoor ceiling clearance verified)
 - Gate 6: Underlayment & Sub-base Membrane (drainage/shockpad flat, zero wrinkling, seams prepped)
 - Gate 7: Padel Turf Seaming & Gluing (monofilament rolls laid, 300mm seam tape glued, zero fiber fraying/lift)
 - Gate 8: Regulation Line Cutting (white line markings cut in, glued flush with turf surface)
@@ -104,44 +121,56 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 ### OUTPUT SPECIFICATION:
 You must output strictly valid JSON matching this schema:
 {
+  "detected_language": "string (e.g. English, Spanish, Swahili, Hindi, Punjabi, Gujarati)",
+  "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
   "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED",
   "action_intent": "HAZARD_BLOCKER" | "DEFECT_REPORT" | "MILESTONE_CLEARANCE",
   "verified_gates": [array of integers representing newly cleared gates visible in this footage, e.g. [3, 5]],
   "needs_attention_gates": [array of integers representing blocked/failed gates, e.g. [2, 12]],
-  "site_conditions": "Short string noting environmental factors, weather, slab moisture, lighting.",
+  "site_conditions": "Short string in English noting environment, lighting, moisture, slab conditions.",
   "action_items": [
-    "Specific mechanical failure, rust, fraying, or calibration defect 1",
-    "Specific mechanical failure, rust, fraying, or calibration defect 2"
+    "Specific mechanical failure, rust, fraying, or calibration defect 1 in English",
+    "Specific mechanical failure, rust, fraying, or calibration defect 2 in English"
   ],
   "defect_telemetry": {
     "rust_detected": boolean,
-    "rust_locations": ["string array of affected components"],
+    "rust_locations": ["string array of affected components in English"],
     "fraying_detected": boolean,
-    "fraying_locations": ["string array of affected areas"],
+    "fraying_locations": ["string array of affected areas in English"],
     "net_defect_detected": boolean,
-    "net_calibration_notes": "string"
+    "net_calibration_notes": "string in English",
+    "ceiling_clearance_hazard": boolean
   },
-  "worker_summary": "1-2 sentence executive summary of site status.",
-  "whatsapp_status_text": "Plaintext WhatsApp card matching Titan OS operational formatting."
+  "worker_summary": "1-2 sentence executive summary in English for the database ledger.",
+  "whatsapp_status_text": "Plaintext WhatsApp card matching Titan OS operational formatting written in the user's detected language."
 }
 `;
 
 const MAINTENANCE_TRIAGE_PROMPT = `
-You are the Titan OS Maintenance & Incident Triage Engine. You evaluate multimodal edge media (videos, photos, and voice notes) submitted by facility managers, club executives, and VIP court owners (the "Joy Cannon" loop).
+You are the Titan OS Maintenance & Incident Triage Engine. You evaluate multimodal edge media (videos, photos, and spoken voice memos) submitted by facility managers, club executives, and VIP court owners (the "Joy Cannon" loop).
 
 Your objective is to identify asset degradation, mechanical failures, safety hazards, or client requests, assign SLA priorities, and generate structured dispatch tickets.
+
+### CORE OPERATING RULES:
+1. INDOOR VS. OUTDOOR AWARENESS:
+   - For INDOOR facilities: Check HVAC air conditioning drip lines, overhead condensation drips onto turf, indoor dust/lint accumulation on glass, and indoor halogen/LED ballast hums.
+   - For OUTDOOR facilities: Check wind-blown debris, perimeter sand erosion from rain run-off, algae/mildew growth on turf edges, and exterior glass environmental staining.
+2. MULTILINGUAL & LEDGER NORMALIZATION:
+   - Understand spoken or written reports in English, Spanish, Kiswahili/Sheng, Hindi, Punjabi, Gujarati, and Hinglish.
+   - All internal fields ("defects_identified", "action_items", "worker_summary", "site_conditions") MUST be translated and output in standard ENGLISH for Airtable records.
+   - The "whatsapp_status_text" must acknowledge the client/user in their native language with executive warmth and clarity.
 
 ### TRIAGE PRIORITY CLASSIFICATION:
 1. "CRITICAL" (P1 - Emergency Hazard / Immediate Shutdown):
    - Broken, chipped, or shattered tempered glass panels.
-   - Snapped net tension cable, exposed structural bolts, or structurally compromised frame uprights.
-   - Exposed electrical cabling or detached floodlight luminaire fixtures.
+   - Snapped net tension cable, exposed structural anchor bolts, or structurally compromised frame uprights.
+   - Exposed electrical wiring or detached luminaire fixtures.
    -> Sets status_observed to "HAZARD_OUT_OF_SERVICE" and hazard_detected to true.
 2. "HIGH" (P2 - Action Required / Playable Defect):
    - Excessive pile wear, unglued turf seams, or bare patches lacking silica sand infill.
    - Sagging net (center height < 88cm) or stripped ratchet winch mechanism.
    - Significant surface rust blooming on mesh panels or upright baseplates.
-   - Active debris or tool clutter on court surface.
+   - Indoor moisture condensation pooling on playing turf.
    -> Sets status_observed to "ACTION_REQUIRED".
 3. "MEDIUM" (P3 - Routine Service / Cosmetic Touchup):
    - Light sand migration, minor glass water spotting, or routine post-tournament sweep.
@@ -151,21 +180,23 @@ Your objective is to identify asset degradation, mechanical failures, safety haz
 ### OUTPUT SPECIFICATION:
 You must output strictly valid JSON matching this schema:
 {
+  "detected_language": "string (e.g. English, Spanish, Swahili, Hindi, Punjabi)",
+  "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
   "status_observed": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
   "priority": "CRITICAL" | "HIGH" | "MEDIUM",
   "assignment_type": "Emergency Repair" | "Spot Visit Punch" | "Service" | "Supply Delivery",
   "hazard_detected": boolean,
   "defects_identified": [
-    "Specific mechanical defect or request 1",
-    "Specific mechanical defect or request 2"
+    "Specific mechanical defect or request 1 in English",
+    "Specific mechanical defect or request 2 in English"
   ],
   "action_items": [
-    "Dispatch action item 1 with mechanical detail",
-    "Dispatch action item 2 with mechanical detail"
+    "Dispatch action item 1 with mechanical detail in English",
+    "Dispatch action item 2 with mechanical detail in English"
   ],
-  "site_conditions": "Short string on court environment, lighting, cleanliness.",
-  "worker_summary": "1-2 sentence concise executive operational summary.",
-  "whatsapp_status_text": "Plaintext WhatsApp response acknowledging report with Titan OS operational branding."
+  "site_conditions": "Short string on court environment in English.",
+  "worker_summary": "1-2 sentence concise executive operational summary in English.",
+  "whatsapp_status_text": "Plaintext WhatsApp response acknowledging report in user's detected language."
 }
 `;
 
@@ -179,6 +210,7 @@ const COMMAND_MAP = {
   '/summary': 'STATUS',
   '/w': 'WEATHER',
   '/weather': 'WEATHER',
+  '/clima': 'WEATHER',
   '/nearby': 'NEARBY_SWEEP',
   '/route': 'NEARBY_SWEEP',
   '/m': 'MODE_MAINTENANCE',
@@ -197,12 +229,26 @@ const COMMAND_MAP = {
   '/gps': 'LOCATION',
   '/?': 'HELP',
   '/h': 'HELP',
-  '/help': 'HELP'
+  '/help': 'HELP',
+  '/ayuda': 'HELP'
 };
 
 // ==========================================
 // 4. UTILITIES & RESILIENT STORAGE CLIENTS
 // ==========================================
+
+/**
+ * Checks whether a site is designated as an Indoor facility
+ */
+function isIndoorSite(site) {
+  if (!site) return false;
+  const fields = site.fields || site;
+  const env = (fields['Environment'] || fields['Site Type'] || fields['Type'] || '').toLowerCase();
+  const name = (fields['Site Name'] || '').toLowerCase();
+  const notes = (fields['Last Note'] || '').toLowerCase();
+
+  return env.includes('indoor') || name.includes('indoor') || notes.includes('indoor');
+}
 
 /**
  * Extracts {lat, lon} floats from Airtable Map Cache, raw strings, GPS pairs, or Google Maps URLs
@@ -229,7 +275,7 @@ function extractCoordinates(rawLocationOrSite, mapCache = null) {
         };
       }
     } catch (e) {
-      // Map Cache not base64 JSON; fallback to regex
+      // Fall through to regex if not base64 JSON
     }
   }
 
@@ -452,14 +498,18 @@ async function evaluateCourtMedia(mediaBuffer, mimeType, cumulativeContext = {})
   const isMaintenanceMode = cumulativeContext.workflowMode === 'MAINTENANCE' || cumulativeContext.workflowMode === 'SPOT_VISIT';
   const systemInstruction = isMaintenanceMode ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT;
 
+  const facilityTypeDesc = cumulativeContext.isIndoor ? 'INDOOR CLUB / WAREHOUSE FACILITY' : 'OUTDOOR FIELD FACILITY';
+
   const auditContextText = isMaintenanceMode
     ? `AUDIT CONTEXT (ASSET MAINTENANCE & JOY CANNON TRIAGE):
 Site Name: ${cumulativeContext.siteName || 'Operational Court'}
+Facility Environment: ${facilityTypeDesc}
 Current Workflow Mode: ${cumulativeContext.workflowMode || 'MAINTENANCE'}
 Site Current Status: ${cumulativeContext.siteStatus || 'ACTIVE'}
 Open Work Orders: ${cumulativeContext.openTickets || 0}`
     : `AUDIT CONTEXT (CONSTRUCTION & INSTALLATION AUDIT):
 Site Name: ${cumulativeContext.siteName || 'Under Construction'}
+Facility Environment: ${facilityTypeDesc}
 Current Workflow Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilestones || [])}
 Known Milestone Timestamps: ${JSON.stringify(cumulativeContext.milestoneTimestamps || {})}`;
@@ -599,6 +649,8 @@ app.post('/webhook', async (req, res) => {
       ? 'Joy Cannon (Client)'
       : (site?.fields['Workflow Mode'] === 'SPOT_VISIT' ? 'Exec Visit (Bob)' : 'Dispatch');
 
+    const indoorSite = isIndoorSite(site);
+
     // ==========================================
     // 7. LOCATION PIN-DROP (PROOF-OF-PRESENCE + WEATHER CHECK)
     // ==========================================
@@ -631,18 +683,23 @@ app.post('/webhook', async (req, res) => {
         let checkinResponse = `🎯 *TITAN OS | PRESENCE CONFIRMED*\n\n` +
           `👤 *Crew:* ${workerName}\n` +
           `🏟️ *Court:* ${site.fields['Site Name']}\n` +
+          `🏢 *Environment:* ${indoorSite ? 'Indoor Facility' : 'Outdoor Facility'}\n` +
           `⏱️ *Time:* ${timestamp}\n` +
           `📏 *Radius:* ${Math.round(distanceMeters)}m from court center\n` +
           `🔒 *Ledger:* Shift timestamp sealed on digital twin.`;
 
-        // Proactive weather sweep on check-in
-        const weather = await getHyperlocalWeather(siteCoords.lat, siteCoords.lon);
-        if (weather) {
-          if (weather.windGusts > 37) {
-            checkinResponse += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 7 glass rigging suspended.`;
-          } else if (weather.humidity > 85 || weather.precip > 0 || (weather.temp - weather.dewPoint) <= 2) {
-            checkinResponse += `\n\n⚠️ *WEATHER NOTICE:* High moisture/condensation risk (${weather.humidity}% RH). Hold Gate 9 turf adhesive.`;
+        // Proactive environmental check on check-in (Outdoor only)
+        if (!indoorSite) {
+          const weather = await getHyperlocalWeather(siteCoords.lat, siteCoords.lon);
+          if (weather) {
+            if (weather.windGusts > 37) {
+              checkinResponse += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Glass crane rigging suspended.`;
+            } else if (weather.humidity > 85 || weather.precip > 0 || (weather.temp - weather.dewPoint) <= 2) {
+              checkinResponse += `\n\n⚠️ *WEATHER NOTICE:* High moisture/condensation risk (${weather.humidity}% RH). Hold Gate 9 turf adhesive.`;
+            }
           }
+        } else {
+          checkinResponse += `\n\n🏢 *INDOOR PROTOCOL:* Outdoor weather bypassed. Maintain exhaust ventilation during Gate 7 turf seaming.`;
         }
 
         await sendWhatsAppMessage(fromPhone, checkinResponse);
@@ -682,10 +739,12 @@ app.post('/webhook', async (req, res) => {
           const siteLoc = targetSite.fields['Site location'] || 'Location pending';
           const mapUrl = formatMapUrl(targetSite);
           const mode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
+          const isTargetIndoor = isIndoorSite(targetSite);
 
           let welcomeCard = `✅ *TITAN OS | SITE TWIN BOUND*\n` +
             `🏟️ *Court:* *${targetSite.fields['Site Name']}*\n` +
             `⚙️ *Mode:* ${mode}\n` +
+            `🏢 *Type:* ${isTargetIndoor ? 'Indoor Facility' : 'Outdoor Facility'}\n` +
             `📫 *Location:* ${siteLoc}\n`;
 
           if (mapUrl) {
@@ -698,7 +757,7 @@ app.post('/webhook', async (req, res) => {
             `• */nearby* — Proximity Route Sweeps for maintenance\n` +
             `• */s* — Live Milestone & Punch List Status\n` +
             `• Drop a WhatsApp Location Pin to check in on-site.\n` +
-            `• Send photos, videos, or voice memos directly for instant audit.`;
+            `• Send photos, videos, or voice memos directly in ANY language for instant audit.`;
 
           await sendWhatsAppMessage(fromPhone, welcomeCard);
           return;
@@ -732,8 +791,16 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        // /w, /weather — HYPERLOCAL ENVIRONMENTAL TELEMETRY
+        // /w, /weather, /clima — HYPERLOCAL ENVIRONMENTAL TELEMETRY
         if (intent === 'WEATHER') {
+          if (indoorSite) {
+            await sendWhatsAppMessage(
+              fromPhone,
+              `🏢 *TITAN OS | INDOOR FACILITY NOTICE*\n*${site.fields['Site Name']}* is logged as an Indoor Facility.\nOutdoor precipitation & wind tripwires are bypassed. Verify HVAC condensation and minimum 6.0m vertical ceiling clearance.`
+            );
+            return;
+          }
+
           const coords = extractCoordinates(site);
           if (!coords) {
             await sendWhatsAppMessage(
@@ -834,10 +901,10 @@ app.post('/webhook', async (req, res) => {
           if (mode === 'MAINTENANCE' || mode === 'SPOT_VISIT') {
             const condition = site.fields['Maintenance Condition'] || '🟢 Nominal';
             const openTickets = site.fields['Open Tickets'] || 0;
-            progressCard = `🛠️ *TITAN OS | ASSET MAINTENANCE STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* ${mode}\n\n🩺 *Condition:* ${condition}\n🎫 *Open Tickets:* ${openTickets}\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n\n🔗 *Last Note:* ${site.fields['Last Note'] || 'None'}`;
+            progressCard = `🛠️ *TITAN OS | ASSET MAINTENANCE STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* ${mode}\n🏢 *Type:* ${indoorSite ? 'Indoor' : 'Outdoor'}\n\n🩺 *Condition:* ${condition}\n🎫 *Open Tickets:* ${openTickets}\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n\n🔗 *Last Note:* ${site.fields['Last Note'] || 'None'}`;
           } else {
             const cleared = site.fields['Cleared Milestones'] || [];
-            progressCard = `🏗️ *TITAN OS | BUILD TWIN STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* INSTALLATION\n\n🎯 *Verified Milestones:* ${cleared.length}/12\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n⏱️ *Started:* ${site.fields['Install Started'] || 'Not Initiated'}\n\n🔗 *Last Intent:* ${site.fields['Last Intent'] || 'None'}`;
+            progressCard = `🏗️ *TITAN OS | BUILD TWIN STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* INSTALLATION\n🏢 *Type:* ${indoorSite ? 'Indoor' : 'Outdoor'}\n\n🎯 *Verified Milestones:* ${cleared.length}/12\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n⏱️ *Started:* ${site.fields['Install Started'] || 'Not Initiated'}\n\n🔗 *Last Intent:* ${site.fields['Last Intent'] || 'None'}`;
           }
 
           await sendWhatsAppMessage(fromPhone, progressCard);
@@ -872,7 +939,7 @@ app.post('/webhook', async (req, res) => {
             `*/i* — Switch to Installation Mode\n` +
             `*/l <Name>* — Bind chat to Court Twin\n` +
             `*Location Pin* — Send native WhatsApp location for proof-of-presence\n` +
-            `*Voice Note* — Send spoken memos directly for instant AI transcription & audit\n\n` +
+            `*Voice Note* — Send spoken memos directly in English, Spanish, Swahili, or Hindi for AI audit\n\n` +
             `_Send photo or video walkthroughs directly for AI forensic audit._`;
           await sendWhatsAppMessage(fromPhone, helpCard);
           return;
@@ -892,7 +959,7 @@ app.post('/webhook', async (req, res) => {
     const mediaObj = message[message.type];
     const mediaId = mediaObj.id;
     const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
-    const caption = mediaObj.caption || (isAudio ? '[Spoken Voice Memo]' : '');
+    const caption = mediaObj.caption || (isAudio ? '[Spoken Edge Telemetry Memo]' : '');
 
     const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
@@ -941,7 +1008,8 @@ app.post('/webhook', async (req, res) => {
       siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
       openTickets: site?.fields?.['Open Tickets'] || 0,
       clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
-      milestoneTimestamps: parsedTimestamps
+      milestoneTimestamps: parsedTimestamps,
+      isIndoor: indoorSite
     };
 
     const [storageResult, forensicAudit] = await Promise.all([
@@ -954,17 +1022,17 @@ app.post('/webhook', async (req, res) => {
         ? `🛠️ *TITAN MAINTENANCE REPORT*\n📍 *Status:* ${forensicAudit.status_observed}\n🚨 *Priority:* ${forensicAudit.priority || 'MEDIUM'}\n${forensicAudit.worker_summary}`
         : `📊 *TITAN OS AUDIT*\n📍 *Status:* ${forensicAudit.status_observed}\n🎯 *Gates:* ${forensicAudit.verified_gates?.length || 0}/12\n${forensicAudit.worker_summary}`);
 
-    // Automated Weather & Dew Point Tripwire Injection on Installation Walkthroughs
-    if (currentMode === 'INSTALLATION' && site) {
+    // Automated Climate Safety Tripwires (Outdoor Only)
+    if (currentMode === 'INSTALLATION' && site && !indoorSite) {
       const coords = extractCoordinates(site);
       if (coords) {
         const weather = await getHyperlocalWeather(coords.lat, coords.lon);
         if (weather) {
           const dewDelta = weather.temp - weather.dewPoint;
           if (weather.windGusts > 37) {
-            replyText += `\n\n⛔ *SAFETY HALT:* Wind gusts are ${weather.windGusts} km/h (>20 kts). Gate 7 glass rigging suspended.`;
+            replyText += `\n\n⛔ *SAFETY HALT:* Wind gusts are ${weather.windGusts} km/h (>20 kts). Glass crane rigging suspended.`;
           } else if (weather.humidity > 85 || weather.precip > 0 || dewDelta <= 2) {
-            replyText += `\n\n⚠️ *WEATHER NOTICE:* High moisture/condensation risk (Dew point delta ${dewDelta.toFixed(1)}°C). Gate 9 turf glue hold in effect.`;
+            replyText += `\n\n⚠️ *WEATHER NOTICE:* Surface condensation risk (Dew point delta ${dewDelta.toFixed(1)}°C). Gate 9 turf glue hold in effect.`;
           }
         }
       }
@@ -973,7 +1041,7 @@ app.post('/webhook', async (req, res) => {
     await sendWhatsAppMessage(fromPhone, replyText);
 
     // ==========================================
-    // 10. ASYNCHRONOUS RELATIONAL PERSISTENCE
+    // 10. ASYNCHRONOUS RELATIONAL PERSISTENCE (ENGLISH STANDARDIZED)
     // ==========================================
 
     const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
@@ -1092,9 +1160,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.6', engine: 'Titan OS V4.5.6 (Voice, Weather & Map Cache Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.7', engine: 'Titan OS V4.5.7 (Multilingual, Indoor/Outdoor & Map Engine)' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Titan OS V4.5.6 Clean Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.7 Clean Engine listening on Port ${PORT}`);
 });
