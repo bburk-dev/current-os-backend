@@ -1,22 +1,23 @@
 /**
- * TITAN OS V4.4 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
- * Production Build — Hardened Media Ingestion & Token Guarding
+ * TITAN OS V4.5.1 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
+ * Production Build — Parallel Gate Architecture, Dual-Stream AI Triage & State Machine
  * 
  * Architecture Features:
  * - Meta WhatsApp Cloud API v21.0 with HMAC SHA-256 verification
  * - Hybrid Supabase Storage (bypasses 403 Invalid Compact JWS for sb_secret_)
  * - Google Gemini 2.5 Flash with clamped zero-thinking budget
- * - Industrial God Schema: 12-Gate sequence, Rust, Fraying & Net Calibration
- * - Cumulative Memory with Transient Gate 12 Cleanliness Demotion
+ * - Parallel Gate Architecture: Concurrency-aware construction verification (Set Union memory)
+ * - Maintenance & Joy Cannon Triage: Defect logging, P1/P2/P3 classification & auto-dispatch
+ * - Emergency Court Protection: Automatic court pause on hazardous defect detection
+ * - Multi-Tier Bouncer: Authorizes field workers and Joy Cannon VIP facility clients
  * - Zero-Token Headless Command Aliasing (/s, /sum, /m, /i, /spot, /l)
  * - Self-Healing Recursive 422 Airtable Schema Auto-Drop Wrapper
  */
 
-// Safely load dotenv if present; Render injects process.env natively
 try {
   require('dotenv').config();
 } catch (e) {
-  // Dotenv is not installed in package.json; continuing with native process.env
+  // Dotenv is injected natively by Render
 }
 
 const express = require('express');
@@ -25,7 +26,6 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Capture raw body buffer for zero-trust HMAC SHA-256 verification
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
@@ -62,21 +62,31 @@ const CONFIG = {
 };
 
 // ==========================================
-// 2. INDUSTRIAL FORENSIC GOD SCHEMA (PROMPT)
+// 2. INDUSTRIAL FORENSIC GOD SCHEMAS (PROMPTS)
 // ==========================================
+
+/**
+ * SCHEMA A: Construction & Installation (Parallel Milestone Evaluation)
+ */
 const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction and asset maintenance. You inspect multimodal edge media (continuous video walkthroughs or photo batches) against strict mechanical and safety tolerances.
+You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media (continuous video walkthroughs or photo batches) against strict mechanical and safety tolerances.
 
 ### CORE OPERATING RULES:
 1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected. Strictly ignore background courts or adjacent club infrastructure.
-2. DETERMINISTIC HIERARCHY: A downstream gate CANNOT be verified if an upstream prerequisite is incomplete, uncured, or structurally compromised.
+2. PARALLEL EXECUTION & REAL-WORLD CONCURRENCY:
+   - Gates are NOT a strict waterfall. Different sub-trades work simultaneously on site.
+   - Any milestone meeting its quality standard must be verified independently, regardless of the sequence in which footage is received.
+   - ONLY hard structural prerequisites block a gate:
+     • Foundation Slab (Gate 1) must be cured and level before Frame Anchor Bolts (Gate 2) are verified.
+     • Frame Uprights (Gate 2) must be anchored before Glass Seating (Gate 4) can be verified.
+   - Concurrent tasks (e.g., Gate 3 Mesh Panels, Gate 5 Lighting Masts, Gate 6 Sub-base, Gate 7 Turf) can clear in parallel or out of order.
 3. WEAR, RUST & MATERIAL INTEGRITY GUARDS:
-   - RUST & CORROSION AUDIT: Inspect steel uprights, baseplates, anchor bolts, and electro-welded wire mesh intersection points. Any active surface rust blooming, powder-coat flaking, or weld oxidation immediately flags Gate 2/3 as ACTION_REQUIRED.
-   - TURF WEAR & FRAYING: Inspect carpet roll joints and line cuts. Any exposed backing, unraveling/fraying monofilament fibers, or unbonded seam tape flags Gate 7/8 as ACTION_REQUIRED.
-   - NET & STRAP CALIBRATION: Inspect net posts, internal ratchet winch, top tension steel cable, headband, and center strap. Any cable fraying, torn netting mesh, twisted headband, or center height sagging below 88 cm (or post height below 92 cm) flags Gate 11 as ACTION_REQUIRED.
+   - RUST & CORROSION AUDIT: Inspect steel uprights, baseplates, anchor bolts, and mesh weld joints. Active rust, flaking coating, or weld oxidation immediately flags Gate 2/3 as ACTION_REQUIRED.
+   - TURF WEAR & FRAYING: Inspect carpet roll joints and line cuts. Exposed backing, unbonded seam tape, or unraveling fibers flags Gate 7/8 as ACTION_REQUIRED.
+   - NET & STRAP CALIBRATION: Inspect posts, ratchet winch, cable, headband, and center strap. Center height sagging below 88 cm (or post height below 92 cm) flags Gate 11 as ACTION_REQUIRED.
 4. TRANSIENT GATE 12 DEMOTION: Any active hand tools, discarded wire trimmings, loose hardware, orange buckets, or construction debris automatically drops Gate 12 (Site Cleanliness), placing the court into ACTION_REQUIRED.
 
-### THE 12 SEQUENTIAL PHYSICAL GATES:
+### THE 12 PHYSICAL INSTALLATION MILESTONES (CONCURRENT & INDEPENDENT):
 - Gate 1: Foundation & Anchor Slab (cured concrete, level surface, dry, no chemical puddling)
 - Gate 2: Steel Frame Assembly (vertical uprights anchored, corner posts square, zero rust/corrosion)
 - Gate 3: Structural Mesh Panels (electro-welded mesh panels flush, welds intact, zero wire fraying/rust)
@@ -95,8 +105,8 @@ You must output strictly valid JSON matching this schema:
 {
   "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED",
   "action_intent": "HAZARD_BLOCKER" | "DEFECT_REPORT" | "MILESTONE_CLEARANCE",
-  "verified_gates": [array of integers representing cleared gates, e.g. [1, 4, 5]],
-  "needs_attention_gates": [array of integers representing blocked/failed gates, e.g. [2, 3, 7, 11, 12]],
+  "verified_gates": [array of integers representing newly cleared gates visible in this footage, e.g. [3, 5]],
+  "needs_attention_gates": [array of integers representing blocked/failed gates, e.g. [2, 12]],
   "site_conditions": "Short string noting environmental factors, weather, slab moisture, lighting.",
   "action_items": [
     "Specific mechanical failure, rust, fraying, or calibration defect 1",
@@ -115,33 +125,70 @@ You must output strictly valid JSON matching this schema:
 }
 `;
 
+/**
+ * SCHEMA B: Asset Maintenance, Spot Audits & Joy Cannon Triage
+ */
+const MAINTENANCE_TRIAGE_PROMPT = `
+You are the Titan OS Maintenance & Incident Triage Engine. You evaluate multimodal edge media (videos, photos, and voice notes) submitted by facility managers, club executives, and VIP court owners (the "Joy Cannon" loop).
+
+Your objective is to identify asset degradation, mechanical failures, safety hazards, or client requests, assign SLA priorities, and generate structured dispatch tickets.
+
+### TRIAGE PRIORITY CLASSIFICATION:
+1. "CRITICAL" (P1 - Emergency Hazard / Immediate Shutdown):
+   - Broken, chipped, or shattered tempered glass panels.
+   - Snapped net tension cable, exposed structural bolts, or structurally compromised frame uprights.
+   - Exposed electrical cabling or detached floodlight luminaire fixtures.
+   -> Sets status_observed to "HAZARD_OUT_OF_SERVICE" and hazard_detected to true.
+2. "HIGH" (P2 - Action Required / Playable Defect):
+   - Excessive pile wear, unglued turf seams, or bare patches lacking silica sand infill.
+   - Sagging net (center height < 88cm) or stripped ratchet winch mechanism.
+   - Significant surface rust blooming on mesh panels or upright baseplates.
+   - Active debris or tool clutter on court surface.
+   -> Sets status_observed to "ACTION_REQUIRED".
+3. "MEDIUM" (P3 - Routine Service / Cosmetic Touchup):
+   - Light sand migration, minor glass water spotting, or routine post-tournament sweep.
+   - Supply delivery request (sand, balls, replacement straps).
+   -> Sets status_observed to "NOMINAL".
+
+### OUTPUT SPECIFICATION:
+You must output strictly valid JSON matching this schema:
+{
+  "status_observed": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
+  "priority": "CRITICAL" | "HIGH" | "MEDIUM",
+  "assignment_type": "Emergency Repair" | "Spot Visit Punch" | "Service" | "Supply Delivery",
+  "hazard_detected": boolean,
+  "defects_identified": [
+    "Specific mechanical defect or request 1",
+    "Specific mechanical defect or request 2"
+  ],
+  "action_items": [
+    "Dispatch action item 1 with mechanical detail",
+    "Dispatch action item 2 with mechanical detail"
+  ],
+  "site_conditions": "Short string on court environment, lighting, cleanliness.",
+  "worker_summary": "1-2 sentence concise executive operational summary.",
+  "whatsapp_status_text": "Plaintext WhatsApp response acknowledging report with Titan OS operational branding."
+}
+`;
+
 // ==========================================
 // 3. ZERO-TOKEN COMMAND ALIAS DICTIONARY
 // ==========================================
 const COMMAND_MAP = {
-  // Headless Status & Progress Inquiries
   '/s': 'STATUS',
   '/sum': 'STATUS',
   '/status': 'STATUS',
   '/summary': 'STATUS',
-
-  // Workflow Handover Modes
   '/m': 'MODE_MAINTENANCE',
   '/maint': 'MODE_MAINTENANCE',
   '/maintenance': 'MODE_MAINTENANCE',
-
   '/i': 'MODE_INSTALLATION',
   '/install': 'MODE_INSTALLATION',
-
   '/spot': 'MODE_SPOT_CHECK',
   '/sc': 'MODE_SPOT_CHECK',
   '/spotcheck': 'MODE_SPOT_CHECK',
-
-  // Site Twin Binding
   '/l': 'LINK_SITE',
   '/link': 'LINK_SITE',
-
-  // Help & Documentation
   '/?': 'HELP',
   '/h': 'HELP',
   '/help': 'HELP'
@@ -151,32 +198,16 @@ const COMMAND_MAP = {
 // 4. STORAGE & RESILIENT DATABASE CLIENTS
 // ==========================================
 
-/**
- * Hybrid Supabase Authorization Router
- * Resolves 403 Invalid Compact JWS exceptions on opaque sb_secret_ keys
- */
 function getSupabaseHeaders(contentType = 'application/json') {
   const key = CONFIG.supabase.serviceRoleKey;
-  const headers = {
-    'apikey': key
-  };
-
-  if (contentType) {
-    headers['Content-Type'] = contentType;
-  }
-
-  // Pass Authorization: Bearer ONLY for legacy JWTs (starts with eyJ).
-  // Opaque keys (sb_secret_...) are strictly routed via apikey header!
+  const headers = { 'apikey': key };
+  if (contentType) headers['Content-Type'] = contentType;
   if (key && key.startsWith('eyJ')) {
     headers['Authorization'] = `Bearer ${key}`;
   }
-
   return headers;
 }
 
-/**
- * Upload binary media buffer to Supabase Storage & generate 7-day signed token
- */
 async function uploadToSupabase(fileBuffer, mimeType) {
   const ext = mimeType.split('/')[1]?.split(';')[0] || 'mp4';
   const now = new Date();
@@ -185,7 +216,6 @@ async function uploadToSupabase(fileBuffer, mimeType) {
   const uuid = crypto.randomUUID();
   const storagePath = `${year}/${month}/${uuid}.${ext}`;
 
-  // 1. Stream file binary to inbound-media private bucket
   const uploadUrl = `${CONFIG.supabase.url}/storage/v1/object/${CONFIG.supabase.bucket}/${storagePath}`;
   const uploadRes = await fetch(uploadUrl, {
     method: 'POST',
@@ -198,7 +228,6 @@ async function uploadToSupabase(fileBuffer, mimeType) {
     throw new Error(`Supabase upload failed (${uploadRes.status}): ${errText}`);
   }
 
-  // 2. Generate 7-day pre-signed streaming URL
   const signUrl = `${CONFIG.supabase.url}/storage/v1/object/sign/${CONFIG.supabase.bucket}/${storagePath}`;
   const signRes = await fetch(signUrl, {
     method: 'POST',
@@ -212,18 +241,12 @@ async function uploadToSupabase(fileBuffer, mimeType) {
   }
 
   const signData = await signRes.json();
-  const signedUrl = `${CONFIG.supabase.url}/storage/v1${signData.signedURL}`;
-
-  return { storagePath, signedUrl };
+  return { storagePath, signedUrl: `${CONFIG.supabase.url}/storage/v1${signData.signedURL}` };
 }
 
-/**
- * Universal Recursive 422 Airtable Schema Auto-Drop Wrapper
- */
 async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
   const cleanFields = { ...fields };
 
-  // Sanitize empty multiple-select arrays that trigger 422 rejections
   for (const [key, val] of Object.entries(cleanFields)) {
     if (Array.isArray(val) && val.length === 0) {
       delete cleanFields[key];
@@ -251,7 +274,6 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
 
   const errBody = await res.json().catch(() => ({}));
 
-  // Detect 422 Schema Incompatibilities & Auto-Prune Offending Column
   if (res.status === 422 && attempt <= 5) {
     const errorMsg = errBody?.error?.message || '';
     console.warn(`[Auto-Healer] 422 on ${table} (Attempt ${attempt}): ${errorMsg}`);
@@ -271,9 +293,6 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
   throw new Error(`Airtable write failed on ${table} (${res.status}): ${JSON.stringify(errBody)}`);
 }
 
-/**
- * Lookup worker authorization via exact E.164 and clean-digit matching
- */
 async function lookupWorker(phoneRaw) {
   const cleanDigits = phoneRaw.replace(/\D/g, '');
   const filterFormula = `AND({Active}=1, OR({Phone E164}='${phoneRaw}', {Phone E164}='+${cleanDigits}', {WhatsApp Number}='${cleanDigits}'))`;
@@ -288,9 +307,6 @@ async function lookupWorker(phoneRaw) {
   return data.records?.[0] || null;
 }
 
-/**
- * Lookup site digital twin by WhatsApp Group ID or Name
- */
 async function lookupSite(groupId, siteName = null) {
   let filterFormula = groupId ? `{WhatsApp Group ID}='${groupId}'` : '';
   if (siteName) {
@@ -313,26 +329,31 @@ async function lookupSite(groupId, siteName = null) {
 // 5. DETERMINISTIC FORENSIC AI EVALUATOR
 // ==========================================
 
-/**
- * Evaluates multimodal edge media with zero-thinking latency clamp
- */
 async function evaluateCourtMedia(mediaBuffer, mimeType, cumulativeContext = {}) {
   const base64Data = mediaBuffer.toString('base64');
+  const isMaintenanceMode = cumulativeContext.workflowMode === 'MAINTENANCE' || cumulativeContext.workflowMode === 'SPOT_VISIT';
+  const systemInstruction = isMaintenanceMode ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT;
+
+  const auditContextText = isMaintenanceMode
+    ? `AUDIT CONTEXT (ASSET MAINTENANCE & JOY CANNON TRIAGE):
+Site Name: ${cumulativeContext.siteName || 'Operational Court'}
+Current Workflow Mode: ${cumulativeContext.workflowMode || 'MAINTENANCE'}
+Site Current Status: ${cumulativeContext.siteStatus || 'ACTIVE'}
+Open Work Orders: ${cumulativeContext.openTickets || 0}`
+    : `AUDIT CONTEXT (CONSTRUCTION & INSTALLATION AUDIT):
+Site Name: ${cumulativeContext.siteName || 'Under Construction'}
+Current Workflow Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
+Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilestones || [])}
+Known Milestone Timestamps: ${JSON.stringify(cumulativeContext.milestoneTimestamps || {})}`;
 
   const payload = {
     system_instruction: {
-      parts: [{ text: INDUSTRIAL_SYSTEM_PROMPT }]
+      parts: [{ text: systemInstruction }]
     },
     contents: [
       {
         parts: [
-          {
-            text: `AUDIT CONTEXT:
-Site Name: ${cumulativeContext.siteName || 'Unknown Court'}
-Current Workflow Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
-Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilestones || [])}
-Known Milestone Timestamps: ${JSON.stringify(cumulativeContext.milestoneTimestamps || {})}`
-          },
+          { text: auditContextText },
           {
             inline_data: {
               mime_type: mimeType,
@@ -367,12 +388,10 @@ Known Milestone Timestamps: ${JSON.stringify(cumulativeContext.milestoneTimestam
   const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!rawText) throw new Error('Empty response from Gemini forensic engine');
 
-  return JSON.parse(rawText);
+  const cleanedText = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+  return JSON.parse(cleanedText);
 }
 
-/**
- * Dispatch structured status card back to WhatsApp recipient
- */
 async function sendWhatsAppMessage(toPhone, messageBody) {
   const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`;
   const res = await fetch(url, {
@@ -400,7 +419,6 @@ async function sendWhatsAppMessage(toPhone, messageBody) {
 // 6. WEBHOOK ROUTING & CORE ENGINE
 // ==========================================
 
-// Meta Webhook Verification Challenge
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -413,12 +431,9 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// Primary Webhook Ingestion Router
 app.post('/webhook', async (req, res) => {
-  // Acknowledge Meta immediately to prevent retry flooding
   res.sendStatus(200);
 
-  // 1. Zero-Trust Cryptographic HMAC SHA-256 Validation
   const signature = req.headers['x-hub-signature-256'];
   if (CONFIG.meta.appSecret && signature) {
     const expectedSig = 'sha256=' + crypto
@@ -441,21 +456,27 @@ app.post('/webhook', async (req, res) => {
     const changes = entry?.changes?.[0]?.value;
     const message = changes?.messages?.[0];
 
-    if (!message) return; // Ignore receipts and delivery ticks
+    if (!message) return;
 
     const fromPhone = message.from;
     const groupId = changes?.metadata?.phone_number_id || message.chat_id || fromPhone;
     const messageId = message.id;
 
-    // 2. Worker Bouncer Authentication
+    // 1. Resolve Linked Court Digital Twin First
+    let site = await lookupSite(groupId);
+
+    // 2. Dual-Tier Bouncer Authentication (Workers + Joy Cannon Clients)
     const worker = await lookupWorker(fromPhone);
-    if (!worker) {
-      console.warn(`[Bouncer] Unauthorized sender: ${fromPhone}`);
+    const isAuthorizedClient = !worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE';
+
+    if (!worker && !isAuthorizedClient) {
+      console.warn(`[Bouncer] Unauthorized sender: ${fromPhone} (No worker record and chat not bound to maintenance site)`);
       return;
     }
 
-    // 3. Resolve Linked Court Digital Twin
-    let site = await lookupSite(groupId);
+    const senderSource = isAuthorizedClient
+      ? 'Joy Cannon (Client)'
+      : (site?.fields['Workflow Mode'] === 'SPOT_VISIT' ? 'Exec Visit (Bob)' : 'Dispatch');
 
     // ==========================================
     // 7. ZERO-TOKEN COMMAND ALIAS HANDLER
@@ -468,7 +489,6 @@ app.post('/webhook', async (req, res) => {
       if (intent) {
         console.log(`[Slash Command] Triggered: ${trigger} -> Intent: ${intent}`);
 
-        // Handle /l or /link <Site Name>
         if (intent === 'LINK_SITE') {
           const targetSiteName = args.join(' ');
           const targetSite = await lookupSite(null, targetSiteName);
@@ -487,36 +507,41 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        // Handle /s, /sum, /status, /summary
         if (intent === 'STATUS') {
-          const cleared = site.fields['Cleared Milestones'] || [];
-          const progressCard = `📊 *TITAN OS | SITE TWIN STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* ${site.fields['Workflow Mode'] || 'INSTALLATION'}\n\n🎯 *Verified Milestones:* ${cleared.length}/12\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n⏱️ *Started:* ${site.fields['Install Started'] || 'Not Initiated'}\n\n🔗 *Last Intent:* ${site.fields['Last Intent'] || 'None'}`;
+          const mode = site.fields['Workflow Mode'] || 'INSTALLATION';
+          let progressCard = '';
+
+          if (mode === 'MAINTENANCE' || mode === 'SPOT_VISIT') {
+            const condition = site.fields['Maintenance Condition'] || '🟢 Nominal';
+            const openTickets = site.fields['Open Tickets'] || 0;
+            progressCard = `🛠️ *TITAN OS | ASSET MAINTENANCE STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* ${mode}\n\n🩺 *Condition:* ${condition}\n🎫 *Open Tickets:* ${openTickets}\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n\n🔗 *Last Note:* ${site.fields['Last Note'] || 'None'}`;
+          } else {
+            const cleared = site.fields['Cleared Milestones'] || [];
+            progressCard = `🏗️ *TITAN OS | BUILD TWIN STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* INSTALLATION\n\n🎯 *Verified Milestones:* ${cleared.length}/12\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n⏱️ *Started:* ${site.fields['Install Started'] || 'Not Initiated'}\n\n🔗 *Last Intent:* ${site.fields['Last Intent'] || 'None'}`;
+          }
+
           await sendWhatsAppMessage(fromPhone, progressCard);
           return;
         }
 
-        // Handle /m, /maint, /maintenance
         if (intent === 'MODE_MAINTENANCE') {
           await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'MAINTENANCE' }, site.id);
           await sendWhatsAppMessage(fromPhone, `🛠️ Switched *${site.fields['Site Name']}* to *MAINTENANCE* mode.`);
           return;
         }
 
-        // Handle /i, /install
         if (intent === 'MODE_INSTALLATION') {
           await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'INSTALLATION' }, site.id);
           await sendWhatsAppMessage(fromPhone, `🏗️ Switched *${site.fields['Site Name']}* to *INSTALLATION* mode.`);
           return;
         }
 
-        // Handle /spot, /sc, /spotcheck
         if (intent === 'MODE_SPOT_CHECK') {
           await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'SPOT_VISIT' }, site.id);
           await sendWhatsAppMessage(fromPhone, `🔍 Switched *${site.fields['Site Name']}* to *SPOT VISIT* audit mode.`);
           return;
         }
 
-        // Handle /?, /h, /help
         if (intent === 'HELP') {
           const helpCard = `🤖 *TITAN OS COMMANDS*\n\n*/s* or */sum* — Instant Court Twin Status\n*/m* — Switch to Maintenance Mode\n*/i* — Switch to Installation Mode\n*/spot* — Switch to Spot Audit Mode\n*/l <Name>* — Link chat to Site\n\n_Send photo or video walkthroughs directly for AI forensic audit._`;
           await sendWhatsAppMessage(fromPhone, helpCard);
@@ -538,13 +563,11 @@ app.post('/webhook', async (req, res) => {
     const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : 'image/jpeg');
     const caption = mediaObj.caption || '';
 
-    // 1. Fetch Media URL from Meta Graph API
     const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
     });
     const metaMediaData = await metaMediaRes.json().catch(() => ({}));
 
-    // DEFENSIVE URL GUARD: Prevent process crash on expired token or missing media URL
     if (!metaMediaRes.ok || !metaMediaData?.url) {
       const errorMsg = metaMediaData?.error?.message || `HTTP ${metaMediaRes.status}`;
       console.error(`[Meta Graph Error] Failed to resolve media URL for mediaId ${mediaId}:`, errorMsg);
@@ -560,7 +583,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // 2. Stream Binary Bytes into Buffer
     const mediaBufferRes = await fetch(metaMediaData.url, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
     });
@@ -572,7 +594,6 @@ app.post('/webhook', async (req, res) => {
 
     const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
 
-    // 3. Prepare Cumulative Context (Safe JSON parsing)
     let parsedTimestamps = {};
     if (site?.fields?.['Milestone Timestamps JSON']) {
       try {
@@ -582,22 +603,25 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
+    const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
     const cumulativeContext = {
       siteName: site?.fields?.['Site Name'] || 'BPC Court',
-      workflowMode: site?.fields?.['Workflow Mode'] || 'INSTALLATION',
+      workflowMode: currentMode,
+      siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
+      openTickets: site?.fields?.['Open Tickets'] || 0,
       clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
       milestoneTimestamps: parsedTimestamps
     };
 
-    // 4. Concurrent Multi-Hop Streaming (Supabase + Gemini parallelized)
     const [storageResult, forensicAudit] = await Promise.all([
       uploadToSupabase(mediaBuffer, mimeType),
       evaluateCourtMedia(mediaBuffer, mimeType, cumulativeContext)
     ]);
 
-    // 5. Instantly Dispatch WhatsApp Status Card (Sub-7s field delivery)
     const replyText = forensicAudit.whatsapp_status_text ||
-      `📊 *TITAN OS AUDIT*\n📍 *Status:* ${forensicAudit.status_observed}\n🎯 *Gates:* ${forensicAudit.verified_gates?.length || 0}/12\n${forensicAudit.worker_summary}`;
+      (currentMode === 'MAINTENANCE' || currentMode === 'SPOT_VISIT'
+        ? `🛠️ *TITAN MAINTENANCE REPORT*\n📍 *Status:* ${forensicAudit.status_observed}\n🚨 *Priority:* ${forensicAudit.priority || 'MEDIUM'}\n${forensicAudit.worker_summary}`
+        : `📊 *TITAN OS AUDIT*\n📍 *Status:* ${forensicAudit.status_observed}\n🎯 *Gates:* ${forensicAudit.verified_gates?.length || 0}/12\n${forensicAudit.worker_summary}`);
 
     await sendWhatsAppMessage(fromPhone, replyText);
 
@@ -605,7 +629,6 @@ app.post('/webhook', async (req, res) => {
     // 9. ASYNCHRONOUS RELATIONAL PERSISTENCE
     // ==========================================
 
-    // Log to Inbound Messages 2
     const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Worker Phone Raw': fromPhone,
@@ -616,8 +639,7 @@ app.post('/webhook', async (req, res) => {
       'Raw Payload JSON': JSON.stringify(message)
     });
 
-    // Log to Reports 2
-    await airtableWriteWithAutoDrop('Reports 2', {
+    const reportsPayload = {
       'Inbound Messages 2': [inboundRecord.id],
       'Sites': site ? [site.id] : [],
       'Workflow Mode': cumulativeContext.workflowMode,
@@ -625,45 +647,92 @@ app.post('/webhook', async (req, res) => {
       'Site Conditions': forensicAudit.site_conditions || 'Clear',
       'Action Items': (forensicAudit.action_items || []).join('\n'),
       'Status Observed': forensicAudit.status_observed,
-      'Action Intent': forensicAudit.action_intent,
+      'Action Intent': forensicAudit.action_intent || (forensicAudit.priority ? `INCIDENT_${forensicAudit.priority}` : 'MAINTENANCE_LOG'),
       'WhatsApp Reply Text': replyText,
       'Clean JSON': JSON.stringify(forensicAudit, null, 2)
-    });
+    };
 
-    // 10. Patch Parent Court Digital Twin (Sites Table)
+    const reportRecord = await airtableWriteWithAutoDrop('Reports 2', reportsPayload);
+
+    // ==========================================
+    // 10. CLOSED-LOOP DISPATCH (Daily Assignments)
+    // ==========================================
+    const isMaintenanceInspection = currentMode === 'MAINTENANCE' || currentMode === 'SPOT_VISIT';
+    const hasActiveDefects = (forensicAudit.action_items && forensicAudit.action_items.length > 0) ||
+                             forensicAudit.status_observed === 'ACTION_REQUIRED' ||
+                             forensicAudit.status_observed === 'HAZARD_OUT_OF_SERVICE';
+
+    if (isMaintenanceInspection && hasActiveDefects) {
+      const assignmentType = forensicAudit.assignment_type ||
+        (forensicAudit.priority === 'CRITICAL' ? 'Emergency Repair' : 'Spot Visit Punch');
+
+      const priority = forensicAudit.priority === 'CRITICAL' ? 'Critical' : 'High';
+      const taskNotes = (forensicAudit.action_items || []).join('\n') || forensicAudit.worker_summary;
+
+      const assignmentPayload = {
+        'Assignment Type': assignmentType,
+        'Priority': priority,
+        'Source': senderSource,
+        'Notes': taskNotes,
+        'Status': 'Open'
+      };
+
+      if (site) {
+        assignmentPayload['Site'] = [site.id];
+      }
+      if (reportRecord?.id) {
+        assignmentPayload['Origin Report'] = [reportRecord.id];
+      }
+
+      await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+      console.log(`[Titan OS] Dispatched open ticket to Daily Assignments for site: ${cumulativeContext.siteName}`);
+    }
+
+    // ==========================================
+    // 11. PATCH PARENT DIGITAL TWIN (Sites Table)
+    // ==========================================
     if (site) {
       const nowIso = new Date().toISOString();
-      const updatedTimestamps = { ...cumulativeContext.milestoneTimestamps };
-
-      // Seal timestamp for newly cleared gates
-      for (const gateNum of (forensicAudit.verified_gates || [])) {
-        if (!updatedTimestamps[`Gate ${gateNum}`]) {
-          updatedTimestamps[`Gate ${gateNum}`] = nowIso;
-        }
-      }
-
-      // Gate 12 transient demotion cleanup
-      if (forensicAudit.needs_attention_gates?.includes(12)) {
-        delete updatedTimestamps['Gate 12'];
-      }
-
       const sitePatch = {
-        'Cleared Milestones': (forensicAudit.verified_gates || []).map(g => `Gate ${g}`),
-        'Milestone Timestamps JSON': JSON.stringify(updatedTimestamps, null, 2),
-        'Last Intent': forensicAudit.action_intent,
+        'Last Intent': forensicAudit.action_intent || `TRIAGE_${forensicAudit.priority || 'LOG'}`,
         'Last Note': forensicAudit.worker_summary
       };
 
-      // Set Install Started clock on initial progress
-      if (!site.fields['Install Started'] && forensicAudit.verified_gates?.length > 0) {
-        sitePatch['Install Started'] = nowIso;
-      }
+      if (currentMode === 'INSTALLATION') {
+        const updatedTimestamps = { ...cumulativeContext.milestoneTimestamps };
 
-      // Autonomous Handover to Maintenance Mode on 12/12 commissioning
-      if (forensicAudit.verified_gates?.length === 12 && forensicAudit.status_observed === 'COMMISSIONED') {
-        sitePatch['Workflow Mode'] = 'MAINTENANCE';
-        sitePatch['Site Status'] = 'ACTIVE';
-        sitePatch['Install Completed'] = nowIso;
+        for (const gateNum of (forensicAudit.verified_gates || [])) {
+          if (!updatedTimestamps[`Gate ${gateNum}`]) {
+            updatedTimestamps[`Gate ${gateNum}`] = nowIso;
+          }
+        }
+
+        const previouslyCleared = cumulativeContext.clearedMilestones || [];
+        const newlyVerified = (forensicAudit.verified_gates || []).map(g => `Gate ${g}`);
+        let allClearedGates = Array.from(new Set([...previouslyCleared, ...newlyVerified]));
+
+        if (forensicAudit.needs_attention_gates?.includes(12)) {
+          allClearedGates = allClearedGates.filter(g => g !== 'Gate 12');
+          delete updatedTimestamps['Gate 12'];
+        }
+
+        sitePatch['Cleared Milestones'] = allClearedGates;
+        sitePatch['Milestone Timestamps JSON'] = JSON.stringify(updatedTimestamps, null, 2);
+
+        if (!site.fields['Install Started'] && allClearedGates.length > 0) {
+          sitePatch['Install Started'] = nowIso;
+        }
+
+        if (allClearedGates.length === 12 && forensicAudit.status_observed === 'COMMISSIONED') {
+          sitePatch['Workflow Mode'] = 'MAINTENANCE';
+          sitePatch['Site Status'] = 'ACTIVE';
+          sitePatch['Install Completed'] = nowIso;
+        }
+      } else {
+        if (forensicAudit.hazard_detected || forensicAudit.priority === 'CRITICAL' || forensicAudit.status_observed === 'HAZARD_OUT_OF_SERVICE') {
+          sitePatch['Site Status'] = 'PAUSED';
+          console.warn(`[Titan Safety Engine] Automated court PAUSE triggered for ${site.fields['Site Name']} due to active hazard!`);
+        }
       }
 
       await airtableWriteWithAutoDrop('Sites', sitePatch, site.id);
@@ -675,11 +744,10 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Health check endpoint for Render service monitors
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.4.0', engine: 'Titan OS V4.4' });
+  res.status(200).json({ status: 'healthy', version: '4.5.1', engine: 'Titan OS V4.5.1 (Parallel Concurrency)' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Titan OS V4.4 Headless Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.1 Parallel Concurrency Engine listening on Port ${PORT}`);
 });
