@@ -1,14 +1,17 @@
 /**
- * TITAN OS V4.5.7 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
- * Production Build — Multilingual Ledger Translation, Indoor/Outdoor Telemetry & Voice Memos
+ * TITAN OS V4.5.8 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
+ * Production Build — Group Hive Broadcasting, Multilingual Ledger Translation & Weather Tripwires
  * 
  * Architecture Features:
  * - Meta WhatsApp Cloud API v21.0 with HMAC SHA-256 verification
  * - Google Gemini 2.5 Flash with clamped zero-thinking budget (ZDR compliance)
+ * - Group Hive Orchestrator: Distinct Group JID vs. Sender Phone parsing with broadcast & DM fallback
+ * - Passive Group Bouncer: Automatically authorizes all participants inside bound site groups
+ * - Chatter Filter: Drops casual crew banter silently at zero token and zero database cost
  * - Multilingual Engine: Ingests English, Spanish, Kiswahili/Sheng, Hindi, Punjabi, Gujarati & Hinglish
  * - English Ledger Normalization: Translates all DB records (Action Items, Summaries, Notes) into English for INOC
  * - Field Edge Language Mirroring: Outbound WhatsApp status cards respond in the worker's native tongue
- * - Indoor vs. Outdoor Climate Engine: Bypasses wind/rain halts for indoor facilities; audits indoor ceiling clearance & ventilation
+ * - Indoor vs. Outdoor Climate Engine: Bypasses weather tripwires for indoor facilities; audits ceiling clearance & ventilation
  * - Hyperlocal Weather & Dew Point Engine: Sub-50ms Open-Meteo telemetry (/w, /weather) for outdoor sites
  * - Microclimate Tripwires: Gate 7 wind gusts (>37 km/h) & Gate 9 surface condensation holds
  * - Map Cache Base64 Decoder: Auto-extracts {lat, lng} from Airtable Google Maps cache
@@ -17,7 +20,6 @@
  * - Native Voice Note Ingestion: Audio walkthroughs & spoken defect reports evaluated directly
  * - Parallel Gate Architecture: Concurrency-aware construction verification
  * - Maintenance & Joy Cannon Triage: Defect logging & P1/P2 auto-dispatch
- * - Multi-Tier Bouncer: Authorizes field workers and Joy Cannon VIP facility clients
  * - Zero-Token Headless Command Aliasing (/s, /m, /i, /spot, /l, /map, /w, /nearby)
  * - Self-Healing Recursive 422 Airtable Schema Auto-Drop Wrapper
  */
@@ -458,6 +460,7 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
 }
 
 async function lookupWorker(phoneRaw) {
+  if (!phoneRaw) return null;
   const cleanDigits = phoneRaw.replace(/\D/g, '');
   const filterFormula = `AND({Active}=1, OR({Phone E164}='${phoneRaw}', {Phone E164}='+${cleanDigits}', {WhatsApp Number}='${cleanDigits}'))`;
   const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Worker?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=1`;
@@ -471,8 +474,8 @@ async function lookupWorker(phoneRaw) {
   return data.records?.[0] || null;
 }
 
-async function lookupSite(groupId, siteName = null) {
-  let filterFormula = groupId ? `{WhatsApp Group ID}='${groupId}'` : '';
+async function lookupSite(groupIdOrPhone, siteName = null) {
+  let filterFormula = groupIdOrPhone ? `OR({WhatsApp Group ID}='${groupIdOrPhone}', {WhatsApp Group ID}='${groupIdOrPhone.trim()}')` : '';
   if (siteName) {
     filterFormula = `{Site Name}='${siteName.trim()}'`;
   }
@@ -560,7 +563,24 @@ Known Milestone Timestamps: ${JSON.stringify(cumulativeContext.milestoneTimestam
   return JSON.parse(cleanedText);
 }
 
-async function sendWhatsAppMessage(toPhone, messageBody) {
+/**
+ * Robust WhatsApp dispatcher supporting individual DMs and Group Hives
+ */
+async function sendWhatsAppMessage(toTarget, messageBody) {
+  if (!toTarget) return false;
+  const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: toTarget,
+    type: 'text',
+    text: { body: messageBody }
+  };
+
+  if (!isGroup) {
+    payload.recipient_type = 'individual';
+  }
+
   const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`;
   const res = await fetch(url, {
     method: 'POST',
@@ -568,22 +588,18 @@ async function sendWhatsAppMessage(toPhone, messageBody) {
       'Authorization': `Bearer ${CONFIG.meta.accessToken}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: toPhone,
-      type: 'text',
-      text: { body: messageBody }
-    })
+    body: JSON.stringify(payload)
   });
 
   if (!res.ok) {
     const errData = await res.text();
-    console.error(`WhatsApp dispatch failed (${res.status}): ${errData}`);
+    console.error(`WhatsApp dispatch failed to ${toTarget} (${res.status}): ${errData}`);
     if (errData.includes('131005')) {
-      console.error('[Meta Auth Alert] Error 131005: Assign WhatsApp Business Account asset full control to your System User token in Business Settings.');
+      console.error('[Meta Auth Alert] Error 131005: Assign WhatsApp Business Account asset full control to your System User token in Meta Business Settings.');
     }
+    return false;
   }
+  return true;
 }
 
 // ==========================================
@@ -629,19 +645,51 @@ app.post('/webhook', async (req, res) => {
 
     if (!message) return;
 
-    const fromPhone = message.from;
-    const groupId = changes?.metadata?.phone_number_id || message.chat_id || fromPhone;
+    // ------------------------------------------------------------------
+    // A. Parse Group Hive JID vs. Individual Sender Phone
+    // ------------------------------------------------------------------
+    const rawFrom = message.from || '';
+    const rawAuthor = message.author || message.participant || '';
+    const rawChatId = message.chat_id || message.group_id || changes?.metadata?.phone_number_id || '';
+
+    const isGroupMessage = rawFrom.includes('@g.us') || rawChatId.includes('@g.us');
+    const groupJid = rawFrom.includes('@g.us') 
+      ? rawFrom 
+      : (rawChatId.includes('@g.us') ? rawChatId : null);
+
+    const fromPhone = isGroupMessage && rawAuthor
+      ? rawAuthor.split('@')[0].replace(/\D/g, '')
+      : (rawFrom.includes('@g.us') ? '' : rawFrom.replace(/\D/g, ''));
+
+    const dispatchTarget = groupJid || fromPhone;
     const messageId = message.id;
 
-    // 1. Resolve Linked Court Digital Twin First
-    let site = await lookupSite(groupId);
+    // Dispatcher helper: Broadcast to group; fallback to DM if group delivery fails
+    const dispatchReply = async (text) => {
+      const ok = await sendWhatsAppMessage(dispatchTarget, text);
+      if (!ok && dispatchTarget !== fromPhone && fromPhone) {
+        await sendWhatsAppMessage(fromPhone, text);
+      }
+    };
 
-    // 2. Dual-Tier Bouncer Authentication (Workers + Joy Cannon Clients)
-    const worker = await lookupWorker(fromPhone);
+    // ------------------------------------------------------------------
+    // B. Resolve Linked Court Digital Twin First
+    // ------------------------------------------------------------------
+    let site = await lookupSite(groupJid || fromPhone);
+
+    // ------------------------------------------------------------------
+    // C. Multi-Tier Frictionless Bouncer
+    // ------------------------------------------------------------------
+    const worker = fromPhone ? await lookupWorker(fromPhone) : null;
+    const isBoundGroupMember = Boolean(site && isGroupMessage);
     const isAuthorizedClient = !worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE';
 
-    if (!worker && !isAuthorizedClient) {
-      console.warn(`[Bouncer] Unauthorized sender: ${fromPhone} (No worker record and chat not bound to maintenance site)`);
+    // Allow /l or /link commands through so an admin can bind a brand-new group!
+    const isLinkCommand = message.type === 'text' && 
+      (message.text?.body?.trim().startsWith('/l') || message.text?.body?.trim().startsWith('/link'));
+
+    if (!worker && !isBoundGroupMember && !isAuthorizedClient && !isLinkCommand) {
+      console.warn(`[Bouncer] Dropped unauthorized message from ${fromPhone || rawFrom} (Not a worker and chat not bound to site)`);
       return;
     }
 
@@ -659,21 +707,20 @@ app.post('/webhook', async (req, res) => {
       const userLon = message.location.longitude;
 
       if (!site) {
-        await sendWhatsAppMessage(fromPhone, `⚠️ Chat not linked to a site twin. Link with */l <Site Name>* first.`);
+        await dispatchReply(`⚠️ Chat not linked to a site twin. Link with */l <Site Name>* first.`);
         return;
       }
 
       const siteCoords = extractCoordinates(site);
       if (!siteCoords) {
-        await sendWhatsAppMessage(
-          fromPhone,
+        await dispatchReply(
           `⚠️ Court *${site.fields['Site Name']}* does not have GPS coordinates or Map Cache geocoded in Airtable.`
         );
         return;
       }
 
       const distanceMeters = haversineDistanceKm(userLat, userLon, siteCoords.lat, siteCoords.lon) * 1000;
-      const workerName = worker?.fields?.['Full Name'] || 'Field Tech';
+      const workerName = worker?.fields?.['Full Name'] || (fromPhone ? `Crew (+${fromPhone.slice(-4)})` : 'Field Tech');
       const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
       if (distanceMeters <= 300) {
@@ -702,10 +749,9 @@ app.post('/webhook', async (req, res) => {
           checkinResponse += `\n\n🏢 *INDOOR PROTOCOL:* Outdoor weather bypassed. Maintain exhaust ventilation during Gate 7 turf seaming.`;
         }
 
-        await sendWhatsAppMessage(fromPhone, checkinResponse);
+        await dispatchReply(checkinResponse);
       } else {
-        await sendWhatsAppMessage(
-          fromPhone,
+        await dispatchReply(
           `❌ *CHECK-IN OUTSIDE GEOFENCE*\n\n` +
           `You are ${(distanceMeters / 1000).toFixed(2)} km away from *${site.fields['Site Name']}*.\n` +
           `Must be within 300m of site coordinates to verify physical presence.`
@@ -715,235 +761,235 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ==========================================
-    // 8. ZERO-TOKEN COMMAND ALIAS HANDLER
+    // 8. ZERO-TOKEN COMMAND ALIAS & CHATTER FILTER
     // ==========================================
     if (message.type === 'text') {
       const rawText = message.text.body.trim();
       const [trigger, ...args] = rawText.split(' ');
       const intent = COMMAND_MAP[trigger.toLowerCase()];
 
-      if (intent) {
-        console.log(`[Slash Command] Triggered: ${trigger} -> Intent: ${intent}`);
+      // CHATTER FILTER: If not a command, drop silently (Zero tokens, zero DB calls)
+      if (!intent) {
+        return;
+      }
 
-        // /l or /link <Site Name> — DIGITAL SITE PASS ONBOARDING
-        if (intent === 'LINK_SITE') {
-          const targetSiteName = args.join(' ');
-          const targetSite = await lookupSite(null, targetSiteName);
-          if (!targetSite) {
-            await sendWhatsAppMessage(fromPhone, `❌ Could not find site "${targetSiteName}". Check spelling.`);
-            return;
-          }
+      console.log(`[Slash Command] Triggered: ${trigger} -> Intent: ${intent} from ${fromPhone || rawFrom}`);
 
-          await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': groupId }, targetSite.id);
-
-          const siteLoc = targetSite.fields['Site location'] || 'Location pending';
-          const mapUrl = formatMapUrl(targetSite);
-          const mode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
-          const isTargetIndoor = isIndoorSite(targetSite);
-
-          let welcomeCard = `✅ *TITAN OS | SITE TWIN BOUND*\n` +
-            `🏟️ *Court:* *${targetSite.fields['Site Name']}*\n` +
-            `⚙️ *Mode:* ${mode}\n` +
-            `🏢 *Type:* ${isTargetIndoor ? 'Indoor Facility' : 'Outdoor Facility'}\n` +
-            `📫 *Location:* ${siteLoc}\n`;
-
-          if (mapUrl) {
-            welcomeCard += `\n🗺️ *GPS Navigation Link:*\n${mapUrl}\n`;
-          }
-
-          welcomeCard += `\n💡 *Field Commands:*\n` +
-            `• */map* — Resend GPS Navigation Link\n` +
-            `• */w* — Hyperlocal Weather & Environmental Safety Check\n` +
-            `• */nearby* — Proximity Route Sweeps for maintenance\n` +
-            `• */s* — Live Milestone & Punch List Status\n` +
-            `• Drop a WhatsApp Location Pin to check in on-site.\n` +
-            `• Send photos, videos, or voice memos directly in ANY language for instant audit.`;
-
-          await sendWhatsAppMessage(fromPhone, welcomeCard);
+      // /l or /link <Site Name> — DIGITAL SITE PASS ONBOARDING
+      if (intent === 'LINK_SITE') {
+        const targetSiteName = args.join(' ');
+        const targetSite = await lookupSite(null, targetSiteName);
+        if (!targetSite) {
+          await dispatchReply(`❌ Could not find site "${targetSiteName}". Check spelling.`);
           return;
         }
 
-        if (!site) {
-          await sendWhatsAppMessage(fromPhone, `⚠️ Chat not linked to an active court twin. Use */l <Site Name>* to bind.`);
+        const targetBindingId = groupJid || fromPhone;
+        await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': targetBindingId }, targetSite.id);
+
+        const siteLoc = targetSite.fields['Site location'] || 'Location pending';
+        const mapUrl = formatMapUrl(targetSite);
+        const mode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
+        const isTargetIndoor = isIndoorSite(targetSite);
+
+        let welcomeCard = `✅ *TITAN OS | SITE TWIN BOUND*\n` +
+          `🏟️ *Court:* *${targetSite.fields['Site Name']}*\n` +
+          `⚙️ *Mode:* ${mode}\n` +
+          `🏢 *Type:* ${isTargetIndoor ? 'Indoor Facility' : 'Outdoor Facility'}\n` +
+          `📫 *Location:* ${siteLoc}\n`;
+
+        if (mapUrl) {
+          welcomeCard += `\n🗺️ *GPS Navigation Link:*\n${mapUrl}\n`;
+        }
+
+        welcomeCard += `\n💡 *Field Commands:*\n` +
+          `• */map* — Resend GPS Navigation Link\n` +
+          `• */w* — Hyperlocal Weather & Environmental Safety Check\n` +
+          `• */nearby* — Proximity Route Sweeps for maintenance\n` +
+          `• */s* — Live Milestone & Punch List Status\n` +
+          `• Drop a WhatsApp Location Pin to check in on-site.\n` +
+          `• Send photos, videos, or voice memos directly in ANY language for instant audit.`;
+
+        await dispatchReply(welcomeCard);
+        return;
+      }
+
+      if (!site) {
+        await dispatchReply(`⚠️ Chat not linked to an active court twin. Use */l <Site Name>* to bind.`);
+        return;
+      }
+
+      // /map, /loc, /gps — INSTANT NAVIGATION LINK
+      if (intent === 'LOCATION') {
+        const siteLoc = site.fields['Site location'] || 'Location pending';
+        const mapUrl = formatMapUrl(site);
+
+        if (!mapUrl) {
+          await dispatchReply(
+            `⚠️ No location on file for *${site.fields['Site Name']}*. Update the 'Site location' field in Airtable.`
+          );
           return;
         }
 
-        // /map, /loc, /gps — INSTANT NAVIGATION LINK
-        if (intent === 'LOCATION') {
-          const siteLoc = site.fields['Site location'] || 'Location pending';
-          const mapUrl = formatMapUrl(site);
+        const mapCard = `📍 *TITAN OS | SITE LOCATION*\n` +
+          `🏟️ *Court:* *${site.fields['Site Name']}*\n` +
+          `📫 *Address:* ${siteLoc}\n\n` +
+          `🗺️ *GPS Navigation Link:*\n${mapUrl}\n\n` +
+          `_(Tap link to launch GPS navigation in Google Maps, Apple Maps, or Waze)_`;
 
-          if (!mapUrl) {
-            await sendWhatsAppMessage(
-              fromPhone,
-              `⚠️ No location on file for *${site.fields['Site Name']}*. Update the 'Site location' field in Airtable.`
-            );
-            return;
-          }
+        await dispatchReply(mapCard);
+        return;
+      }
 
-          const mapCard = `📍 *TITAN OS | SITE LOCATION*\n` +
-            `🏟️ *Court:* *${site.fields['Site Name']}*\n` +
-            `📫 *Address:* ${siteLoc}\n\n` +
-            `🗺️ *GPS Navigation Link:*\n${mapUrl}\n\n` +
-            `_(Tap link to launch GPS navigation in Google Maps, Apple Maps, or Waze)_`;
-
-          await sendWhatsAppMessage(fromPhone, mapCard);
+      // /w, /weather, /clima — HYPERLOCAL ENVIRONMENTAL TELEMETRY
+      if (intent === 'WEATHER') {
+        if (indoorSite) {
+          await dispatchReply(
+            `🏢 *TITAN OS | INDOOR FACILITY NOTICE*\n*${site.fields['Site Name']}* is logged as an Indoor Facility.\nOutdoor precipitation & wind tripwires are bypassed. Verify HVAC condensation and minimum 6.0m vertical ceiling clearance.`
+          );
           return;
         }
 
-        // /w, /weather, /clima — HYPERLOCAL ENVIRONMENTAL TELEMETRY
-        if (intent === 'WEATHER') {
-          if (indoorSite) {
-            await sendWhatsAppMessage(
-              fromPhone,
-              `🏢 *TITAN OS | INDOOR FACILITY NOTICE*\n*${site.fields['Site Name']}* is logged as an Indoor Facility.\nOutdoor precipitation & wind tripwires are bypassed. Verify HVAC condensation and minimum 6.0m vertical ceiling clearance.`
-            );
-            return;
-          }
-
-          const coords = extractCoordinates(site);
-          if (!coords) {
-            await sendWhatsAppMessage(
-              fromPhone,
-              `⚠️ Court *${site.fields['Site Name']}* does not have valid coordinates or Map Cache geocoded in Airtable.`
-            );
-            return;
-          }
-
-          const weather = await getHyperlocalWeather(coords.lat, coords.lon);
-          if (!weather) {
-            await sendWhatsAppMessage(fromPhone, `⚠️ Weather satellite feed unreachable. Retry in 30 seconds.`);
-            return;
-          }
-
-          const dewPointDelta = (weather.temp - weather.dewPoint).toFixed(1);
-          let weatherCard = `🌤️ *TITAN OS | HYPERLOCAL WEATHER TELEMETRY*\n` +
-            `🏟️ *Court:* ${site.fields['Site Name']}\n` +
-            `🌡️ *Air Temp:* ${weather.temp}°C (Dew Point: ${weather.dewPoint}°C)\n` +
-            `💨 *Wind Speed:* ${weather.windSpeed} km/h (Gusts: ${weather.windGusts} km/h)\n` +
-            `💧 *Relative Humidity:* ${weather.humidity}%\n` +
-            `🌧️ *Precipitation:* ${weather.precip} mm (4h Rain Risk: ${weather.precipProbability4h}%)\n\n`;
-
-          if (weather.windGusts > 37) {
-            weatherCard += `⛔ *CRANE / GLASS RIGGING HALT:* Wind gusts exceed 20 knots (37 km/h). Gate 7 glass seating suspended under safety protocol.\n`;
-          } else if (weather.humidity > 85 || weather.precip > 0 || dewPointDelta <= 2) {
-            weatherCard += `⚠️ *ADHESIVE WARNING:* Surface condensation risk (Temp-DewPoint delta ${dewPointDelta}°C, ${weather.humidity}% RH). Do NOT spread Gate 9 polyurethane turf glue.\n`;
-          } else if (weather.precipProbability4h > 50) {
-            weatherCard += `⚠️ *SAND WARNING:* Rain risk >50% within 4 hours. Keep Gate 10 silica sand pallets covered.\n`;
-          } else {
-            weatherCard += `✅ *CONDITIONS NOMINAL:* Green light for all physical assembly, glass rigging, and outdoor gluing.`;
-          }
-
-          await sendWhatsAppMessage(fromPhone, weatherCard);
+        const coords = extractCoordinates(site);
+        if (!coords) {
+          await dispatchReply(
+            `⚠️ Court *${site.fields['Site Name']}* does not have valid coordinates or Map Cache geocoded in Airtable.`
+          );
           return;
         }
 
-        // /nearby, /route — CLUSTERED ROUTE SWEEPS
-        if (intent === 'NEARBY_SWEEP') {
-          const coords = extractCoordinates(site);
-          if (!coords) {
-            await sendWhatsAppMessage(fromPhone, `⚠️ Current site has no GPS coordinates or Map Cache to calculate proximity vectors.`);
-            return;
-          }
+        const weather = await getHyperlocalWeather(coords.lat, coords.lon);
+        if (!weather) {
+          await dispatchReply(`⚠️ Weather satellite feed unreachable. Retry in 30 seconds.`);
+          return;
+        }
 
-          const filterFormula = `AND({Workflow Mode}='MAINTENANCE', {Open Tickets} > 0, RECORD_ID() != '${site.id}')`;
-          const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=15`;
-          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-          const data = await res.json().catch(() => ({}));
-          const candidates = data.records || [];
+        const dewPointDelta = (weather.temp - weather.dewPoint).toFixed(1);
+        let weatherCard = `🌤️ *TITAN OS | HYPERLOCAL WEATHER TELEMETRY*\n` +
+          `🏟️ *Court:* ${site.fields['Site Name']}\n` +
+          `🌡️ *Air Temp:* ${weather.temp}°C (Dew Point: ${weather.dewPoint}°C)\n` +
+          `💨 *Wind Speed:* ${weather.windSpeed} km/h (Gusts: ${weather.windGusts} km/h)\n` +
+          `💧 *Relative Humidity:* ${weather.humidity}%\n` +
+          `🌧️ *Precipitation:* ${weather.precip} mm (4h Rain Risk: ${weather.precipProbability4h}%)\n\n`;
 
-          const nearbySites = [];
-          for (const c of candidates) {
-            const cCoords = extractCoordinates(c);
-            if (cCoords) {
-              const distKm = haversineDistanceKm(coords.lat, coords.lon, cCoords.lat, cCoords.lon);
-              if (distKm <= 75) {
-                nearbySites.push({
-                  name: c.fields['Site Name'],
-                  distance: distKm.toFixed(1),
-                  tickets: c.fields['Open Tickets'] || 1,
-                  condition: c.fields['Maintenance Condition'] || '🟡 Action Required',
-                  mapUrl: formatMapUrl(c)
-                });
-              }
+        if (weather.windGusts > 37) {
+          weatherCard += `⛔ *CRANE / GLASS RIGGING HALT:* Wind gusts exceed 20 knots (37 km/h). Gate 7 glass seating suspended under safety protocol.\n`;
+        } else if (weather.humidity > 85 || weather.precip > 0 || dewPointDelta <= 2) {
+          weatherCard += `⚠️ *ADHESIVE WARNING:* Surface condensation risk (Temp-DewPoint delta ${dewPointDelta}°C, ${weather.humidity}% RH). Do NOT spread Gate 9 polyurethane turf glue.\n`;
+        } else if (weather.precipProbability4h > 50) {
+          weatherCard += `⚠️ *SAND WARNING:* Rain risk >50% within 4 hours. Keep Gate 10 silica sand pallets covered.\n`;
+        } else {
+          weatherCard += `✅ *CONDITIONS NOMINAL:* Green light for all physical assembly, glass rigging, and outdoor gluing.`;
+        }
+
+        await dispatchReply(weatherCard);
+        return;
+      }
+
+      // /nearby, /route — CLUSTERED ROUTE SWEEPS
+      if (intent === 'NEARBY_SWEEP') {
+        const coords = extractCoordinates(site);
+        if (!coords) {
+          await dispatchReply(`⚠️ Current site has no GPS coordinates or Map Cache to calculate proximity vectors.`);
+          return;
+        }
+
+        const filterFormula = `AND({Workflow Mode}='MAINTENANCE', {Open Tickets} > 0, RECORD_ID() != '${site.id}')`;
+        const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=15`;
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+        const data = await res.json().catch(() => ({}));
+        const candidates = data.records || [];
+
+        const nearbySites = [];
+        for (const c of candidates) {
+          const cCoords = extractCoordinates(c);
+          if (cCoords) {
+            const distKm = haversineDistanceKm(coords.lat, coords.lon, cCoords.lat, cCoords.lon);
+            if (distKm <= 75) {
+              nearbySites.push({
+                name: c.fields['Site Name'],
+                distance: distKm.toFixed(1),
+                tickets: c.fields['Open Tickets'] || 1,
+                condition: c.fields['Maintenance Condition'] || '🟡 Action Required',
+                mapUrl: formatMapUrl(c)
+              });
             }
           }
+        }
 
-          nearbySites.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+        nearbySites.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
 
-          if (nearbySites.length === 0) {
-            await sendWhatsAppMessage(
-              fromPhone,
-              `✅ *TITAN OS | ROUTE OPTIMIZATION*\nNo other maintenance courts with open tickets within 75 km of *${site.fields['Site Name']}*.`
-            );
-            return;
-          }
-
-          let sweepCard = `📍 *TITAN OS | NEARBY MAINTENANCE SWEEPS*\n` +
-            `_Open service calls within 75 km of ${site.fields['Site Name']}:_\n\n`;
-
-          nearbySites.slice(0, 3).forEach((n, idx) => {
-            sweepCard += `${idx + 1}. *${n.name}* (${n.distance} km away)\n` +
-              `   • Status: ${n.condition} (${n.tickets} open)\n` +
-              `   • Nav: ${n.mapUrl}\n\n`;
-          });
-
-          sweepCard += `_Consolidate stops to eliminate repeat transit time._`;
-          await sendWhatsAppMessage(fromPhone, sweepCard);
+        if (nearbySites.length === 0) {
+          await dispatchReply(
+            `✅ *TITAN OS | ROUTE OPTIMIZATION*\nNo other maintenance courts with open tickets within 75 km of *${site.fields['Site Name']}*.`
+          );
           return;
         }
 
-        // /s, /sum, /status — LIVE TWIN TELEMETRY
-        if (intent === 'STATUS') {
-          const mode = site.fields['Workflow Mode'] || 'INSTALLATION';
-          let progressCard = '';
+        let sweepCard = `📍 *TITAN OS | NEARBY MAINTENANCE SWEEPS*\n` +
+          `_Open service calls within 75 km of ${site.fields['Site Name']}:_\n\n`;
 
-          if (mode === 'MAINTENANCE' || mode === 'SPOT_VISIT') {
-            const condition = site.fields['Maintenance Condition'] || '🟢 Nominal';
-            const openTickets = site.fields['Open Tickets'] || 0;
-            progressCard = `🛠️ *TITAN OS | ASSET MAINTENANCE STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* ${mode}\n🏢 *Type:* ${indoorSite ? 'Indoor' : 'Outdoor'}\n\n🩺 *Condition:* ${condition}\n🎫 *Open Tickets:* ${openTickets}\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n\n🔗 *Last Note:* ${site.fields['Last Note'] || 'None'}`;
-          } else {
-            const cleared = site.fields['Cleared Milestones'] || [];
-            progressCard = `🏗️ *TITAN OS | BUILD TWIN STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* INSTALLATION\n🏢 *Type:* ${indoorSite ? 'Indoor' : 'Outdoor'}\n\n🎯 *Verified Milestones:* ${cleared.length}/12\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n⏱️ *Started:* ${site.fields['Install Started'] || 'Not Initiated'}\n\n🔗 *Last Intent:* ${site.fields['Last Intent'] || 'None'}`;
-          }
+        nearbySites.slice(0, 3).forEach((n, idx) => {
+          sweepCard += `${idx + 1}. *${n.name}* (${n.distance} km away)\n` +
+            `   • Status: ${n.condition} (${n.tickets} open)\n` +
+            `   • Nav: ${n.mapUrl}\n\n`;
+        });
 
-          await sendWhatsAppMessage(fromPhone, progressCard);
-          return;
+        sweepCard += `_Consolidate stops to eliminate repeat transit time._`;
+        await dispatchReply(sweepCard);
+        return;
+      }
+
+      // /s, /sum, /status — LIVE TWIN TELEMETRY
+      if (intent === 'STATUS') {
+        const mode = site.fields['Workflow Mode'] || 'INSTALLATION';
+        let progressCard = '';
+
+        if (mode === 'MAINTENANCE' || mode === 'SPOT_VISIT') {
+          const condition = site.fields['Maintenance Condition'] || '🟢 Nominal';
+          const openTickets = site.fields['Open Tickets'] || 0;
+          progressCard = `🛠️ *TITAN OS | ASSET MAINTENANCE STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* ${mode}\n🏢 *Type:* ${indoorSite ? 'Indoor' : 'Outdoor'}\n\n🩺 *Condition:* ${condition}\n🎫 *Open Tickets:* ${openTickets}\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n\n🔗 *Last Note:* ${site.fields['Last Note'] || 'None'}`;
+        } else {
+          const cleared = site.fields['Cleared Milestones'] || [];
+          progressCard = `🏗️ *TITAN OS | BUILD TWIN STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* INSTALLATION\n🏢 *Type:* ${indoorSite ? 'Indoor' : 'Outdoor'}\n\n🎯 *Verified Milestones:* ${cleared.length}/12\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n⏱️ *Started:* ${site.fields['Install Started'] || 'Not Initiated'}\n\n🔗 *Last Intent:* ${site.fields['Last Intent'] || 'None'}`;
         }
 
-        if (intent === 'MODE_MAINTENANCE') {
-          await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'MAINTENANCE' }, site.id);
-          await sendWhatsAppMessage(fromPhone, `🛠️ Switched *${site.fields['Site Name']}* to *MAINTENANCE* mode.`);
-          return;
-        }
+        await dispatchReply(progressCard);
+        return;
+      }
 
-        if (intent === 'MODE_INSTALLATION') {
-          await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'INSTALLATION' }, site.id);
-          await sendWhatsAppMessage(fromPhone, `🏗️ Switched *${site.fields['Site Name']}* to *INSTALLATION* mode.`);
-          return;
-        }
+      if (intent === 'MODE_MAINTENANCE') {
+        await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'MAINTENANCE' }, site.id);
+        await dispatchReply(`🛠️ Switched *${site.fields['Site Name']}* to *MAINTENANCE* mode.`);
+        return;
+      }
 
-        if (intent === 'MODE_SPOT_CHECK') {
-          await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'SPOT_VISIT' }, site.id);
-          await sendWhatsAppMessage(fromPhone, `🔍 Switched *${site.fields['Site Name']}* to *SPOT VISIT* audit mode.`);
-          return;
-        }
+      if (intent === 'MODE_INSTALLATION') {
+        await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'INSTALLATION' }, site.id);
+        await dispatchReply(`🏗️ Switched *${site.fields['Site Name']}* to *INSTALLATION* mode.`);
+        return;
+      }
 
-        if (intent === 'HELP') {
-          const helpCard = `🤖 *TITAN OS COMMAND MATRIX*\n\n` +
-            `*/s* — Court Twin Status & Progress\n` +
-            `*/map* — Real-Time GPS Navigation Link\n` +
-            `*/w* — Hyperlocal Weather, Wind & Dew Point Tripwires\n` +
-            `*/nearby* — Clustered Maintenance Sweeps (75km radius)\n` +
-            `*/m* — Switch to Maintenance Mode\n` +
-            `*/i* — Switch to Installation Mode\n` +
-            `*/l <Name>* — Bind chat to Court Twin\n` +
-            `*Location Pin* — Send native WhatsApp location for proof-of-presence\n` +
-            `*Voice Note* — Send spoken memos directly in English, Spanish, Swahili, or Hindi for AI audit\n\n` +
-            `_Send photo or video walkthroughs directly for AI forensic audit._`;
-          await sendWhatsAppMessage(fromPhone, helpCard);
-          return;
-        }
+      if (intent === 'MODE_SPOT_CHECK') {
+        await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'SPOT_VISIT' }, site.id);
+        await dispatchReply(`🔍 Switched *${site.fields['Site Name']}* to *SPOT VISIT* audit mode.`);
+        return;
+      }
+
+      if (intent === 'HELP') {
+        const helpCard = `🤖 *TITAN OS COMMAND MATRIX*\n\n` +
+          `*/s* — Court Twin Status & Progress\n` +
+          `*/map* — Real-Time GPS Navigation Link\n` +
+          `*/w* — Hyperlocal Weather, Wind & Dew Point Tripwires\n` +
+          `*/nearby* — Clustered Maintenance Sweeps (75km radius)\n` +
+          `*/m* — Switch to Maintenance Mode\n` +
+          `*/i* — Switch to Installation Mode\n` +
+          `*/l <Name>* — Bind chat to Court Twin\n` +
+          `*Location Pin* — Send native WhatsApp location for proof-of-presence\n` +
+          `*Voice Note* — Send spoken memos directly in English, Spanish, Swahili, or Hindi for AI audit\n\n` +
+          `_Send photo or video walkthroughs directly for AI forensic audit._`;
+        await dispatchReply(helpCard);
+        return;
       }
     }
 
@@ -954,6 +1000,7 @@ app.post('/webhook', async (req, res) => {
     const isImage = message.type === 'image';
     const isAudio = message.type === 'audio' || message.type === 'voice';
 
+    // If it's not media and passed text handling, drop it immediately
     if (!isVideo && !isImage && !isAudio) return;
 
     const mediaObj = message[message.type];
@@ -974,8 +1021,7 @@ app.post('/webhook', async (req, res) => {
         console.error('[Security Alert] META_ACCESS_TOKEN has expired! Update in Render.');
       }
 
-      await sendWhatsAppMessage(
-        fromPhone,
+      await dispatchReply(
         `⚠️ *Titan Media Error*: Unable to download media from Meta. (${errorMsg}). Please contact project admin.`
       );
       return;
@@ -1030,7 +1076,7 @@ app.post('/webhook', async (req, res) => {
         if (weather) {
           const dewDelta = weather.temp - weather.dewPoint;
           if (weather.windGusts > 37) {
-            replyText += `\n\n⛔ *SAFETY HALT:* Wind gusts are ${weather.windGusts} km/h (>20 kts). Glass crane rigging suspended.`;
+            replyText += `\n\n⛔ *SAFETY HALT:* Wind gusts are ${weather.windGusts} km/h (>20 kts). Gate 7 glass rigging suspended.`;
           } else if (weather.humidity > 85 || weather.precip > 0 || dewDelta <= 2) {
             replyText += `\n\n⚠️ *WEATHER NOTICE:* Surface condensation risk (Dew point delta ${dewDelta.toFixed(1)}°C). Gate 9 turf glue hold in effect.`;
           }
@@ -1038,7 +1084,7 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    await sendWhatsAppMessage(fromPhone, replyText);
+    await dispatchReply(replyText);
 
     // ==========================================
     // 10. ASYNCHRONOUS RELATIONAL PERSISTENCE (ENGLISH STANDARDIZED)
@@ -1160,9 +1206,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.7', engine: 'Titan OS V4.5.7 (Multilingual, Indoor/Outdoor & Map Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.8', engine: 'Titan OS V4.5.8 (Group Hive, Multilingual & Weather Engine)' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Titan OS V4.5.7 Clean Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.8 Clean Engine listening on Port ${PORT}`);
 });
