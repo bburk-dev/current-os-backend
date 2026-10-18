@@ -1,13 +1,13 @@
 /**
- * TITAN OS V4.5.18 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Ambient Supply Chain, Warehouse Inventory & Worker Dispatch
+ * TITAN OS V4.5.19 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Multi-Worker Dispatch Broadcast & Omni-Hub Ambient Engine
  * 
- * Active Hubs & Modes:
- * - Executive Leadership: Ambient chatter filter, sales lead capture, high-level directives.
- * - Logistics & Freight: Container ETAs, BOL tracking, flatbed drops, pallet counts.
- * - Factory & Production: Structural steel fabrication, powder coating, glass tempering.
- * - Central Warehouse & Inventory: Stock counts, receiving, damage write-offs, part allocations.
- * - Active Job Sites: 12-gate physical audits, microclimate tripwires, spoken punchdown closeouts.
+ * Capabilities:
+ * - Multi-Worker Dispatch: Broadcasts private WhatsApp assignment vouchers to 1-5 technicians per ticket.
+ * - Omni-Hub Ambient Channels: Passive noise-filtered monitoring for EXECUTIVE, LOGISTICS, PRODUCTION, and INVENTORY.
+ * - Autonomous Mode Handover: Shifts 12/12 verified courts from INSTALLATION to MAINTENANCE automatically.
+ * - Seasonal Decommissioning Guard: Disambiguates seasonal court closing from sales deal closures.
+ * - Self-Healing AST Schema Engine: Automatic recovery from Airtable 422 errors.
  */
 
 process.on('uncaughtException', (err) => {
@@ -634,7 +634,7 @@ async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, prior
     `${directiveNotes}\n\n` +
     `👉 *When finished, simply reply here with a quick voice memo to close out hands-free.*`;
 
-  console.log(`[Worker Alert] Sending WhatsApp dispatch ticket to +${cleanPhone}`);
+  console.log(`[Worker Alert] Sending WhatsApp dispatch ticket to ${workerRecord.fields?.['Full Name']} (+${cleanPhone})`);
   return await sendWhatsAppMessage(cleanPhone, dispatchCard);
 }
 
@@ -1559,7 +1559,6 @@ app.post('/webhook', async (req, res) => {
             const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
             const courtLabel = targetSite?.fields?.['Site Name'] || triage.matched_site_name || 'Assigned Channel / Court';
 
-            // Distinct formatting based on channel operational mode
             let headerEmoji = '🧾';
             let headerTitle = 'DISPATCH VOUCHER';
             if (currentMode === 'INVENTORY' || triage.intent === 'INVENTORY_UPDATE') {
@@ -1701,7 +1700,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ====================================================================
-// 11. AIRTABLE AUTOMATION WEBHOOK (MANUAL DISPATCH NOTIFICATION)
+// 11. AIRTABLE AUTOMATION WEBHOOK (MULTI-WORKER DISPATCH NOTIFICATION)
 // ====================================================================
 
 app.post('/api/notify-worker', async (req, res) => {
@@ -1710,22 +1709,20 @@ app.post('/api/notify-worker', async (req, res) => {
     const { recordId } = req.body;
     if (!recordId) return;
 
-    console.log(`[Webhook Trigger] Manual dispatch notification requested for record: ${recordId}`);
+    console.log(`[Webhook Trigger] Multi-worker dispatch notification requested for record: ${recordId}`);
 
     const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments/${recordId}`;
     const response = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
     if (!response.ok) return;
     
     const ticket = await response.json();
-    const workerLink = ticket.fields['Worker']?.[0];
-    if (!workerLink) return;
+    const workerLinks = ticket.fields['Worker'] || [];
+    if (!Array.isArray(workerLinks) || workerLinks.length === 0) {
+      console.log(`[Webhook Trigger] No workers assigned to ticket #${ticket.fields['Assignment ID']}.`);
+      return;
+    }
 
-    const workerRes = await fetch(`${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Worker/${workerLink}`, {
-      headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
-    });
-    if (!workerRes.ok) return;
-    const workerData = await workerRes.json();
-
+    // Resolve target site name if linked
     let courtName = 'General Facility';
     const siteLink = ticket.fields['Sites']?.[0];
     if (siteLink) {
@@ -1738,23 +1735,33 @@ app.post('/api/notify-worker', async (req, res) => {
       }
     }
 
-    await notifyAssignedWorker(
-      ticket.fields['Assignment ID'],
-      courtName,
-      ticket.fields['Task Category'],
-      ticket.fields['Priority'],
-      ticket.fields['Notes'],
-      workerData
-    );
+    // Iterate through all 1 to 5 assigned workers and notify each on WhatsApp
+    console.log(`[Multi-Worker Broadcast] Alerting ${workerLinks.length} assigned technician(s)...`);
+    for (const workerId of workerLinks) {
+      const workerRes = await fetch(`${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Worker/${workerId}`, {
+        headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+      });
+      if (workerRes.ok) {
+        const workerData = await workerRes.json();
+        await notifyAssignedWorker(
+          ticket.fields['Assignment ID'],
+          courtName,
+          ticket.fields['Task Category'],
+          ticket.fields['Priority'],
+          ticket.fields['Notes'],
+          workerData
+        );
+      }
+    }
   } catch (err) {
-    console.error('[Worker Notification Endpoint Error]:', err);
+    console.error('[Multi-Worker Notification Endpoint Error]:', err);
   }
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.18', engine: 'Titan OS V4.5.18 (Omni-Hub Ambient Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.19', engine: 'Titan OS V4.5.19 (Multi-Worker Broadcast & Omni-Hub Ambient)' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.18 Clean Engine listening on Port 3000`);
+  console.log(`🚀 Titan OS V4.5.19 Clean Engine listening on Port 3000`);
 });
