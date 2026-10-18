@@ -1,6 +1,6 @@
 /**
- * TITAN OS V4.5.10 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Hardened Universal Geospatial, Debounced Burst & Cross-Site Voice Dispatch Edition
+ * TITAN OS V4.5.11 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Hardened Calibrated Triage, Voice Transcription & Cross-Site Router
  * 
  * Audience Alignment:
  * 1. Field Worker: Zero jargon, plain trade vocabulary, proactive environmental holds, actionable next targets.
@@ -8,11 +8,12 @@
  * 3. INOC Operations: Standardized English normalization, ISO micro-gate telemetry, signed 7-day media vault.
  * 4. Executive Leadership: Live portfolio health badges (🟢/🟡/🔴), zero chatter noise, real-time velocity metrics.
  * 
- * Key Capabilities:
- * - Dynamic Voice & Text Cross-Site Routing (Mentions of "Lewinsky" route to BPC HLD Lewinsky from any thread)
- * - In-Memory Media Debouncer (3-second window aggregating bursts & offline reconnects)
- * - Autonomous Work Order Dispatch directly into Daily Assignments
- * - Native fetch architecture (Zero external SDK dependencies for Render compatibility)
+ * New V4.5.11 Capabilities:
+ * - Calibrated Priority Matrix (Critical strictly isolated to structural/glass safety halts)
+ * - Automatic Spoken Audio Transcription committed to Inbound Messages 2 Caption Text
+ * - Schema Payload Sanitization (Eliminated legacy text 'Site' to bypass 422 retries)
+ * - Intelligent Worker Auto-Linking from voice notes and messages (e.g., "Have Dee check...")
+ * - Universal Regex Auto-Healer supporting all Airtable 422 error variants
  */
 
 // --------------------------------------------------------------------
@@ -135,9 +136,11 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 {
   "is_cross_site_dispatch": boolean,
   "target_court_name": "string or null",
+  "transcription": "Verbatim English transcript of any spoken voice note or audio",
   "task_category": "string or null",
-  "assignment_type": "string or null",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | null,
   "priority": "Critical" | "High" | "Medium" | "Low",
+  "suggested_worker_name": "string or null",
   "detected_language": "string",
   "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
   "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED",
@@ -167,10 +170,11 @@ Your objective is to assess court playability, reassure the client with executiv
 
 ### CORE OPERATING RULES:
 1. CLIENT-FIRST REASSURANCE: Speak with executive warmth, promptness, and clarity. Acknowledge what was seen immediately.
-2. TRIAGE PRIORITY CLASSIFICATION:
-   - "CRITICAL" (P1 - Emergency / Shut Down): Shattered/chipped glass, snapped net cable, exposed bolts. Court is marked PAUSED.
-   - "HIGH" (P2 - Action Required / Playable): Frayed turf seam, sagging net (<88cm), loose door latch. Court remains playable.
-   - "MEDIUM" (P3 - Routine / Cosmetic): Sand brushing needed, light water spotting, ball/strap supply request.
+2. TRIAGE PRIORITY CLASSIFICATION (STRICT TOLERANCES):
+   - "Critical" (Emergency Repair): STRICTLY reserved for structural/safety halts that shut the court down (shattered/chipped glass, snapped main cables, structural upright failure, exposed live power). Site is marked PAUSED.
+   - "High" (Service / Spot Visit Punch): Urgent playability or corrosion issues that DO NOT shut the court down (net sag <88cm, loose center strap, loose door latch, lifting turf seam, fence rust). Court remains playable.
+   - "Medium" (Service / Spot Visit Punch): Routine maintenance, sand grooming, bolt caps, minor brooming.
+   - "Low" (Supply Delivery): Cosmetic inquiries, sand bag drop-offs, club ball supplies.
 3. MULTILINGUAL & LEDGER NORMALIZATION:
    - Internal ledger fields MUST BE IN STANDARDIZED ENGLISH.
    - "whatsapp_status_text" must acknowledge the client warmly in their detected language:
@@ -183,16 +187,18 @@ Your objective is to assess court playability, reassure the client with executiv
 
      🎫 *Service Dispatch:*
      • Request: [Short summary of request]
-     • Priority: [P1 Urgent / P2 High / P3 Routine]
+     • Priority: [Critical / High / Medium / Low]
      • Action: [Our team has logged this work order / A technician has been notified]
 
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
   "is_cross_site_dispatch": boolean,
   "target_court_name": "string or null",
+  "transcription": "Verbatim English transcript of any spoken voice note or audio",
   "task_category": "string or null",
-  "assignment_type": "string or null",
+  "assignment_type": "Emergency Repair" | "Spot Visit Punch" | "Service" | "Supply Delivery",
   "priority": "Critical" | "High" | "Medium" | "Low",
+  "suggested_worker_name": "string or null",
   "detected_language": "string",
   "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
   "status_observed": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
@@ -444,6 +450,9 @@ async function uploadToSupabase(fileBuffer, mimeType) {
   return { storagePath, signedUrl: `${CONFIG.supabase.url}/storage/v1${signData.signedURL}` };
 }
 
+/**
+ * Universal Auto-Healer: Extracts field names from any 422 error string format
+ */
 async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
   const cleanFields = { ...fields };
 
@@ -478,9 +487,9 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
     const errorMsg = errBody?.error?.message || '';
     console.warn(`[Auto-Healer] 422 on ${table} (Attempt ${attempt}): ${errorMsg}`);
 
-    const match = errorMsg.match(/field\s*["\\]+([^"\\]+)["\\]+/i) ||
-                  errorMsg.match(/column\s*["\\]+([^"\\]+)["\\]+/i) ||
-                  errorMsg.match(/Unknown field:?\s*["\\]+([^"\\]+)["\\]+/i);
+    // Universal regex matching "Unknown field name: 'X'", "Field 'X' cannot...", "column 'X'"
+    const match = errorMsg.match(/(?:Unknown field name|Unknown field|Field|Column)\s*:?\s*["\\]+([^"\\]+)["\\]+/i) ||
+                  errorMsg.match(/field\s*["\\]+([^"\\]+)["\\]+/i);
 
     if (match && match[1]) {
       const badField = match[1];
@@ -508,9 +517,21 @@ async function lookupWorker(phoneRaw) {
   return data.records?.[0] || null;
 }
 
-/**
- * Enhanced Court Lookup with Fuzzy Keyword Matching (e.g. "Lewinsky" -> "BPC HLD Lewinsky")
- */
+async function lookupWorkerByName(name) {
+  if (!name) return null;
+  const cleanName = name.trim().toLowerCase();
+  const filterFormula = `AND({Active}=1, SEARCH('${cleanName}', LOWER({Full Name})))`;
+  const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Worker?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=1`;
+
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => ({}));
+  return data.records?.[0] || null;
+}
+
 async function lookupSite(groupIdOrPhone, siteName = null) {
   if (siteName) {
     const cleanSearch = siteName.replace(/['’]s?/gi, '').trim().toLowerCase();
@@ -560,6 +581,7 @@ async function triageDispatchText(text, workerRecord, currentSite = null) {
 You are the Titan OS Operational Dispatch Engine. You ingest unstructured field maintenance notes, forwarded WhatsApp texts, voice transcripts, or spot-check messages and convert them into structured Work Order tickets.
 
 Active Padel Court Registry: [${siteListStr}]
+Field Technician Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
 
 Valid Task Categories (MUST choose exactly one):
 - "Turf: Sand & Grooming"
@@ -576,15 +598,21 @@ Valid Task Categories (MUST choose exactly one):
 - "Post-Storm / High-Wind Inspection"
 
 Valid Assignment Types: ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery"]
-Valid Priorities: ["Critical", "High", "Medium", "Low"]
+
+STRICT PRIORITY TOLERANCES:
+- "Critical": STRICTLY reserved for structural/glass hazards that shut the court down (shattered/cracked glass, collapsed mesh, severed main cable, exposed live electrical wiring, loose structural ground anchors).
+- "High": Urgent playability or corrosion issues that DO NOT shut the court down (net sag <88cm, loose center strap, loose door latch, lifting turf seam, fence rust).
+- "Medium": Routine maintenance, sand grooming, bolt caps, minor brooming.
+- "Low": Minor cosmetic, supply drop-off, future seasonal checks.
 
 Input Message: "${text}"
 
 Instructions:
 1. Determine if this message describes a court maintenance need, repair request, inspection observation, or supply delivery. If it is completely irrelevant casual conversation (e.g., "see you tonight", "what's up"), set "is_work_order": false.
 2. Match the court name to the most likely site in the Active Padel Court Registry (e.g., "Lewinsky's", "at lewinsky", "court 2 at ocean reef", etc.). If ambiguous and current site is known, leave matched_site_name null.
-3. Choose the most specific Task Category, Assignment Type, and Priority (Critical for safety/glass/structural stops, High for playability/rust/net issues, Medium/Low for routine sanding/cleaning).
-4. Formulate concise, professional English instructions in "notes" describing the physical directive.
+3. Choose the most specific Task Category, Assignment Type, and Priority strictly according to the tolerances above.
+4. If a technician's name is mentioned to handle the task, extract it in "suggested_worker_name".
+5. Formulate concise, professional English instructions in "notes" describing the physical directive.
 
 Output JSON only:
 {
@@ -593,6 +621,7 @@ Output JSON only:
   "task_category": "string from Valid Task Categories",
   "assignment_type": "string from Valid Assignment Types",
   "priority": "Critical" | "High" | "Medium" | "Low",
+  "suggested_worker_name": "string or null",
   "notes": "string in English"
 }
 `;
@@ -638,6 +667,7 @@ async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
 
   const auditContextText = `AUDIT CONTEXT & FLEET ROUTER:
 Active Padel Court Registry: [${siteListStr}]
+Field Technician Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
 Current Bound Asset: ${cumulativeContext.siteName || 'Unbound Court'}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Facility Type: ${facilityTypeDesc}
@@ -647,10 +677,12 @@ Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 DYNAMIC CROSS-SITE DISPATCH OVERRIDE RULES:
 1. If the spoken audio or media caption explicitly mentions a DIFFERENT court from the current bound court (e.g., "at Lewinsky's", "at Camp Salter", "Court 1", "Lewinsky"), OR describes a maintenance request / punch item / supply need:
    - Set "is_cross_site_dispatch": true
-   - Set "target_court_name" to the matched court name from the Active Padel Court Registry (e.g., "BPC HLD Lewinsky")
-   - Set "task_category" to one of: ["Turf: Sand & Grooming", "Net: Tension & Hardware", "Glass & Structure", "Hardware: Caps & Fasteners", "Lighting & Electrical", "Supply Delivery (Joy Cannon)", "Site Cleanliness & Sweep"]
-   - Set "assignment_type" to one of: ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery"]
-   - Set "priority" to: "Critical", "High", "Medium", or "Low"
+   - Set "target_court_name" to the matched court name from the Active Padel Court Registry (e.g., "BPC HLD Lewinsky", "BPC Camp Salter")
+   - Transcribe spoken words verbatim into "transcription"
+   - Extract "task_category" from valid options: ["Turf: Sand & Grooming", "Net: Tension & Hardware", "Glass & Structure", "Hardware: Caps & Fasteners", "Lighting & Electrical", "Supply Delivery (Joy Cannon)", "Site Cleanliness & Sweep"]
+   - Extract "assignment_type": "Emergency Repair" (strictly for halts/shattered glass), "Service" (repairs/net calibration), "Spot Visit Punch" (hardware/rust), "Supply Delivery"
+   - Extract "priority": "Critical" (safety shutdown only), "High" (playability/net sag <88cm/rust), "Medium" (routine sand/caps), "Low" (supplies)
+   - If a technician is requested, extract their name into "suggested_worker_name"
 2. If the media is simply an installation progress walkthrough for the CURRENT bound court, set "is_cross_site_dispatch": false and "target_court_name": null.`;
 
   const contentParts = [{ text: auditContextText }];
@@ -769,7 +801,7 @@ async function processMediaBatch(batch) {
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
   
   // ------------------------------------------------------------------
-  // 4. CROSS-SITE VOICE DISPATCH ROUTER (LEWINSKY / DAILY ASSIGNMENTS)
+  // 4. CROSS-SITE VOICE DISPATCH ROUTER (DAILY ASSIGNMENTS)
   // ------------------------------------------------------------------
   const isCrossSite = forensicAudit.is_cross_site_dispatch ||
     (forensicAudit.target_court_name && site && !site.fields['Site Name'].toLowerCase().includes(forensicAudit.target_court_name.toLowerCase()));
@@ -782,21 +814,28 @@ async function processMediaBatch(batch) {
     }
     if (!targetSite) targetSite = site;
 
+    // Check if a specific worker was named (e.g. "Have Dee check...")
+    let assignedWorker = worker;
+    if (forensicAudit.suggested_worker_name) {
+      const namedWorker = await lookupWorkerByName(forensicAudit.suggested_worker_name);
+      if (namedWorker) assignedWorker = namedWorker;
+    }
+
     const taskNotes = (forensicAudit.action_items || []).join('\n') || forensicAudit.worker_summary;
     const assignmentPayload = {
       'Date': new Date().toISOString().split('T')[0],
       'Task Category': forensicAudit.task_category || 'Turf: Sand & Grooming',
-      'Assignment Type': forensicAudit.assignment_type || 'Spot Visit Punch',
+      'Assignment Type': forensicAudit.assignment_type || 'Service',
       'Priority': forensicAudit.priority || 'High',
       'Source': senderSource || 'Exec Visit (Bob)',
       'Status': 'Open',
       'Notes': taskNotes
     };
 
-    if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+    if (assignedWorker?.id) assignmentPayload['Worker'] = [assignedWorker.id];
     if (targetSite?.id) {
+      // ONLY write relational 'Sites' field to eliminate 422 retry on legacy 'Site' text column
       assignmentPayload['Sites'] = [targetSite.id];
-      assignmentPayload['Site'] = [targetSite.id];
     }
 
     const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
@@ -812,15 +851,17 @@ async function processMediaBatch(batch) {
 
     await sendWhatsAppMessage(dispatchTarget, dispatchConfirmation);
 
-    // Persist media record referencing the target court
+    // Persist media record referencing the target court with transcribed speech
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const storageResult = storageResults[i];
+      const speechTranscript = forensicAudit.transcription ? `[Transcribed Speech]: ${forensicAudit.transcription}` : item.caption;
+
       await airtableWriteWithAutoDrop('Inbound Messages 2', {
         'Message ID': item.messageId,
         'Worker Phone Raw': fromPhone,
         'Message Type': item.type,
-        'Caption Text': item.caption,
+        'Caption Text': speechTranscript,
         'Media URL': storageResult.signedUrl,
         'Media Path': storageResult.storagePath,
         'Raw Payload JSON': JSON.stringify(item.rawMessage)
@@ -859,16 +900,18 @@ async function processMediaBatch(batch) {
     await sendWhatsAppMessage(fromPhone, replyText);
   }
 
-  // Persist inbound media
+  // Persist inbound media with transcribed speech
   const inboundRecordIds = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const storageResult = storageResults[i];
+    const speechTranscript = forensicAudit.transcription ? `[Transcribed Speech]: ${forensicAudit.transcription}` : item.caption;
+
     const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': item.messageId,
       'Worker Phone Raw': fromPhone,
       'Message Type': item.type,
-      'Caption Text': item.caption,
+      'Caption Text': speechTranscript,
       'Media URL': storageResult.signedUrl,
       'Media Path': storageResult.storagePath,
       'Raw Payload JSON': JSON.stringify(item.rawMessage)
@@ -900,9 +943,9 @@ async function processMediaBatch(batch) {
 
   if (isMaintenanceInspection && hasActiveDefects) {
     const assignmentType = forensicAudit.assignment_type ||
-      (forensicAudit.priority === 'CRITICAL' ? 'Emergency Repair' : 'Spot Visit Punch');
+      (forensicAudit.priority === 'Critical' ? 'Emergency Repair' : 'Spot Visit Punch');
 
-    const priority = forensicAudit.priority === 'CRITICAL' ? 'Critical' : 'High';
+    const priority = forensicAudit.priority || 'High';
     const taskNotes = (forensicAudit.action_items || []).join('\n') || forensicAudit.worker_summary;
 
     const assignmentPayload = {
@@ -917,7 +960,6 @@ async function processMediaBatch(batch) {
     if (worker?.id) assignmentPayload['Worker'] = [worker.id];
     if (site) {
       assignmentPayload['Sites'] = [site.id];
-      assignmentPayload['Site'] = [site.id];
     }
     if (reportRecord?.id) assignmentPayload['Origin Report'] = [reportRecord.id];
 
@@ -965,7 +1007,7 @@ async function processMediaBatch(batch) {
         sitePatch['Install Completed'] = nowIso;
       }
     } else {
-      if (forensicAudit.hazard_detected || forensicAudit.priority === 'CRITICAL' || forensicAudit.status_observed === 'HAZARD_OUT_OF_SERVICE') {
+      if (forensicAudit.hazard_detected || forensicAudit.priority === 'Critical' || forensicAudit.status_observed === 'HAZARD_OUT_OF_SERVICE') {
         sitePatch['Site Status'] = 'PAUSED';
         console.warn(`[Safety Protocol] Court PAUSED for ${site.fields['Site Name']}`);
       }
@@ -1399,6 +1441,13 @@ app.post('/webhook', async (req, res) => {
               targetSite = site;
             }
 
+            // Check if worker was named in text
+            let assignedWorker = worker;
+            if (triage.suggested_worker_name) {
+              const namedWorker = await lookupWorkerByName(triage.suggested_worker_name);
+              if (namedWorker) assignedWorker = namedWorker;
+            }
+
             const senderName = worker?.fields?.['Full Name'] || 'Dispatcher';
             let source = 'Dispatch';
             if (senderName === 'Bob' || (worker?.fields?.['Role'] === 'Admin')) {
@@ -1417,10 +1466,10 @@ app.post('/webhook', async (req, res) => {
               'Notes': triage.notes
             };
 
-            if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+            if (assignedWorker?.id) assignmentPayload['Worker'] = [assignedWorker.id];
             if (targetSite?.id) {
+              // Target only relational 'Sites' field
               assignmentPayload['Sites'] = [targetSite.id];
-              assignmentPayload['Site'] = [targetSite.id];
             }
 
             const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
@@ -1532,10 +1581,10 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.10', engine: 'Titan OS V4.5.10 (Cross-Site Voice Dispatch & Debouncer)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.11', engine: 'Titan OS V4.5.11 (Calibrated Triage & Speech Transcription)' });
 });
 
 // Explicit 0.0.0.0 host binding for Docker/Render container routing
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.10 Clean Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.11 Clean Engine listening on Port ${PORT}`);
 });
