@@ -1,12 +1,17 @@
 /**
- * TITAN OS V4.5.8 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Hardened Universal Geospatial & 4-Audience Edition
+ * TITAN OS V4.5.9 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Hardened Universal Geospatial, Debounced Burst & Dispatch Triage Edition
  * 
  * Audience Alignment:
  * 1. Field Worker: Zero jargon, plain trade vocabulary, proactive environmental holds, actionable next targets.
  * 2. Joy Cannon / VIP Client: Executive hospitality, playability confirmation, rapid maintenance ticket routing.
  * 3. INOC Operations: Standardized English normalization, ISO micro-gate telemetry, signed 7-day media vault.
  * 4. Executive Leadership: Live portfolio health badges (🟢/🟡/🔴), zero chatter noise, real-time velocity metrics.
+ * 
+ * New V4.5.9 Capabilities:
+ * - In-Memory Media Debouncer (3-second window aggregating rapid bursts / offline reconnects)
+ * - Autonomous Work Order Dispatch & Forwarding Triage directly into Daily Assignments
+ * - Native fetch architecture (Zero external SDK dependencies for Render compatibility)
  */
 
 // --------------------------------------------------------------------
@@ -66,6 +71,10 @@ const CONFIG = {
     endpoint: 'https://api.airtable.com/v0'
   }
 };
+
+// In-Memory Debounce Buffer for Offline Media Bursts
+const mediaDebounceQueues = new Map();
+const DEBOUNCE_DELAY_MS = 3000;
 
 // ====================================================================
 // 2. INDUSTRIAL FORENSIC SCHEMAS (PROMPTS)
@@ -286,7 +295,7 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
     }
   }
 
-  // 2. Base64 Airtable Map Cache[cite: 1, 4]
+  // 2. Base64 Airtable Map Cache
   if (cache && typeof cache === 'string') {
     try {
       const decoded = Buffer.from(cache, 'base64').toString('utf8');
@@ -518,12 +527,96 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
   return data.records?.[0] || null;
 }
 
+async function getAllActiveSitesList() {
+  const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?fields%5B%5D=Site+Name&maxRecords=100`;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => ({}));
+  return (data.records || []).map(r => r.fields['Site Name']).filter(Boolean);
+}
+
 // ====================================================================
-// 5. DETERMINISTIC FORENSIC EVALUATOR & OUTBOUND MESSAGING
+// 5. AUTONOMOUS DISPATCH & WORK ORDER FORWARDING TRIAGE
 // ====================================================================
 
-async function evaluateCourtMedia(mediaBuffer, mimeType, cumulativeContext = {}) {
-  const base64Data = mediaBuffer.toString('base64');
+async function triageDispatchText(text, workerRecord, currentSite = null) {
+  const activeSites = await getAllActiveSitesList();
+  const siteListStr = activeSites.join(', ') || 'BPC HLD Lewinsky, BPC RCOR Court 1, BPC RCOR Court 2, BPC Camp Salter';
+
+  const prompt = `
+You are the Titan OS Operational Dispatch Engine. You ingest unstructured field maintenance notes, forwarded WhatsApp texts, voice transcripts, or spot-check messages and convert them into structured Work Order tickets.
+
+Active Padel Court Registry: [${siteListStr}]
+
+Valid Task Categories (MUST choose exactly one):
+- "Turf: Sand & Grooming"
+- "Net: Tension & Hardware"
+- "Glass & Structure"
+- "Hardware: Caps & Fasteners"
+- "Lighting & Electrical"
+- "Supply Delivery (Joy Cannon)"
+- "Site Cleanliness & Sweep"
+- "Season Opening"
+- "Season Closing"
+- "Quarterly Maintenance"
+- "Annual Structural & Torque Audit"
+- "Post-Storm / High-Wind Inspection"
+
+Valid Assignment Types: ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery"]
+Valid Priorities: ["Critical", "High", "Medium", "Low"]
+
+Input Message: "${text}"
+
+Instructions:
+1. Determine if this message describes a court maintenance need, repair request, inspection observation, or supply delivery. If it is completely irrelevant casual conversation (e.g., "see you tonight", "what's up"), set "is_work_order": false.
+2. Match the court name to the most likely site in the Active Padel Court Registry (e.g., "Lewinsky's", "at lewinsky", "court 2 at ocean reef", etc.). If ambiguous and current site is known, leave matched_site_name null.
+3. Choose the most specific Task Category, Assignment Type, and Priority (Critical for safety/glass/structural stops, High for playability/rust/net issues, Medium/Low for routine sanding/cleaning).
+4. Formulate concise, professional English instructions in "notes" describing the physical directive.
+
+Output JSON only:
+{
+  "is_work_order": true,
+  "matched_site_name": "string or null",
+  "task_category": "string from Valid Task Categories",
+  "assignment_type": "string from Valid Assignment Types",
+  "priority": "Critical" | "High" | "Medium" | "Low",
+  "notes": "string in English"
+}
+`;
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.0,
+      responseMimeType: 'application/json',
+      thinkingConfig: { thinkingBudget: 0 }
+    }
+  };
+
+  const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    throw new Error(`Gemini dispatch triage failed (${res.status}): ${await res.text()}`);
+  }
+
+  const result = await res.json();
+  const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) return null;
+
+  const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+  return JSON.parse(cleaned);
+}
+
+// ====================================================================
+// 6. BATCH MULTIMODAL FORENSIC EVALUATION
+// ====================================================================
+
+async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
   const isMaintenanceMode = cumulativeContext.workflowMode === 'MAINTENANCE' || cumulativeContext.workflowMode === 'SPOT_VISIT';
   const systemInstruction = isMaintenanceMode ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT;
   const facilityTypeDesc = cumulativeContext.isIndoor ? 'INDOOR FACILITY' : 'OUTDOOR FIELD FACILITY';
@@ -540,15 +633,24 @@ Facility Type: ${facilityTypeDesc}
 Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilestones || [])}
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}`;
 
+  const contentParts = [{ text: auditContextText }];
+
+  for (const item of mediaItems) {
+    if (item.caption) {
+      contentParts.push({ text: `Caption: ${item.caption}` });
+    }
+    contentParts.push({
+      inline_data: {
+        mime_type: item.mimeType,
+        data: item.buffer.toString('base64')
+      }
+    });
+  }
+
   const payload = {
     system_instruction: { parts: [{ text: systemInstruction }] },
     contents: [
-      {
-        parts: [
-          { text: auditContextText },
-          { inline_data: { mime_type: mimeType, data: base64Data } }
-        ]
-      }
+      { parts: contentParts }
     ],
     generationConfig: {
       temperature: 0.0,
@@ -611,7 +713,184 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
 }
 
 // ====================================================================
-// 6. WEBHOOK ROUTING & CORE ENGINE
+// 7. BATCH PROCESSOR (DEBOUNCED MEDIA AGGREGATION)
+// ====================================================================
+
+async function processMediaBatch(batch) {
+  const { items, site, worker, dispatchTarget, fromPhone, senderSource, indoorSite } = batch;
+
+  // 1. Upload all items in parallel to Supabase Vault
+  const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
+  const storageResults = await Promise.all(uploadPromises);
+
+  // 2. Build cumulative context
+  let parsedTimestamps = {};
+  if (site?.fields?.['Milestone Timestamps JSON']) {
+    try {
+      parsedTimestamps = JSON.parse(site.fields['Milestone Timestamps JSON']);
+    } catch (err) {
+      parsedTimestamps = {};
+    }
+  }
+
+  const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
+  const cumulativeContext = {
+    siteName: site?.fields?.['Site Name'] || 'BPC Court',
+    workflowMode: currentMode,
+    siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
+    openTickets: site?.fields?.['Open Tickets'] || 0,
+    clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
+    milestoneTimestamps: parsedTimestamps,
+    lastNote: site?.fields?.['Last Note'] || '',
+    isIndoor: indoorSite
+  };
+
+  // 3. Multi-item multimodal evaluation pass with Gemini
+  const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
+  let replyText = forensicAudit.whatsapp_status_text;
+
+  // 4. Environmental safety tripwire append (Outdoor only)
+  if (currentMode === 'INSTALLATION' && site && !indoorSite) {
+    const coords = await resolveCoordinates(site);
+    if (coords) {
+      const weather = await getHyperlocalWeather(coords.lat, coords.lon);
+      if (weather) {
+        const dewDelta = weather.temp - weather.dewPoint;
+        if (weather.windGusts > 37) {
+          replyText += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 4 glass seating suspended.`;
+        } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
+          replyText += `\n\n🌧️ *WEATHER NOTICE:* Active rain/storm detected. Hold outdoor assembly & gluing.`;
+        } else if (weather.humidity > 85 || dewDelta <= 2) {
+          replyText += `\n\n⚠️ *WEATHER NOTICE:* Surface condensation risk. Hold Gate 7 turf adhesive.`;
+        }
+      }
+    }
+  }
+
+  // 5. Dispatch status card to WhatsApp immediately
+  const ok = await sendWhatsAppMessage(dispatchTarget, replyText);
+  if (!ok && dispatchTarget !== fromPhone && fromPhone) {
+    await sendWhatsAppMessage(fromPhone, replyText);
+  }
+
+  // 6. Persist each inbound media record to Inbound Messages 2
+  const inboundRecordIds = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const storageResult = storageResults[i];
+    const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
+      'Message ID': item.messageId,
+      'Worker Phone Raw': fromPhone,
+      'Message Type': item.type,
+      'Caption Text': item.caption,
+      'Media URL': storageResult.signedUrl,
+      'Media Path': storageResult.storagePath,
+      'Raw Payload JSON': JSON.stringify(item.rawMessage)
+    });
+    if (inboundRecord?.id) inboundRecordIds.push(inboundRecord.id);
+  }
+
+  // 7. Write single forensic report to Reports 2
+  const reportsPayload = {
+    'Inbound Messages 2': inboundRecordIds,
+    'Sites': site ? [site.id] : [],
+    'Workflow Mode': cumulativeContext.workflowMode,
+    'Overall Status': forensicAudit.status_observed,
+    'Site Conditions': forensicAudit.site_conditions || 'Clear',
+    'Action Items': (forensicAudit.action_items || []).join('\n'),
+    'Status Observed': forensicAudit.status_observed,
+    'Action Intent': forensicAudit.action_intent || (forensicAudit.priority ? `INCIDENT_${forensicAudit.priority}` : 'MAINTENANCE_LOG'),
+    'WhatsApp Reply Text': replyText,
+    'Clean JSON': JSON.stringify(forensicAudit, null, 2)
+  };
+
+  const reportRecord = await airtableWriteWithAutoDrop('Reports 2', reportsPayload);
+
+  // 8. Closed-loop dispatch to Daily Assignments
+  const isMaintenanceInspection = currentMode === 'MAINTENANCE' || currentMode === 'SPOT_VISIT';
+  const hasActiveDefects = (forensicAudit.action_items && forensicAudit.action_items.length > 0) ||
+                           forensicAudit.status_observed === 'ACTION_REQUIRED' ||
+                           forensicAudit.status_observed === 'HAZARD_OUT_OF_SERVICE';
+
+  if (isMaintenanceInspection && hasActiveDefects) {
+    const assignmentType = forensicAudit.assignment_type ||
+      (forensicAudit.priority === 'CRITICAL' ? 'Emergency Repair' : 'Spot Visit Punch');
+
+    const priority = forensicAudit.priority === 'CRITICAL' ? 'Critical' : 'High';
+    const taskNotes = (forensicAudit.action_items || []).join('\n') || forensicAudit.worker_summary;
+
+    const assignmentPayload = {
+      'Date': new Date().toISOString().split('T')[0],
+      'Assignment Type': assignmentType,
+      'Priority': priority,
+      'Source': senderSource,
+      'Notes': taskNotes,
+      'Status': 'Open'
+    };
+
+    if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+    if (site) {
+      assignmentPayload['Sites'] = [site.id];
+      assignmentPayload['Site'] = [site.id];
+    }
+    if (reportRecord?.id) assignmentPayload['Origin Report'] = [reportRecord.id];
+
+    await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+    console.log(`[Work Order Dispatched] Ticket created for ${cumulativeContext.siteName}`);
+  }
+
+  // 9. Update Parent Digital Twin (Sites Table)
+  if (site) {
+    const nowIso = new Date().toISOString();
+    const sitePatch = {
+      'Last Intent': forensicAudit.action_intent || `TRIAGE_${forensicAudit.priority || 'LOG'}`,
+      'Last Note': forensicAudit.worker_summary
+    };
+
+    if (currentMode === 'INSTALLATION') {
+      const updatedTimestamps = { ...cumulativeContext.milestoneTimestamps };
+
+      for (const gateNum of (forensicAudit.verified_gates || [])) {
+        if (!updatedTimestamps[`Gate ${gateNum}`]) {
+          updatedTimestamps[`Gate ${gateNum}`] = nowIso;
+        }
+      }
+
+      const previouslyCleared = cumulativeContext.clearedMilestones || [];
+      const newlyVerified = (forensicAudit.verified_gates || []).map(g => `Gate ${g}`);
+      let allClearedGates = Array.from(new Set([...previouslyCleared, ...newlyVerified]));
+
+      // Transient Gate 12 Demotion
+      if (forensicAudit.needs_attention_gates?.includes(12)) {
+        allClearedGates = allClearedGates.filter(g => g !== 'Gate 12');
+        delete updatedTimestamps['Gate 12'];
+      }
+
+      sitePatch['Cleared Milestones'] = allClearedGates;
+      sitePatch['Milestone Timestamps JSON'] = JSON.stringify(updatedTimestamps, null, 2);
+
+      if (!site.fields['Install Started'] && allClearedGates.length > 0) {
+        sitePatch['Install Started'] = nowIso;
+      }
+
+      if (allClearedGates.length === 12 && forensicAudit.status_observed === 'COMMISSIONED') {
+        sitePatch['Workflow Mode'] = 'MAINTENANCE';
+        sitePatch['Site Status'] = 'ACTIVE';
+        sitePatch['Install Completed'] = nowIso;
+      }
+    } else {
+      if (forensicAudit.hazard_detected || forensicAudit.priority === 'CRITICAL' || forensicAudit.status_observed === 'HAZARD_OUT_OF_SERVICE') {
+        sitePatch['Site Status'] = 'PAUSED';
+        console.warn(`[Safety Protocol] Court PAUSED for ${site.fields['Site Name']}`);
+      }
+    }
+
+    await airtableWriteWithAutoDrop('Sites', sitePatch, site.id);
+  }
+}
+
+// ====================================================================
+// 8. WEBHOOK ROUTING & INGESTION ENGINE
 // ====================================================================
 
 app.get('/webhook', (req, res) => {
@@ -706,7 +985,7 @@ app.post('/webhook', async (req, res) => {
     const indoorSite = isIndoorSite(site);
 
     // ==================================================================
-    // 7. LOCATION PIN-DROP (AUTONOMOUS ANCHORING & CHECK-IN)
+    // 9. LOCATION PIN-DROP (AUTONOMOUS ANCHORING & CHECK-IN)
     // ==================================================================
     if (message.type === 'location') {
       const userLat = message.location.latitude;
@@ -772,267 +1051,330 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ==================================================================
-    // 8. ZERO-TOKEN COMMAND MATRIX & CHATTER FILTER
+    // 10. COMMAND MATRIX & AUTONOMOUS DISPATCH FORWARDING
     // ==================================================================
     if (message.type === 'text') {
       const rawText = message.text.body.trim();
       const [trigger, ...args] = rawText.split(' ');
       const intent = COMMAND_MAP[trigger.toLowerCase()];
 
-      if (!intent) return; // Drop plain chatter silently
+      // --- BRANCH A: EXPLICIT SLASH COMMANDS ---
+      if (intent) {
+        console.log(`[Command Engine] Triggered: ${trigger} -> ${intent}`);
 
-      console.log(`[Command Engine] Triggered: ${trigger} -> ${intent}`);
-
-      // /l or /link <Site Name>
-      if (intent === 'LINK_SITE') {
-        const targetSiteName = args.join(' ');
-        const targetSite = await lookupSite(null, targetSiteName);
-        if (!targetSite) {
-          await dispatchReply(`❌ Could not find "${targetSiteName}". Check spelling in Airtable.`);
-          return;
-        }
-
-        const targetBindingId = groupJid || fromPhone;
-        await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': targetBindingId }, targetSite.id);
-
-        const siteLoc = targetSite.fields['Site location'] || 'Location on file';
-        const mapUrl = await formatMapUrl(targetSite);
-        const isTargetIndoor = isIndoorSite(targetSite);
-
-        let welcomeCard = `✅ *CONNECTED TO ${targetSite.fields['Site Name'].toUpperCase()}*\n` +
-          `📍 *Location:* ${siteLoc}\n` +
-          `🏢 *Environment:* ${isTargetIndoor ? 'Indoor Facility' : 'Outdoor Facility'}\n`;
-
-        if (mapUrl) {
-          welcomeCard += `🗺️ *GPS Navigation:* ${mapUrl}\n`;
-        }
-
-        welcomeCard += `\n💡 *Helpful Commands:*\n` +
-          `• */s* — Live progress & weather-safe next target\n` +
-          `• */w* — Weather & wind/moisture safety checks\n` +
-          `• */nearby* — Nearby service stops (maintenance)\n` +
-          `• Drop a WhatsApp location pin to check in on site.\n` +
-          `• Send photos, videos, or voice memos anytime to log work.`;
-
-        await dispatchReply(welcomeCard);
-        return;
-      }
-
-      if (!site) {
-        await dispatchReply(`⚠️ This chat is not connected to a court yet. Type */l <Court Name>* to connect.`);
-        return;
-      }
-
-      // /map, /loc, /gps
-      if (intent === 'LOCATION') {
-        const siteLoc = site.fields['Site location'] || 'Location on file';
-        const mapUrl = await formatMapUrl(site);
-
-        if (!mapUrl) {
-          await dispatchReply(`⚠️ No address on file for *${site.fields['Site Name']}*.`);
-          return;
-        }
-
-        await dispatchReply(
-          `📍 *${site.fields['Site Name']}*\n` +
-          `📫 ${siteLoc}\n\n` +
-          `🗺️ *Tap to navigate:*\n${mapUrl}`
-        );
-        return;
-      }
-
-      // /w, /weather, /clima
-      if (intent === 'WEATHER') {
-        if (indoorSite) {
-          await dispatchReply(
-            `🏢 *${site.fields['Site Name']}* is an Indoor Facility.\nOutdoor wind and precipitation tripwires are bypassed. Verify overhead ceiling clearance (min 6.0m) and HVAC moisture.`
-          );
-          return;
-        }
-
-        const coords = await resolveCoordinates(site);
-        if (!coords) {
-          await dispatchReply(
-            `⚠️ *${site.fields['Site Name']}* does not have GPS coordinates or Map Cache geocoded in Airtable.`
-          );
-          return;
-        }
-
-        const weather = await getHyperlocalWeather(coords.lat, coords.lon);
-        if (!weather) {
-          await dispatchReply(`⚠️ Weather service temporarily unreachable. Try again in 30 seconds.`);
-          return;
-        }
-
-        const dewDelta = (weather.temp - weather.dewPoint).toFixed(1);
-        let weatherCard = `🌤️ *WEATHER & SITE CONDITIONS | ${site.fields['Site Name']}*\n` +
-          `• *Air Temp:* ${weather.temp}°C (Dew Point: ${weather.dewPoint}°C)\n` +
-          `• *Wind:* ${weather.windSpeed} km/h (Gusts: ${weather.windGusts} km/h)\n` +
-          `• *Humidity:* ${weather.humidity}%\n` +
-          `• *Rain Risk:* ${weather.precipProbability4h}% in next 4 hours\n\n`;
-
-        if (weather.windGusts > 37) {
-          weatherCard += `⛔ *CRANE / GLASS RIGGING HALT:* Wind gusts exceed 20 knots (37 km/h). Gate 4 glass seating suspended.`;
-        } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
-          weatherCard += `🌧️ *RAIN HOLD ACTIVE:* Precipitation detected or imminent (${weather.precipProbability4h}%). Outdoor assembly & gluing suspended.`;
-        } else if (weather.humidity > 85 || dewDelta <= 2) {
-          weatherCard += `⚠️ *ADHESIVE WARNING:* Surface condensation risk (Temp-DewPoint delta ${dewDelta}°C). Do NOT spread Gate 7 turf glue.`;
-        } else {
-          weatherCard += `✅ *CONDITIONS CLEAR:* Green light for assembly, glass rigging, and outdoor gluing.`;
-        }
-
-        await dispatchReply(weatherCard);
-        return;
-      }
-
-      // /nearby, /route
-      if (intent === 'NEARBY_SWEEP') {
-        const coords = await resolveCoordinates(site);
-        if (!coords) {
-          await dispatchReply(`⚠️ Current site does not have GPS coordinates to calculate proximity.`);
-          return;
-        }
-
-        const filterFormula = `AND({Workflow Mode}='MAINTENANCE', {Open Tickets} > 0, RECORD_ID() != '${site.id}')`;
-        const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=15`;
-        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-        const data = await res.json().catch(() => ({}));
-        const candidates = data.records || [];
-
-        const nearbySites = [];
-        for (const c of candidates) {
-          const cCoords = await resolveCoordinates(c);
-          if (cCoords) {
-            const distKm = haversineDistanceKm(coords.lat, coords.lon, cCoords.lat, cCoords.lon);
-            if (distKm <= 75) {
-              nearbySites.push({
-                name: c.fields['Site Name'],
-                distance: distKm.toFixed(1),
-                tickets: c.fields['Open Tickets'] || 1,
-                mapUrl: await formatMapUrl(c)
-              });
-            }
+        // /l or /link <Site Name>
+        if (intent === 'LINK_SITE') {
+          const targetSiteName = args.join(' ');
+          const targetSite = await lookupSite(null, targetSiteName);
+          if (!targetSite) {
+            await dispatchReply(`❌ Could not find "${targetSiteName}". Check spelling in Airtable.`);
+            return;
           }
-        }
 
-        nearbySites.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+          const targetBindingId = groupJid || fromPhone;
+          await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': targetBindingId }, targetSite.id);
 
-        if (nearbySites.length === 0) {
-          await dispatchReply(`✅ No other courts with open service tickets within 75 km of *${site.fields['Site Name']}*.`);
+          const siteLoc = targetSite.fields['Site location'] || 'Location on file';
+          const mapUrl = await formatMapUrl(targetSite);
+          const isTargetIndoor = isIndoorSite(targetSite);
+
+          let welcomeCard = `✅ *CONNECTED TO ${targetSite.fields['Site Name'].toUpperCase()}*\n` +
+            `📍 *Location:* ${siteLoc}\n` +
+            `🏢 *Environment:* ${isTargetIndoor ? 'Indoor Facility' : 'Outdoor Facility'}\n`;
+
+          if (mapUrl) {
+            welcomeCard += `🗺️ *GPS Navigation:* ${mapUrl}\n`;
+          }
+
+          welcomeCard += `\n💡 *Helpful Commands:*\n` +
+            `• */s* — Live progress & weather-safe next target\n` +
+            `• */w* — Weather & wind/moisture safety checks\n` +
+            `• */nearby* — Nearby service stops (maintenance)\n` +
+            `• Drop a WhatsApp location pin to check in on site.\n` +
+            `• Send photos, videos, or voice memos anytime to log work.`;
+
+          await dispatchReply(welcomeCard);
           return;
         }
 
-        let sweepCard = `📍 *OPEN SERVICE CALLS NEARBY*\n` +
-          `_Courts needing service within 75 km of ${site.fields['Site Name']}:_\n\n`;
-
-        for (let i = 0; i < Math.min(3, nearbySites.length); i++) {
-          const n = nearbySites[i];
-          sweepCard += `${i + 1}. *${n.name}* (${n.distance} km away)\n` +
-            `   • ${n.tickets} open ticket(s)\n` +
-            `   • Nav: ${n.mapUrl}\n\n`;
+        if (!site) {
+          await dispatchReply(`⚠️ This chat is not connected to a court yet. Type */l <Court Name>* to connect.`);
+          return;
         }
 
-        await dispatchReply(sweepCard);
-        return;
-      }
+        // /map, /loc, /gps
+        if (intent === 'LOCATION') {
+          const siteLoc = site.fields['Site location'] || 'Location on file';
+          const mapUrl = await formatMapUrl(site);
 
-      // /s, /sum, /status — PROACTIVE ENVIRONMENTAL BUILD STATUS
-      if (intent === 'STATUS') {
-        const mode = site.fields['Workflow Mode'] || 'INSTALLATION';
-        const lastNote = site.fields['Last Note'] || 'No active punch items recorded.';
-        const siteStatus = site.fields['Site Status'] || 'ACTIVE';
+          if (!mapUrl) {
+            await dispatchReply(`⚠️ No address on file for *${site.fields['Site Name']}*.`);
+            return;
+          }
 
-        let progressCard = '';
+          await dispatchReply(
+            `📍 *${site.fields['Site Name']}*\n` +
+            `📫 ${siteLoc}\n\n` +
+            `🗺️ *Tap to navigate:*\n${mapUrl}`
+          );
+          return;
+        }
 
-        if (mode === 'MAINTENANCE' || mode === 'SPOT_VISIT') {
-          const openTickets = site.fields['Open Tickets'] || 0;
-          const isPaused = siteStatus === 'PAUSED';
+        // /w, /weather, /clima
+        if (intent === 'WEATHER') {
+          if (indoorSite) {
+            await dispatchReply(
+              `🏢 *${site.fields['Site Name']}* is an Indoor Facility.\nOutdoor wind and precipitation tripwires are bypassed. Verify overhead ceiling clearance (min 6.0m) and HVAC moisture.`
+            );
+            return;
+          }
 
-          let statusBadge = isPaused
-            ? '🔴 *Court Temporarily Paused*'
-            : (openTickets > 0 ? '🟡 *Maintenance Scheduled*' : '🟢 *Court Open for Play*');
+          const coords = await resolveCoordinates(site);
+          if (!coords) {
+            await dispatchReply(
+              `⚠️ *${site.fields['Site Name']}* does not have GPS coordinates or Map Cache geocoded in Airtable.`
+            );
+            return;
+          }
 
-          progressCard = `🎾 *${site.fields['Site Name']}*\n` +
-            `${statusBadge}\n\n` +
-            `🎫 *Active Requests:* ${openTickets} open\n` +
-            `📋 *Latest Note:* ${lastNote}`;
-        } else {
-          const cleared = site.fields['Cleared Milestones'] || [];
-          const nextTarget = getNextTargetGate(cleared);
-          const isHalted = siteStatus === 'PAUSED';
+          const weather = await getHyperlocalWeather(coords.lat, coords.lon);
+          if (!weather) {
+            await dispatchReply(`⚠️ Weather service temporarily unreachable. Try again in 30 seconds.`);
+            return;
+          }
 
-          let statusBadge = isHalted ? '⛔ *Work Temporarily Halted*' : '🟢 *Ready for Work*';
-          let weatherLine = '';
+          const dewDelta = (weather.temp - weather.dewPoint).toFixed(1);
+          let weatherCard = `🌤️ *WEATHER & SITE CONDITIONS | ${site.fields['Site Name']}*\n` +
+            `• *Air Temp:* ${weather.temp}°C (Dew Point: ${weather.dewPoint}°C)\n` +
+            `• *Wind:* ${weather.windSpeed} km/h (Gusts: ${weather.windGusts} km/h)\n` +
+            `• *Humidity:* ${weather.humidity}%\n` +
+            `• *Rain Risk:* ${weather.precipProbability4h}% in next 4 hours\n\n`;
 
-          // Proactively inspect weather for outdoor installations
-          if (!indoorSite) {
-            const coords = await resolveCoordinates(site);
-            if (coords) {
-              const weather = await getHyperlocalWeather(coords.lat, coords.lon);
-              if (weather) {
-                const dewDelta = (weather.temp - weather.dewPoint).toFixed(1);
+          if (weather.windGusts > 37) {
+            weatherCard += `⛔ *CRANE / GLASS RIGGING HALT:* Wind gusts exceed 20 knots (37 km/h). Gate 4 glass seating suspended.`;
+          } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
+            weatherCard += `🌧️ *RAIN HOLD ACTIVE:* Precipitation detected or imminent (${weather.precipProbability4h}%). Outdoor assembly & gluing suspended.`;
+          } else if (weather.humidity > 85 || dewDelta <= 2) {
+            weatherCard += `⚠️ *ADHESIVE WARNING:* Surface condensation risk (Temp-DewPoint delta ${dewDelta}°C). Do NOT spread Gate 7 turf glue.`;
+          } else {
+            weatherCard += `✅ *CONDITIONS CLEAR:* Green light for assembly, glass rigging, and outdoor gluing.`;
+          }
 
-                if (weather.windGusts > 37) {
-                  statusBadge = '⛔ *Wind Hold: Crane/Glass Suspended*';
-                  weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Wind gusts ${weather.windGusts} km/h (>20 kts)\n⛔ Glass crane rigging prohibited until winds subside.\n\n`;
-                } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
-                  statusBadge = '🌧️ *Weather Hold: Rain / Wet Slab*';
-                  weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Rain/Storms Detected (${weather.precipProbability4h}% rain risk)\n⛔ Outdoor assembly & turf gluing suspended. Keep sand covered.\n\n`;
-                } else if (weather.humidity > 85 || dewDelta <= 2) {
-                  statusBadge = '⚠️ *Adhesive Hold: High Moisture*';
-                  weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • ${weather.humidity}% RH (Dew delta ${dewDelta}°C)\n⚠️ Slab surface condensation risk. Hold Gate 7 adhesive.\n\n`;
-                } else {
-                  weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Conditions Clear • Winds ${weather.windSpeed} km/h\n\n`;
-                }
+          await dispatchReply(weatherCard);
+          return;
+        }
+
+        // /nearby, /route
+        if (intent === 'NEARBY_SWEEP') {
+          const coords = await resolveCoordinates(site);
+          if (!coords) {
+            await dispatchReply(`⚠️ Current site does not have GPS coordinates to calculate proximity.`);
+            return;
+          }
+
+          const filterFormula = `AND({Workflow Mode}='MAINTENANCE', {Open Tickets} > 0, RECORD_ID() != '${site.id}')`;
+          const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=15`;
+          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+          const data = await res.json().catch(() => ({}));
+          const candidates = data.records || [];
+
+          const nearbySites = [];
+          for (const c of candidates) {
+            const cCoords = await resolveCoordinates(c);
+            if (cCoords) {
+              const distKm = haversineDistanceKm(coords.lat, coords.lon, cCoords.lat, cCoords.lon);
+              if (distKm <= 75) {
+                nearbySites.push({
+                  name: c.fields['Site Name'],
+                  distance: distKm.toFixed(1),
+                  tickets: c.fields['Open Tickets'] || 1,
+                  mapUrl: await formatMapUrl(c)
+                });
               }
             }
           }
 
-          progressCard = `🏗️ *${site.fields['Site Name']}*\n` +
-            `${statusBadge} (${indoorSite ? 'Indoor' : 'Outdoor'})\n\n` +
-            `🎯 *Progress:* ${cleared.length} of 12 Milestones Cleared\n` +
-            `👉 *Up Next:* ${nextTarget}\n\n` +
-            weatherLine +
-            `📋 *Latest Field Update:*\n${lastNote}`;
+          nearbySites.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+
+          if (nearbySites.length === 0) {
+            await dispatchReply(`✅ No other courts with open service tickets within 75 km of *${site.fields['Site Name']}*.`);
+            return;
+          }
+
+          let sweepCard = `📍 *OPEN SERVICE CALLS NEARBY*\n` +
+            `_Courts needing service within 75 km of ${site.fields['Site Name']}:_\n\n`;
+
+          for (let i = 0; i < Math.min(3, nearbySites.length); i++) {
+            const n = nearbySites[i];
+            sweepCard += `${i + 1}. *${n.name}* (${n.distance} km away)\n` +
+              `   • ${n.tickets} open ticket(s)\n` +
+              `   • Nav: ${n.mapUrl}\n\n`;
+          }
+
+          await dispatchReply(sweepCard);
+          return;
         }
 
-        await dispatchReply(progressCard);
-        return;
+        // /s, /sum, /status — PROACTIVE ENVIRONMENTAL BUILD STATUS
+        if (intent === 'STATUS') {
+          const mode = site.fields['Workflow Mode'] || 'INSTALLATION';
+          const lastNote = site.fields['Last Note'] || 'No active punch items recorded.';
+          const siteStatus = site.fields['Site Status'] || 'ACTIVE';
+
+          let progressCard = '';
+
+          if (mode === 'MAINTENANCE' || mode === 'SPOT_VISIT') {
+            const openTickets = site.fields['Open Tickets'] || 0;
+            const isPaused = siteStatus === 'PAUSED';
+
+            let statusBadge = isPaused
+              ? '🔴 *Court Temporarily Paused*'
+              : (openTickets > 0 ? '🟡 *Maintenance Scheduled*' : '🟢 *Court Open for Play*');
+
+            progressCard = `🎾 *${site.fields['Site Name']}*\n` +
+              `${statusBadge}\n\n` +
+              `🎫 *Active Requests:* ${openTickets} open\n` +
+              `📋 *Latest Note:* ${lastNote}`;
+          } else {
+            const cleared = site.fields['Cleared Milestones'] || [];
+            const nextTarget = getNextTargetGate(cleared);
+            const isHalted = siteStatus === 'PAUSED';
+
+            let statusBadge = isHalted ? '⛔ *Work Temporarily Halted*' : '🟢 *Ready for Work*';
+            let weatherLine = '';
+
+            if (!indoorSite) {
+              const coords = await resolveCoordinates(site);
+              if (coords) {
+                const weather = await getHyperlocalWeather(coords.lat, coords.lon);
+                if (weather) {
+                  const dewDelta = (weather.temp - weather.dewPoint).toFixed(1);
+
+                  if (weather.windGusts > 37) {
+                    statusBadge = '⛔ *Wind Hold: Crane/Glass Suspended*';
+                    weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Wind gusts ${weather.windGusts} km/h (>20 kts)\n⛔ Glass crane rigging prohibited until winds subside.\n\n`;
+                  } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
+                    statusBadge = '🌧️ *Weather Hold: Rain / Wet Slab*';
+                    weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Rain/Storms Detected (${weather.precipProbability4h}% rain risk)\n⛔ Outdoor assembly & turf gluing suspended. Keep sand covered.\n\n`;
+                  } else if (weather.humidity > 85 || dewDelta <= 2) {
+                    statusBadge = '⚠️ *Adhesive Hold: High Moisture*';
+                    weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • ${weather.humidity}% RH (Dew delta ${dewDelta}°C)\n⚠️ Slab surface condensation risk. Hold Gate 7 adhesive.\n\n`;
+                  } else {
+                    weatherLine = `🌤️ *Site Weather:* ${weather.temp}°C • Conditions Clear • Winds ${weather.windSpeed} km/h\n\n`;
+                  }
+                }
+              }
+            }
+
+            progressCard = `🏗️ *${site.fields['Site Name']}*\n` +
+              `${statusBadge} (${indoorSite ? 'Indoor' : 'Outdoor'})\n\n` +
+              `🎯 *Progress:* ${cleared.length} of 12 Milestones Cleared\n` +
+              `👉 *Up Next:* ${nextTarget}\n\n` +
+              weatherLine +
+              `📋 *Latest Field Update:*\n${lastNote}`;
+          }
+
+          await dispatchReply(progressCard);
+          return;
+        }
+
+        if (intent === 'MODE_MAINTENANCE') {
+          await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'MAINTENANCE' }, site.id);
+          await dispatchReply(`🛠️ *${site.fields['Site Name']}* switched to *MAINTENANCE* mode.`);
+          return;
+        }
+
+        if (intent === 'MODE_INSTALLATION') {
+          await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'INSTALLATION' }, site.id);
+          await dispatchReply(`🏗️ *${site.fields['Site Name']}* switched to *INSTALLATION* mode.`);
+          return;
+        }
+
+        if (intent === 'MODE_SPOT_CHECK') {
+          await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'SPOT_VISIT' }, site.id);
+          await dispatchReply(`🔍 *${site.fields['Site Name']}* switched to *SPOT VISIT* mode.`);
+          return;
+        }
+
+        if (intent === 'HELP') {
+          const helpCard = `🤖 *TITAN OS COMMANDS*\n\n` +
+            `• */s* — Live court progress & weather-safe next target\n` +
+            `• */w* — Detailed microclimate telemetry & rain risk\n` +
+            `• */map* — GPS navigation link\n` +
+            `• */nearby* — Nearby service calls (maintenance)\n` +
+            `• Drop a WhatsApp location pin to check in on site.\n` +
+            `• Send photos, videos, or voice memos anytime to log work.\n` +
+            `• Forward partner texts to log Work Orders directly into Daily Assignments.`;
+          await dispatchReply(helpCard);
+          return;
+        }
       }
 
-      if (intent === 'MODE_MAINTENANCE') {
-        await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'MAINTENANCE' }, site.id);
-        await dispatchReply(`🛠️ *${site.fields['Site Name']}* switched to *MAINTENANCE* mode.`);
-        return;
+      // --- BRANCH B: AUTONOMOUS FORWARDING & DISPATCH TRIAGE ---
+      const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || (site && site.fields['Workflow Mode'] !== 'INSTALLATION');
+
+      if (isDirectOrAdmin && rawText.length > 6) {
+        console.log(`[Dispatch Triage] Evaluating message: "${rawText}"`);
+        try {
+          const triage = await triageDispatchText(rawText, worker, site);
+          if (triage && triage.is_work_order) {
+            let targetSite = null;
+            if (triage.matched_site_name) {
+              targetSite = await lookupSite(null, triage.matched_site_name);
+            }
+            if (!targetSite && site) {
+              targetSite = site;
+            }
+
+            const senderName = worker?.fields?.['Full Name'] || 'Dispatcher';
+            let source = 'Dispatch';
+            if (senderName === 'Bob' || (worker?.fields?.['Role'] === 'Admin')) {
+              source = 'Exec Visit (Bob)';
+            } else if (rawText.toLowerCase().includes('client') || rawText.toLowerCase().includes('joy cannon')) {
+              source = 'Joy Cannon (Client)';
+            }
+
+            const assignmentPayload = {
+              'Date': new Date().toISOString().split('T')[0],
+              'Task Category': triage.task_category,
+              'Assignment Type': triage.assignment_type || 'Service',
+              'Priority': triage.priority || 'Medium',
+              'Source': source,
+              'Status': 'Open',
+              'Notes': triage.notes
+            };
+
+            if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+            if (targetSite?.id) {
+              assignmentPayload['Sites'] = [targetSite.id];
+              assignmentPayload['Site'] = [targetSite.id];
+            }
+
+            const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+            const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
+            const courtLabel = targetSite?.fields?.['Site Name'] || triage.matched_site_name || 'Assigned Court';
+
+            const dispatchConfirmation = `✅ *WORK ORDER CREATED (${ticketId})*\n` +
+              `🏟️ *Court:* ${courtLabel}\n` +
+              `🔧 *Category:* ${triage.task_category}\n` +
+              `⚡ *Priority:* ${triage.priority} (${triage.assignment_type})\n` +
+              `📋 *Directive:* ${triage.notes}\n\n` +
+              `Logged to Daily Assignments.`;
+
+            await dispatchReply(dispatchConfirmation);
+            return;
+          }
+        } catch (triageErr) {
+          console.warn('[Dispatch Triage Exception]:', triageErr.message);
+        }
       }
 
-      if (intent === 'MODE_INSTALLATION') {
-        await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'INSTALLATION' }, site.id);
-        await dispatchReply(`🏗️ *${site.fields['Site Name']}* switched to *INSTALLATION* mode.`);
-        return;
-      }
-
-      if (intent === 'MODE_SPOT_CHECK') {
-        await airtableWriteWithAutoDrop('Sites', { 'Workflow Mode': 'SPOT_VISIT' }, site.id);
-        await dispatchReply(`🔍 *${site.fields['Site Name']}* switched to *SPOT VISIT* mode.`);
-        return;
-      }
-
-      if (intent === 'HELP') {
-        const helpCard = `🤖 *TITAN OS COMMANDS*\n\n` +
-          `• */s* — Live court progress & weather-safe next target\n` +
-          `• */w* — Detailed microclimate telemetry & rain risk\n` +
-          `• */map* — GPS navigation link\n` +
-          `• */nearby* — Nearby service calls (maintenance)\n` +
-          `• Drop a WhatsApp location pin to check in on site.\n` +
-          `• Send photos, videos, or voice memos anytime to log work.`;
-        await dispatchReply(helpCard);
-        return;
-      }
+      // Plain group chatter without slash commands is dropped silently
+      return;
     }
 
     // ==================================================================
-    // 9. MULTIMODAL MEDIA PROCESSING
+    // 11. MULTIMODAL MEDIA PROCESSING (DEBOUNCED IN-MEMORY QUEUE)
     // ==================================================================
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
@@ -1067,174 +1409,61 @@ app.post('/webhook', async (req, res) => {
 
     const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
 
-    let parsedTimestamps = {};
-    if (site?.fields?.['Milestone Timestamps JSON']) {
-      try {
-        parsedTimestamps = JSON.parse(site.fields['Milestone Timestamps JSON']);
-      } catch (err) {
-        parsedTimestamps = {};
-      }
+    // Buffer into in-memory debouncer map to group rapid bursts
+    const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
+
+    if (!mediaDebounceQueues.has(queueKey)) {
+      mediaDebounceQueues.set(queueKey, {
+        items: [],
+        timer: null,
+        site,
+        worker,
+        dispatchTarget,
+        fromPhone,
+        senderSource,
+        indoorSite
+      });
     }
 
-    const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
-    const cumulativeContext = {
-      siteName: site?.fields?.['Site Name'] || 'BPC Court',
-      workflowMode: currentMode,
-      siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
-      openTickets: site?.fields?.['Open Tickets'] || 0,
-      clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
-      milestoneTimestamps: parsedTimestamps,
-      lastNote: site?.fields?.['Last Note'] || '',
-      isIndoor: indoorSite
-    };
-
-    const [storageResult, forensicAudit] = await Promise.all([
-      uploadToSupabase(mediaBuffer, mimeType),
-      evaluateCourtMedia(mediaBuffer, mimeType, cumulativeContext)
-    ]);
-
-    let replyText = forensicAudit.whatsapp_status_text;
-
-    // Environmental safety tripwire append (Outdoor only)
-    if (currentMode === 'INSTALLATION' && site && !indoorSite) {
-      const coords = await resolveCoordinates(site);
-      if (coords) {
-        const weather = await getHyperlocalWeather(coords.lat, coords.lon);
-        if (weather) {
-          const dewDelta = weather.temp - weather.dewPoint;
-          if (weather.windGusts > 37) {
-            replyText += `\n\n⛔ *SAFETY NOTICE:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 4 glass seating suspended.`;
-          } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
-            replyText += `\n\n🌧️ *WEATHER NOTICE:* Active rain/storm detected. Hold outdoor assembly & gluing.`;
-          } else if (weather.humidity > 85 || dewDelta <= 2) {
-            replyText += `\n\n⚠️ *WEATHER NOTICE:* Surface condensation risk. Hold Gate 7 turf adhesive.`;
-          }
-        }
-      }
-    }
-
-    await dispatchReply(replyText);
-
-    // ==================================================================
-    // 10. ASYNCHRONOUS RELATIONAL PERSISTENCE (STANDARDIZED ENGLISH)
-    // ==================================================================
-    const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
-      'Message ID': messageId,
-      'Worker Phone Raw': fromPhone,
-      'Message Type': message.type,
-      'Caption Text': caption,
-      'Media URL': storageResult.signedUrl,
-      'Media Path': storageResult.storagePath,
-      'Raw Payload JSON': JSON.stringify(message)
+    const queue = mediaDebounceQueues.get(queueKey);
+    queue.items.push({
+      buffer: mediaBuffer,
+      mimeType,
+      messageId,
+      caption,
+      type: message.type,
+      rawMessage: message
     });
+    queue.site = site;
+    queue.worker = worker;
 
-    const reportsPayload = {
-      'Inbound Messages 2': [inboundRecord.id],
-      'Sites': site ? [site.id] : [],
-      'Workflow Mode': cumulativeContext.workflowMode,
-      'Overall Status': forensicAudit.status_observed,
-      'Site Conditions': forensicAudit.site_conditions || 'Clear',
-      'Action Items': (forensicAudit.action_items || []).join('\n'),
-      'Status Observed': forensicAudit.status_observed,
-      'Action Intent': forensicAudit.action_intent || (forensicAudit.priority ? `INCIDENT_${forensicAudit.priority}` : 'MAINTENANCE_LOG'),
-      'WhatsApp Reply Text': replyText,
-      'Clean JSON': JSON.stringify(forensicAudit, null, 2)
-    };
-
-    const reportRecord = await airtableWriteWithAutoDrop('Reports 2', reportsPayload);
-
-    // ==================================================================
-    // 11. CLOSED-LOOP DISPATCH (Daily Assignments)
-    // ==================================================================
-    const isMaintenanceInspection = currentMode === 'MAINTENANCE' || currentMode === 'SPOT_VISIT';
-    const hasActiveDefects = (forensicAudit.action_items && forensicAudit.action_items.length > 0) ||
-                             forensicAudit.status_observed === 'ACTION_REQUIRED' ||
-                             forensicAudit.status_observed === 'HAZARD_OUT_OF_SERVICE';
-
-    if (isMaintenanceInspection && hasActiveDefects) {
-      const assignmentType = forensicAudit.assignment_type ||
-        (forensicAudit.priority === 'CRITICAL' ? 'Emergency Repair' : 'Spot Visit Punch');
-
-      const priority = forensicAudit.priority === 'CRITICAL' ? 'Critical' : 'High';
-      const taskNotes = (forensicAudit.action_items || []).join('\n') || forensicAudit.worker_summary;
-
-      const assignmentPayload = {
-        'Assignment Type': assignmentType,
-        'Priority': priority,
-        'Source': senderSource,
-        'Notes': taskNotes,
-        'Status': 'Open'
-      };
-
-      if (site) assignmentPayload['Site'] = [site.id];
-      if (reportRecord?.id) assignmentPayload['Origin Report'] = [reportRecord.id];
-
-      await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-      console.log(`[Work Order Dispatched] Ticket created for ${cumulativeContext.siteName}`);
+    if (queue.timer) {
+      clearTimeout(queue.timer);
     }
 
-    // ==================================================================
-    // 12. UPDATE PARENT DIGITAL TWIN (Sites Table)
-    // ==================================================================
-    if (site) {
-      const nowIso = new Date().toISOString();
-      const sitePatch = {
-        'Last Intent': forensicAudit.action_intent || `TRIAGE_${forensicAudit.priority || 'LOG'}`,
-        'Last Note': forensicAudit.worker_summary
-      };
+    queue.timer = setTimeout(async () => {
+      try {
+        const currentBatch = mediaDebounceQueues.get(queueKey);
+        mediaDebounceQueues.delete(queueKey);
+        if (!currentBatch || currentBatch.items.length === 0) return;
 
-      if (currentMode === 'INSTALLATION') {
-        const updatedTimestamps = { ...cumulativeContext.milestoneTimestamps };
-
-        for (const gateNum of (forensicAudit.verified_gates || [])) {
-          if (!updatedTimestamps[`Gate ${gateNum}`]) {
-            updatedTimestamps[`Gate ${gateNum}`] = nowIso;
-          }
-        }
-
-        const previouslyCleared = cumulativeContext.clearedMilestones || [];
-        const newlyVerified = (forensicAudit.verified_gates || []).map(g => `Gate ${g}`);
-        let allClearedGates = Array.from(new Set([...previouslyCleared, ...newlyVerified]));
-
-        // Transient Gate 12 Demotion
-        if (forensicAudit.needs_attention_gates?.includes(12)) {
-          allClearedGates = allClearedGates.filter(g => g !== 'Gate 12');
-          delete updatedTimestamps['Gate 12'];
-        }
-
-        sitePatch['Cleared Milestones'] = allClearedGates;
-        sitePatch['Milestone Timestamps JSON'] = JSON.stringify(updatedTimestamps, null, 2);
-
-        if (!site.fields['Install Started'] && allClearedGates.length > 0) {
-          sitePatch['Install Started'] = nowIso;
-        }
-
-        if (allClearedGates.length === 12 && forensicAudit.status_observed === 'COMMISSIONED') {
-          sitePatch['Workflow Mode'] = 'MAINTENANCE';
-          sitePatch['Site Status'] = 'ACTIVE';
-          sitePatch['Install Completed'] = nowIso;
-        }
-      } else {
-        if (forensicAudit.hazard_detected || forensicAudit.priority === 'CRITICAL' || forensicAudit.status_observed === 'HAZARD_OUT_OF_SERVICE') {
-          sitePatch['Site Status'] = 'PAUSED';
-          console.warn(`[Safety Protocol] Court PAUSED for ${site.fields['Site Name']}`);
-        }
+        console.log(`[Debouncer] Processing batch of ${currentBatch.items.length} media item(s) for ${currentBatch.site?.fields?.['Site Name'] || currentBatch.dispatchTarget}`);
+        await processMediaBatch(currentBatch);
+      } catch (batchErr) {
+        console.error('[Debouncer Batch Error]:', batchErr);
       }
+    }, DEBOUNCE_DELAY_MS);
 
-      await airtableWriteWithAutoDrop('Sites', sitePatch, site.id);
-    }
-
-    console.log(`[Cycle Complete] Closed-loop audit finished for message ${messageId}`);
   } catch (err) {
     console.error('[Runtime Exception]:', err);
   }
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.8', engine: 'Titan OS V4.5.8 (Hardened Universal Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.9', engine: 'Titan OS V4.5.9 (Debounced & Dispatch Triage Hardened)' });
 });
 
 // Explicit 0.0.0.0 host binding for Docker/Render container routing
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.8 Clean Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.9 Clean Engine listening on Port ${PORT}`);
 });
