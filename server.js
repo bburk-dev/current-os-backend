@@ -1,5 +1,5 @@
 /**
- * TITAN OS V4.5.2 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
+ * TITAN OS V4.5.3 — INDUSTRIAL WHATSAPP FIELD ORCHESTRATOR
  * Production Build — Proactive Digital Site Pass, Map Routing & Dual-Stream Triage
  * 
  * Architecture Features:
@@ -288,9 +288,9 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
     const errorMsg = errBody?.error?.message || '';
     console.warn(`[Auto-Healer] 422 on ${table} (Attempt ${attempt}): ${errorMsg}`);
 
-    const match = errorMsg.match(/field\s*["\]+([^"\]+)["\]+/i) ||
-                  errorMsg.match(/column\s*["\]+([^"\]+)["\]+/i) ||
-                  errorMsg.match(/Unknown field:?\s*["\]+([^"\]+)["\]+/i);
+    const match = errorMsg.match(/field\s*["\\]+([^"\\]+)["\\]+/i) ||
+                  errorMsg.match(/column\s*["\\]+([^"\\]+)["\\]+/i) ||
+                  errorMsg.match(/Unknown field:?\s*["\\]+([^"\\]+)["\\]+/i);
 
     if (match && match[1]) {
       const badField = match[1];
@@ -517,29 +517,18 @@ app.post('/webhook', async (req, res) => {
           const mode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
 
           // Proactive Digital Site Pass dispatched immediately
-          let welcomeCard = `✅ *TITAN OS | SITE TWIN BOUND*
-` +
-            `🏟️ *Court:* *${targetSite.fields['Site Name']}*
-` +
-            `⚙️ *Mode:* ${mode}
-` +
-            `📫 *Location:* ${siteLoc}
-`;
+          let welcomeCard = `✅ *TITAN OS | SITE TWIN BOUND*\n` +
+            `🏟️ *Court:* *${targetSite.fields['Site Name']}*\n` +
+            `⚙️ *Mode:* ${mode}\n` +
+            `📫 *Location:* ${siteLoc}\n`;
 
           if (mapUrl) {
-            welcomeCard += `
-🗺️ *GPS Navigation Link:*
-${mapUrl}
-`;
+            welcomeCard += `\n🗺️ *GPS Navigation Link:*\n${mapUrl}\n`;
           }
 
-          welcomeCard += `
-💡 *Field Commands:*
-` +
-            `• */map* — Resend GPS Navigation Link to group
-` +
-            `• */s* — Instant gate progress & open punch blockers
-` +
+          welcomeCard += `\n💡 *Field Commands:*\n` +
+            `• */map* — Resend GPS Navigation Link to group\n` +
+            `• */s* — Instant gate progress & open punch blockers\n` +
             `• Send photo or video walkthroughs directly for AI forensic audit.`;
 
           await sendWhatsAppMessage(fromPhone, welcomeCard);
@@ -564,17 +553,10 @@ ${mapUrl}
             return;
           }
 
-          const mapCard = `📍 *TITAN OS | SITE LOCATION*
-` +
-            `🏟️ *Court:* *${site.fields['Site Name']}*
-` +
-            `📫 *Address:* ${siteLoc}
-
-` +
-            `🗺️ *GPS Navigation Link:*
-${mapUrl}
-
-` +
+          const mapCard = `📍 *TITAN OS | SITE LOCATION*\n` +
+            `🏟️ *Court:* *${site.fields['Site Name']}*\n` +
+            `📫 *Address:* ${siteLoc}\n\n` +
+            `🗺️ *GPS Navigation Link:*\n${mapUrl}\n\n` +
             `_(Tap link to launch GPS navigation in Google Maps, Apple Maps, or Waze)_`;
 
           await sendWhatsAppMessage(fromPhone, mapCard);
@@ -588,26 +570,10 @@ ${mapUrl}
           if (mode === 'MAINTENANCE' || mode === 'SPOT_VISIT') {
             const condition = site.fields['Maintenance Condition'] || '🟢 Nominal';
             const openTickets = site.fields['Open Tickets'] || 0;
-            progressCard = `🛠️ *TITAN OS | ASSET MAINTENANCE STATUS*
-📍 *Court:* ${site.fields['Site Name']}
-⚙️ *Mode:* ${mode}
-
-🩺 *Condition:* ${condition}
-🎫 *Open Tickets:* ${openTickets}
-📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}
-
-🔗 *Last Note:* ${site.fields['Last Note'] || 'None'}`;
+            progressCard = `🛠️ *TITAN OS | ASSET MAINTENANCE STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* ${mode}\n\n🩺 *Condition:* ${condition}\n🎫 *Open Tickets:* ${openTickets}\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n\n🔗 *Last Note:* ${site.fields['Last Note'] || 'None'}`;
           } else {
             const cleared = site.fields['Cleared Milestones'] || [];
-            progressCard = `🏗️ *TITAN OS | BUILD TWIN STATUS*
-📍 *Court:* ${site.fields['Site Name']}
-⚙️ *Mode:* INSTALLATION
-
-🎯 *Verified Milestones:* ${cleared.length}/12
-📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}
-⏱️ *Started:* ${site.fields['Install Started'] || 'Not Initiated'}
-
-🔗 *Last Intent:* ${site.fields['Last Intent'] || 'None'}`;
+            progressCard = `🏗️ *TITAN OS | BUILD TWIN STATUS*\n📍 *Court:* ${site.fields['Site Name']}\n⚙️ *Mode:* INSTALLATION\n\n🎯 *Verified Milestones:* ${cleared.length}/12\n📌 *Site Status:* ${site.fields['Site Status'] || 'ACTIVE'}\n⏱️ *Started:* ${site.fields['Install Started'] || 'Not Initiated'}\n\n🔗 *Last Intent:* ${site.fields['Last Intent'] || 'None'}`;
           }
 
           await sendWhatsAppMessage(fromPhone, progressCard);
@@ -633,16 +599,7 @@ ${mapUrl}
         }
 
         if (intent === 'HELP') {
-          const helpCard = `🤖 *TITAN OS COMMANDS*
-
-*/s* or */sum* — Instant Court Twin Status
-*/m* — Switch to Maintenance Mode
-*/i* — Switch to Installation Mode
-*/spot* — Switch to Spot Audit Mode
-*/l <Name>* — Link chat to Site
-*/map* — Get site location and GPS link
-
-_Send photo or video walkthroughs directly for AI forensic audit._`;
+          const helpCard = `🤖 *TITAN OS COMMANDS*\n\n*/s* or */sum* — Instant Court Twin Status\n*/m* — Switch to Maintenance Mode\n*/i* — Switch to Installation Mode\n*/spot* — Switch to Spot Audit Mode\n*/l <Name>* — Link chat to Site\n*/map* — Get site location and GPS link\n\n_Send photo or video walkthroughs directly for AI forensic audit._`;
           await sendWhatsAppMessage(fromPhone, helpCard);
           return;
         }
@@ -719,14 +676,8 @@ _Send photo or video walkthroughs directly for AI forensic audit._`;
 
     const replyText = forensicAudit.whatsapp_status_text ||
       (currentMode === 'MAINTENANCE' || currentMode === 'SPOT_VISIT'
-        ? `🛠️ *TITAN MAINTENANCE REPORT*
-📍 *Status:* ${forensicAudit.status_observed}
-🚨 *Priority:* ${forensicAudit.priority || 'MEDIUM'}
-${forensicAudit.worker_summary}`
-        : `📊 *TITAN OS AUDIT*
-📍 *Status:* ${forensicAudit.status_observed}
-🎯 *Gates:* ${forensicAudit.verified_gates?.length || 0}/12
-${forensicAudit.worker_summary}`);
+        ? `🛠️ *TITAN MAINTENANCE REPORT*\n📍 *Status:* ${forensicAudit.status_observed}\n🚨 *Priority:* ${forensicAudit.priority || 'MEDIUM'}\n${forensicAudit.worker_summary}`
+        : `📊 *TITAN OS AUDIT*\n📍 *Status:* ${forensicAudit.status_observed}\n🎯 *Gates:* ${forensicAudit.verified_gates?.length || 0}/12\n${forensicAudit.worker_summary}`);
 
     await sendWhatsAppMessage(fromPhone, replyText);
 
@@ -750,8 +701,7 @@ ${forensicAudit.worker_summary}`);
       'Workflow Mode': cumulativeContext.workflowMode,
       'Overall Status': forensicAudit.status_observed,
       'Site Conditions': forensicAudit.site_conditions || 'Clear',
-      'Action Items': (forensicAudit.action_items || []).join('
-'),
+      'Action Items': (forensicAudit.action_items || []).join('\n'),
       'Status Observed': forensicAudit.status_observed,
       'Action Intent': forensicAudit.action_intent || (forensicAudit.priority ? `INCIDENT_${forensicAudit.priority}` : 'MAINTENANCE_LOG'),
       'WhatsApp Reply Text': replyText,
@@ -773,8 +723,7 @@ ${forensicAudit.worker_summary}`);
         (forensicAudit.priority === 'CRITICAL' ? 'Emergency Repair' : 'Spot Visit Punch');
 
       const priority = forensicAudit.priority === 'CRITICAL' ? 'Critical' : 'High';
-      const taskNotes = (forensicAudit.action_items || []).join('
-') || forensicAudit.worker_summary;
+      const taskNotes = (forensicAudit.action_items || []).join('\n') || forensicAudit.worker_summary;
 
       const assignmentPayload = {
         'Assignment Type': assignmentType,
@@ -852,9 +801,9 @@ ${forensicAudit.worker_summary}`);
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.2', engine: 'Titan OS V4.5.2 (Proactive Map Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.3', engine: 'Titan OS V4.5.3 (Clean Regex & Map Engine)' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Titan OS V4.5.2 Proactive Map Engine listening on Port ${PORT}`);
+  console.log(`🚀 Titan OS V4.5.3 Clean Engine listening on Port ${PORT}`);
 });
