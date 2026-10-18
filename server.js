@@ -1,6 +1,6 @@
 /**
- * TITAN OS V4.5.15 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Clean Assignment Taxonomy, Sub-Second Reactions & Hands-Free Punchdowns
+ * TITAN OS V4.5.16 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Worker WhatsApp Dispatch, Seasonal Closeout Disambiguation & Sub-Second Reactions
  * 
  * Target Alignment:
  * - Commercial & Leads: Assignment Type = "Sales"
@@ -80,7 +80,7 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 
 ### CORE OPERATING RULES:
 1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected.
-2. PARALLEL EXECUTION: Gates are verified independently unless a physical prerequisite blocks them.
+2. PARALLEL EXECUTION: Gates are verified independently unless a physical dependency blocks them.
 3. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
    - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
    - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
@@ -90,6 +90,27 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
 ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
 
+VALID TASK CATEGORIES:
+- "Turf: Sand & Grooming"
+- "Net: Tension & Hardware"
+- "Glass & Structure"
+- "Hardware: Caps & Fasteners"
+- "Lighting & Electrical"
+- "Supply Delivery (Joy Cannon)"
+- "Site Cleanliness & Sweep"
+- "Season Opening"
+- "Season Closing"
+- "Quarterly Maintenance"
+- "Annual Structural & Torque Audit"
+- "Post-Storm / High-Wind Inspection"
+
+SEMANTIC DISAMBIGUATION RULES:
+- "Court closing", "closing the court", "winterizing", "season closing", or "net removal for winter" MUST BE:
+  - intent: "DISPATCH_CREATE"
+  - assignment_type: "Service"
+  - task_category: "Season Closing"
+  - This is a maintenance service, NOT a commercial quote.
+
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
   "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "INSTALLATION_INSPECTION",
@@ -97,7 +118,7 @@ VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
   "ticket_id": integer or null,
   "resolution_summary": "string in English",
   "transcription": "Verbatim English transcript of spoken audio",
-  "task_category": "string or null",
+  "task_category": "string from VALID TASK CATEGORIES or null",
   "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
@@ -128,6 +149,27 @@ You are the Titan OS Maintenance, Incident Concierge & Commercial Intake Engine.
 VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
 ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
 
+VALID TASK CATEGORIES:
+- "Turf: Sand & Grooming"
+- "Net: Tension & Hardware"
+- "Glass & Structure"
+- "Hardware: Caps & Fasteners"
+- "Lighting & Electrical"
+- "Supply Delivery (Joy Cannon)"
+- "Site Cleanliness & Sweep"
+- "Season Opening"
+- "Season Closing"
+- "Quarterly Maintenance"
+- "Annual Structural & Torque Audit"
+- "Post-Storm / High-Wind Inspection"
+
+SEMANTIC DISAMBIGUATION RULES:
+- "Court closing", "closing the court", "winterizing", "season closing", or "shut down for season" MUST BE:
+  - intent: "DISPATCH_CREATE"
+  - assignment_type: "Service"
+  - task_category: "Season Closing"
+  - DO NOT classify as commercial quote.
+
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
   "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "MAINTENANCE_INSPECTION",
@@ -135,7 +177,7 @@ VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
   "ticket_id": integer or null,
   "resolution_summary": "string in English",
   "transcription": "Verbatim English transcript of spoken audio",
-  "task_category": "string or null",
+  "task_category": "string from VALID TASK CATEGORIES or null",
   "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
@@ -581,6 +623,31 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
   return true;
 }
 
+async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, priority, directiveNotes, workerRecord) {
+  if (!workerRecord) return false;
+  
+  const workerPhone = workerRecord.fields?.['Phone E164'] || workerRecord.fields?.['WhatsApp Number'];
+  if (!workerPhone) {
+    console.warn(`[Dispatch Alert] Worker ${workerRecord.fields?.['Full Name']} has no Phone on file.`);
+    return false;
+  }
+
+  const cleanPhone = String(workerPhone).replace(/\D/g, '');
+  const dispatchCard = `📋 *TITAN OS | WORK ORDER ASSIGNED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎫 *Ticket #${ticketNumber} Assigned to You*\n` +
+    `🏟️ *Court:* ${courtName || 'Facility Court'}\n` +
+    `🔧 *Category:* ${taskCategory || 'Service'}\n` +
+    `⚡ *Priority:* ${priority || 'Medium'}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📝 *Directive:*\n` +
+    `${directiveNotes}\n\n` +
+    `👉 *When finished, simply reply here with a quick voice memo to close out hands-free.*`;
+
+  console.log(`[Worker Alert] Sending WhatsApp dispatch ticket to +${cleanPhone}`);
+  return await sendWhatsAppMessage(cleanPhone, dispatchCard);
+}
+
 // ====================================================================
 // 6. WORK ORDER CLOSEOUT ENGINE (SPOKEN PUNCHDOWN)
 // ====================================================================
@@ -671,7 +738,7 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
 
 async function triageDispatchText(text, workerRecord, currentSite = null) {
   const activeSites = await getAllActiveSitesList();
-  const siteListStr = activeSites.join(', ') || 'BPC HLD Lewinsky, BPC RCOR Court 1, BPC RCOR Court 2, BPC Camp Salter';
+  const siteListStr = activeSites.join(', ') || 'BPC HLD Lewinsky, BPC RCOR Court 1, BPC RCOR Court 2, BPC Camp Salter, BPC David Cynamon';
 
   const prompt = `
 You are the Titan OS Operational Dispatch, Commercial Ingestion & Closeout Engine. You ingest unstructured field maintenance notes, partner texts, client screenshots, or construction inquiries.
@@ -679,27 +746,35 @@ You are the Titan OS Operational Dispatch, Commercial Ingestion & Closeout Engin
 Active Padel Court Registry: [${siteListStr}]
 Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
 
-CRITICAL INTENT CLASSIFICATION RULES:
-1. "COMMERCIAL_QUOTE": Inquiries regarding pricing, quotes, adding padel over tennis courts, building new courts, or greenfield club construction.
-   - DO NOT classify as maintenance or repair.
-   - Extract "quote_type": "Tennis Conversion" | "Greenfield Club Build" | "Court Expansion" | "General Pricing"
-   - Extract "scope_summary": Detailed breakdown of what the client wants priced.
-   - Extract "directed_to": Name of person addressed (e.g. "Rob").
-   - Leave "matched_site_name": null if general or new facility.
-   - Set "assignment_type": "Sales"
+CRITICAL INTENT & DISAMBIGUATION RULES:
+1. "SEASONAL_CLOSING / DECOMMISSIONING": Mentions of "court closing", "closing the padel court", "camp david closing", "winterizing", or "shut down for the season".
+   - THIS IS PHYSICAL MAINTENANCE, NOT A SALES QUOTE!
+   - Set "intent": "DISPATCH_CREATE"
+   - Set "assignment_type": "Service"
+   - Set "task_category": "Season Closing"
+   - Match court name if present (e.g. "Camp David" -> find best match or "BPC David Cynamon").
 
-2. "WORK_ORDER_CLOSEOUT": Completed or resolved work (e.g., "finished up at Camp Salter 2").
-3. "PRE_TOURNAMENT_AUDIT": Requests for pre-event, pre-tournament, or weekend sweep checks. Set "assignment_type": "Audit / Inspection".
-4. "EXPENSE_LOG": Hardware purchases with store/cost details. Set "assignment_type": "Expense".
-5. "DISPATCH_CREATE": Maintenance defects, sanding needs, or repairs on EXISTING active courts.
+2. "COMMERCIAL_QUOTE": Inquiries regarding pricing, quotes, adding padel over tennis courts, building brand new courts, or greenfield club construction.
+   - Set "intent": "COMMERCIAL_QUOTE"
+   - Extract "quote_type": "Tennis Conversion" | "Greenfield Club Build" | "Court Expansion" | "General Pricing"
+   - Set "assignment_type": "Sales"
+   - Leave "matched_site_name": null if general or new facility.
+
+3. "WORK_ORDER_CLOSEOUT": Completed punchdown work (e.g. "finished up at Camp Salter").
+4. "PRE_TOURNAMENT_AUDIT": Requests for pre-event, pre-tournament, or weekend sweep checks. Set "assignment_type": "Audit / Inspection".
+5. "EXPENSE_LOG": Hardware purchases with store/cost details. Set "assignment_type": "Expense".
+6. "DISPATCH_CREATE": Maintenance defects or repairs on EXISTING active courts.
    - Critical shutdowns -> "Emergency Repair"
    - Physical maintenance -> "Service"
    - Minor punch -> "Spot Visit Punch"
-   - Supplies / balls / sand -> "Supply Delivery"
-   - Unclear / Ambiguous -> "Unknown"
+   - Supplies -> "Supply Delivery"
+   - Ambiguous -> "Unknown"
 
 Valid Assignment Types (MUST BE EXACT):
 ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
+
+Valid Task Categories:
+["Turf: Sand & Grooming", "Net: Tension & Hardware", "Glass & Structure", "Hardware: Caps & Fasteners", "Lighting & Electrical", "Supply Delivery (Joy Cannon)", "Site Cleanliness & Sweep", "Season Opening", "Season Closing", "Quarterly Maintenance", "Annual Structural & Torque Audit", "Post-Storm / High-Wind Inspection"]
 
 Input Text: "${text}"
 
@@ -717,7 +792,7 @@ Output JSON only:
     "scope_summary": "Detailed English brief of requested build/pricing",
     "directed_to": "string or null"
   },
-  "task_category": "string or null",
+  "task_category": "string from Valid Task Categories or null",
   "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
@@ -774,23 +849,13 @@ Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilesto
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
 DYNAMIC INTENT CLASSIFICATION RULES:
-1. "COMMERCIAL_QUOTE": Inquiries regarding building new courts, converting tennis courts, or general pricing.
-   - Set "intent": "COMMERCIAL_QUOTE"
-   - Set "assignment_type": "Sales"
-2. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
-3. "PRE_TOURNAMENT_AUDIT": Pre-event or weekend sweep checks.
-   - Set "intent": "PRE_TOURNAMENT_AUDIT"
-   - Set "assignment_type": "Audit / Inspection"
-4. "EXPENSE_LOG": Hardware receipt or supplier expense.
-   - Set "intent": "EXPENSE_LOG"
-   - Set "assignment_type": "Expense"
-5. "DISPATCH_CREATE": Maintenance defects on existing courts.
-   - Structural shutdown -> "Emergency Repair"
-   - Routine repair -> "Service"
-   - Minor punch -> "Spot Visit Punch"
-   - Supplies -> "Supply Delivery"
-   - Ambiguous / unclassifiable -> "Unknown"
-6. "INSTALLATION_INSPECTION": Standard physical build audit.`;
+1. "COMMERCIAL_QUOTE": Commercial build/pricing request. Set "assignment_type": "Sales".
+2. "SEASONAL_CLOSING": Mentions of "court closing", "winterizing", or seasonal shutdown. Set "assignment_type": "Service" and "task_category": "Season Closing".
+3. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
+4. "PRE_TOURNAMENT_AUDIT": Sweep checks. Set "assignment_type": "Audit / Inspection".
+5. "EXPENSE_LOG": Hardware receipt. Set "assignment_type": "Expense".
+6. "DISPATCH_CREATE": Maintenance defects on existing courts.
+7. "INSTALLATION_INSPECTION": Standard physical build audit.`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -908,6 +973,17 @@ async function processMediaBatch(batch) {
       `✅ *Logged to Daily Assignments • Status: Open for Review*`;
 
     await sendWhatsAppMessage(dispatchTarget, commercialVoucher);
+
+    if (assignedWorker) {
+      notifyAssignedWorker(
+        ticketId,
+        'Prospective Project / Client Lead',
+        'Sales Quote',
+        'High',
+        leadNotes,
+        assignedWorker
+      ).catch(() => {});
+    }
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -1089,6 +1165,17 @@ async function processMediaBatch(batch) {
       `✅ *Logged to Daily Assignments • Status: Open*`;
 
     await sendWhatsAppMessage(dispatchTarget, dispatchVoucher);
+
+    if (assignedWorker) {
+      notifyAssignedWorker(
+        ticketId,
+        courtLabel,
+        assignmentPayload['Task Category'],
+        assignmentPayload['Priority'],
+        taskNotes,
+        assignedWorker
+      ).catch(() => {});
+    }
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -1372,7 +1459,7 @@ app.post('/webhook', async (req, res) => {
         try {
           const triage = await triageDispatchText(rawText, worker, site);
 
-          // BRANCH: COMMERCIAL QUOTE & BUILD INQUIRY
+          // BRANCH 1: COMMERCIAL QUOTE & BUILD INQUIRY
           if (triage && triage.intent === 'COMMERCIAL_QUOTE') {
             const comm = triage.commercial_quote_details || {};
             const directedTo = comm.directed_to || (rawText.toLowerCase().includes('rob') ? 'Rob' : 'Bob');
@@ -1412,9 +1499,21 @@ app.post('/webhook', async (req, res) => {
               `✅ *Logged to Daily Assignments • Status: Open for Review*`;
 
             await dispatchReply(commercialVoucher);
+
+            if (assignedWorker) {
+              notifyAssignedWorker(
+                ticketId,
+                'Prospective Project / Client Lead',
+                'Sales Quote',
+                'High',
+                leadNotes,
+                assignedWorker
+              ).catch(() => {});
+            }
             return;
           }
 
+          // BRANCH 2: WORK ORDER CLOSEOUT
           if (triage && triage.intent === 'WORK_ORDER_CLOSEOUT') {
             await executeWorkOrderCloseout({
               site,
@@ -1428,6 +1527,7 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
+          // BRANCH 3: STANDARD DISPATCH TICKET (INCLUDING SEASON CLOSING)
           if (triage && triage.is_work_order) {
             let targetSite = null;
             if (triage.matched_site_name) targetSite = await lookupSite(null, triage.matched_site_name);
@@ -1460,6 +1560,7 @@ app.post('/webhook', async (req, res) => {
               `━━━━━━━━━━━━━━━━━━━━\n` +
               `🎫 *Ticket ${ticketId} Created*\n` +
               `🏟️ *Court:* ${courtLabel}\n` +
+              `🔧 *Category:* ${triage.task_category || 'Service'}\n` +
               `⚡ *Priority:* ${assignmentPayload['Priority']}\n` +
               `👤 *Assigned:* ${assignedWorker?.fields?.['Full Name'] || 'Dispatch Queue'}\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1468,6 +1569,18 @@ app.post('/webhook', async (req, res) => {
               `✅ *Logged to Daily Assignments • Status: Open*`;
 
             await dispatchReply(dispatchVoucher);
+
+            if (assignedWorker) {
+              notifyAssignedWorker(
+                ticketId,
+                courtLabel,
+                triage.task_category || 'Service',
+                assignmentPayload['Priority'],
+                triage.notes,
+                assignedWorker
+              ).catch(() => {});
+            }
+
             return;
           }
         } catch (triageErr) {
@@ -1567,10 +1680,61 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// ====================================================================
+// 11. AIRTABLE AUTOMATION WEBHOOK (MANUAL DISPATCH NOTIFICATION)
+// ====================================================================
+
+app.post('/api/notify-worker', async (req, res) => {
+  res.sendStatus(200);
+  try {
+    const { recordId } = req.body;
+    if (!recordId) return;
+
+    console.log(`[Webhook Trigger] Manual dispatch notification requested for record: ${recordId}`);
+
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments/${recordId}`;
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!response.ok) return;
+    
+    const ticket = await response.json();
+    const workerLink = ticket.fields['Worker']?.[0];
+    if (!workerLink) return;
+
+    const workerRes = await fetch(`${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Worker/${workerLink}`, {
+      headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+    });
+    if (!workerRes.ok) return;
+    const workerData = await workerRes.json();
+
+    let courtName = 'General Facility';
+    const siteLink = ticket.fields['Sites']?.[0];
+    if (siteLink) {
+      const siteRes = await fetch(`${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites/${siteLink}`, {
+        headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+      });
+      if (siteRes.ok) {
+        const siteData = await siteRes.json();
+        courtName = siteData.fields['Site Name'] || courtName;
+      }
+    }
+
+    await notifyAssignedWorker(
+      ticket.fields['Assignment ID'],
+      courtName,
+      ticket.fields['Task Category'],
+      ticket.fields['Priority'],
+      ticket.fields['Notes'],
+      workerData
+    );
+  } catch (err) {
+    console.error('[Worker Notification Endpoint Error]:', err);
+  }
+});
+
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.15', engine: 'Titan OS V4.5.15 (Clean Single-Select Engine)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.16', engine: 'Titan OS V4.5.16 (Worker Dispatch & Seasonal Disambiguation)' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.15 Clean Engine listening on Port 3000`);
+  console.log(`🚀 Titan OS V4.5.16 Clean Engine listening on Port 3000`);
 });
