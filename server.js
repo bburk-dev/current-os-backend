@@ -1,8 +1,9 @@
 /**
- * TITAN OS V4.5.19 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Multi-Worker Dispatch Broadcast & Omni-Hub Ambient Engine
+ * TITAN OS V4.5.20 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Multi-Worker Dispatch Broadcast, Omni-Hub Ambient Engine & QBO Attachment Pipeline
  * 
  * Capabilities:
+ * - Autonomous Receipt & Expense Forwarding: Passes Supabase image URLs into Airtable Attachment(s) for QBO parsing.
  * - Multi-Worker Dispatch: Broadcasts private WhatsApp assignment vouchers to 1-5 technicians per ticket.
  * - Omni-Hub Ambient Channels: Passive noise-filtered monitoring for EXECUTIVE, LOGISTICS, PRODUCTION, and INVENTORY.
  * - Autonomous Mode Handover: Shifts 12/12 verified courts from INSTALLATION to MAINTENANCE automatically.
@@ -424,7 +425,12 @@ async function uploadToSupabase(fileBuffer, mimeType) {
   }
 
   const signData = await signRes.json();
-  return { storagePath, signedUrl: `${CONFIG.supabase.url}/storage/v1${signData.signedURL}` };
+  const rawSignedPath = signData.signedURL || signData.signedUrl || '';
+  const fullSignedUrl = rawSignedPath.startsWith('http')
+    ? rawSignedPath
+    : `${CONFIG.supabase.url}/storage/v1${rawSignedPath.startsWith('/') ? '' : '/'}${rawSignedPath}`;
+
+  return { storagePath, signedUrl: fullSignedUrl };
 }
 
 async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
@@ -1091,6 +1097,21 @@ async function processMediaBatch(batch) {
     if (worker?.id) assignmentPayload['Worker'] = [worker.id];
     if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
 
+    // MAP SUPABASE SIGNED URLS DIRECTLY INTO AIRTABLE'S ATTACHMENT FIELD
+    const validAttachments = storageResults
+      .filter(r => r && r.signedUrl)
+      .map((r, idx) => ({
+        url: r.signedUrl,
+        filename: `Receipt_${(expense.vendor || 'Supplier').replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}_${idx + 1}.jpg`
+      }));
+
+    if (validAttachments.length > 0) {
+      assignmentPayload['Attachment(s)'] = validAttachments;
+      console.log(`[Expense Capture] Attaching ${validAttachments.length} receipt image(s) to Airtable payload.`);
+    } else {
+      console.warn('[Expense Capture] Warning: No valid signed URLs available for Attachment(s).');
+    }
+
     await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
 
     const expVoucher = `🧾 *TITAN OS | EXPENSE RECEIPT*\n` +
@@ -1104,6 +1125,22 @@ async function processMediaBatch(batch) {
       `✅ *Receipt signed into vault and expense recorded.*`;
 
     await sendWhatsAppMessage(dispatchTarget, expVoucher);
+
+    // Save forensic record to Inbound Messages 2
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const storageResult = storageResults[i];
+      await airtableWriteWithAutoDrop('Inbound Messages 2', {
+        'Message ID': item.messageId,
+        'Worker Phone Raw': fromPhone,
+        'Message Type': item.type,
+        'Caption Text': `[Expense Receipt]: ${expense.vendor || 'Supplier'} - ${expense.total || ''}`,
+        'Media URL': storageResult.signedUrl,
+        'Media Path': storageResult.storagePath,
+        'Raw Payload JSON': JSON.stringify(item.rawMessage)
+      }).catch(err => console.warn('[Expense Logging] Inbound message record non-fatal error:', err.message));
+    }
+
     return;
   }
 
@@ -1457,7 +1494,7 @@ app.post('/webhook', async (req, res) => {
           // Gate 1: Check if this was just banter/casual chat in an ambient group
           if (triage && triage.is_actionable === false) {
             console.log(`[Ambient Scribe] Filtered non-actionable chatter: "${rawText}"`);
-            return; // 🤫 Silent drop: zero tokens wasted, zero noise in group
+            return;
           }
 
           // Gate 2: Actionable Directives
@@ -1759,9 +1796,9 @@ app.post('/api/notify-worker', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.19', engine: 'Titan OS V4.5.19 (Multi-Worker Broadcast & Omni-Hub Ambient)' });
+  res.status(200).json({ status: 'healthy', version: '4.5.20', engine: 'Titan OS V4.5.20 (Multi-Worker Broadcast & Omni-Hub Ambient)' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.19 Clean Engine listening on Port 3000`);
+  console.log(`🚀 Titan OS V4.5.20 Clean Engine listening on Port 3000`);
 });
