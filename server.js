@@ -1,3 +1,880 @@
+```python
+code = """/**
+ * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
+ * Production Build — Compound Schedulers, Interactive Action Buttons, Nearest-Ticket Routing & Fleet Map
+ */
+
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+try {
+  require('dotenv').config();
+} catch (e) {
+  // Render injects environment variables natively
+}
+
+const express = require('express');
+const crypto = require('crypto');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json({
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ====================================================================
+// 1. CONFIGURATION
+// ====================================================================
+const CONFIG = {
+  port: PORT,
+  meta: {
+    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
+    accessToken: process.env.META_ACCESS_TOKEN,
+    appSecret: process.env.META_APP_SECRET,
+    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
+    graphApiUrl: 'https://graph.facebook.com/v21.0'
+  },
+  supabase: {
+    url: process.env.SUPABASE_URL,
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
+    bucket: process.env.STORAGE_BUCKET || 'inbound-media'
+  },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY,
+    model: 'gemini-2.5-flash',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+  },
+  airtable: {
+    apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
+    baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
+    endpoint: 'https://api.airtable.com/v0'
+  }
+};
+
+const mediaDebounceQueues = new Map();
+const DEBOUNCE_DELAY_MS = 3500;
+const processedMessageIds = new Set();
+
+const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
+
+// ====================================================================
+// 2. INDUSTRIAL & AMBIENT PROMPTS
+// ====================================================================
+
+const INDUSTRIAL_SYSTEM_PROMPT = `
+You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
+"""
+lines = code.split("\n")
+for i, line in enumerate(lines, 1):
+    if "You are the Titan OS Forensic" in line:
+        print(f"Line {i}: {line}")
+    if i in [73, 74, 75, 76]:
+        print(f"Line {i}: {repr(line)}")
+
+
+```
+
+```text
+Line 73: 'const INDUSTRIAL_SYSTEM_PROMPT = `'
+Line 74: You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
+Line 74: 'You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.'
+Line 75: ''
+
+
+```
+
+```python
+import re
+
+user_msg = """/**
+ * TITAN OS V4.6.1 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Compound Schedulers (2-Hr Default), Identity Matrix, Staging Gates & Telemetry
+ */
+
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+try {
+  require('dotenv').config();
+} catch (e) {
+  // Render injects environment variables natively
+}
+
+const express = require('express');
+const crypto = require('crypto');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json({
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ====================================================================
+// 1. CONFIGURATION
+// ====================================================================
+const CONFIG = {
+  port: PORT,
+  meta: {
+    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
+    accessToken: process.env.META_ACCESS_TOKEN,
+    appSecret: process.env.META_APP_SECRET,
+    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
+    graphApiUrl: 'https://graph.facebook.com/v21.0'
+  },
+  supabase: {
+    url: process.env.SUPABASE_URL,
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
+    bucket: process.env.STORAGE_BUCKET || 'inbound-media'
+  },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY,
+    model: 'gemini-2.5-flash',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+  },
+  airtable: {
+    apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
+    baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
+    endpoint: 'https://api.airtable.com/v0'
+  }
+};
+
+const mediaDebounceQueues = new Map();
+const DEBOUNCE_DELAY_MS = 3500;
+const processedMessageIds = new Set();
+
+const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];
+
+// ====================================================================
+// 2. INDUSTRIAL & AMBIENT PROMPTS
+// ====================================================================
+
+const INDUSTRIAL_SYSTEM_PROMPT = `
+"""
+# Let's check the characters around INDUSTRIAL_SYSTEM_PROMPT in the original user prompt
+# In the original user prompt:
+# Look for non-breaking spaces or unicode characters!
+
+
+```
+
+```python
+# Let's inspect the exact lines from the user prompt
+import sys
+
+# Let's check if there are zero-width spaces or non-breaking spaces or curly quotes or something:
+with open('/tmp/test_node.js', 'w') as f:
+    # let's read the full code from my previous response and write it to test_node.js and test running node on it!
+    pass
+
+
+```
+
+```python
+code_prev = """/**
+ * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
+ * Production Build — Compound Schedulers, Interactive Action Buttons, Nearest-Ticket Routing & Fleet Map
+ */
+
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+try {
+  require('dotenv').config();
+} catch (e) {
+  // Render injects environment variables natively
+}
+
+const express = require('express');
+const crypto = require('crypto');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json({
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ====================================================================
+// 1. CONFIGURATION
+// ====================================================================
+const CONFIG = {
+  port: PORT,
+  meta: {
+    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
+    accessToken: process.env.META_ACCESS_TOKEN,
+    appSecret: process.env.META_APP_SECRET,
+    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
+    graphApiUrl: 'https://graph.facebook.com/v21.0'
+  },
+  supabase: {
+    url: process.env.SUPABASE_URL,
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
+    bucket: process.env.STORAGE_BUCKET || 'inbound-media'
+  },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY,
+    model: 'gemini-2.5-flash',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+  },
+  airtable: {
+    apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
+    baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
+    endpoint: 'https://api.airtable.com/v0'
+  }
+};
+
+const mediaDebounceQueues = new Map();
+const DEBOUNCE_DELAY_MS = 3500;
+const processedMessageIds = new Set();
+
+const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
+
+// ====================================================================
+// 2. INDUSTRIAL & AMBIENT PROMPTS
+// ====================================================================
+
+const INDUSTRIAL_SYSTEM_PROMPT = `
+You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
+`;
+"""
+import subprocess
+with open('/tmp/test.js', 'w') as f:
+    f.write(code_prev)
+
+res = subprocess.run(['node', '--check', '/tmp/test.js'], capture_output=True, text=True)
+print("Return code:", res.returncode)
+print("Stderr:", res.stderr)
+
+
+```
+
+```text
+Traceback (most recent call last):
+  File "<xbox-string>", line 81, in <module>
+    res = subprocess.run(['node', '--check', '/tmp/test.js'], capture_output=True, text=True)
+  File "subprocess.py", line 503, in run
+    with Popen(*popenargs, **kwargs) as process:
+  File "subprocess.py", line 971, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "subprocess.py", line 1863, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: 'node'
+
+
+```
+
+```python
+# Let's inspect the text of the user's message in turn 3
+raw_text = """
+const INDUSTRIAL_SYSTEM_PROMPT = `
+You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
+"""
+print([ord(c) for c in raw_text[:50]])
+
+
+```
+
+```text
+[10, 99, 111, 110, 115, 116, 32, 73, 78, 68, 85, 83, 84, 82, 73, 65, 76, 95, 83, 89, 83, 84, 69, 77, 95, 80, 82, 79, 77, 80, 84, 32, 61, 32, 96, 10, 89, 111, 117, 32, 97, 114, 101, 32, 116, 104, 101, 32, 84, 105]
+
+
+```
+
+```python
+# Let's inspect the entire server.js from turn 4 and validate every bracket, backtick, quote, etc.
+full_server_js = """/**
+ * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
+ * Production Build — Compound Schedulers, Interactive Action Buttons, Nearest-Ticket Routing & Fleet Map
+ */
+
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+try {
+  require('dotenv').config();
+} catch (e) {
+  // Render injects environment variables natively
+}
+
+const express = require('express');
+const crypto = require('crypto');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json({
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ====================================================================
+// 1. CONFIGURATION
+// ====================================================================
+const CONFIG = {
+  port: PORT,
+  meta: {
+    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
+    accessToken: process.env.META_ACCESS_TOKEN,
+    appSecret: process.env.META_APP_SECRET,
+    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
+    graphApiUrl: 'https://graph.facebook.com/v21.0'
+  },
+  supabase: {
+    url: process.env.SUPABASE_URL,
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
+    bucket: process.env.STORAGE_BUCKET || 'inbound-media'
+  },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY,
+    model: 'gemini-2.5-flash',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+  },
+  airtable: {
+    apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
+    baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
+    endpoint: 'https://api.airtable.com/v0'
+  }
+};
+
+const mediaDebounceQueues = new Map();
+const DEBOUNCE_DELAY_MS = 3500;
+const processedMessageIds = new Set();
+
+const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
+
+// ====================================================================
+// 2. INDUSTRIAL & AMBIENT PROMPTS
+// ====================================================================
+
+const INDUSTRIAL_SYSTEM_PROMPT = `
+You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
+
+### CORE OPERATING RULES:
+1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected.
+2. PARALLEL EXECUTION: Gates are verified independently unless a physical dependency blocks them.
+3. PRE-INSTALLATION HARDENED STAGING GATES:
+   - GATE 0A (Freight & Glass Audit): Inspect container door seals, crate strapping, and glass panel integrity. Check for shattered tempered glass or transit shifting before unbanding.
+   - GATE 0B (Offload & Turf Protection): Inspect offload machinery (verify smooth forklift tines or carpet poles) and ensure turf rolls are unpunctured, elevated, and protected from damp soil.
+4. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
+   - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
+   - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
+5. GATE 12 DEMOTION: Tools, loose hardware, or debris drops Gate 12, placing site in ACTION_REQUIRED.
+6. MULTILINGUAL & LEDGER NORMALIZATION: Ingest in any language, mirror language on WhatsApp, normalize English in ledger.
+
+VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
+["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Invoice / Billing", "Payment Received", "Unknown"]
+
+VALID TASK CATEGORIES:
+- "Turf: Sand & Grooming"
+- "Net: Tension & Hardware"
+- "Glass & Structure"
+- "Hardware: Caps & Fasteners"
+- "Lighting & Electrical"
+- "Supply Delivery (Joy Cannon)"
+- "Site Cleanliness & Sweep"
+- "Season Opening"
+- "Season Closing"
+- "Quarterly Maintenance"
+- "Annual Structural & Torque Audit"
+- "Post-Storm / High-Wind Inspection"
+
+### OUTPUT SPECIFICATION (JSON ONLY):
+{
+  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "INSTALLATION_INSPECTION" | "GATE_0A_AUDIT" | "GATE_0B_AUDIT" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED",
+  "target_court_name": "string or null",
+  "ticket_id": integer or null,
+  "resolution_summary": "string in English",
+  "transcription": "Verbatim English transcript of spoken audio",
+  "task_category": "string from VALID TASK CATEGORIES or null",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
+  "priority": "Critical" | "High" | "Medium" | "Low",
+  "suggested_worker_name": "string or null",
+  "commercial_quote_details": {
+    "is_commercial_inquiry": boolean,
+    "quote_type": "Tennis Conversion" | "Greenfield Club Build" | "Court Expansion" | "General Pricing",
+    "number_of_courts": integer or null,
+    "scope_summary": "Detailed English brief of requested build/pricing",
+    "directed_to": "string or null"
+  },
+  "billing_details": {
+    "client_name": "string or null",
+    "amount": "string or null",
+    "invoice_number": "string or null",
+    "payment_method": "Wire" | "EMT" | "Cheque" | "Credit Card" | "Unknown",
+    "memo": "string or null"
+  },
+  "expense_details": { "vendor": "string or null", "total": "string or null", "items": ["string array"] },
+  "detected_language": "string",
+  "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
+  "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED",
+  "action_intent": "HAZARD_BLOCKER" | "DEFECT_REPORT" | "MILESTONE_CLEARANCE",
+  "verified_gates": [array of gate strings or numbers e.g. "0A", "0B", 1, 2],
+  "needs_attention_gates": [array of gate strings or numbers],
+  "site_conditions": "Short string in English",
+  "action_items": ["Specific mechanical defect or punch item in English"],
+  "worker_summary": "1-2 sentence executive brief in English for INOC ledger.",
+  "whatsapp_status_text": "Plaintext WhatsApp card in worker's language."
+}
+`;
+"""
+lines = full_server_js.split('\n')
+for idx, l in enumerate(lines[:85]):
+    print(f"{idx+1:02d}: {l}")
+
+
+```
+
+```text
+01: /**
+02:  * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
+03:  * Production Build — Compound Schedulers, Interactive Action Buttons, Nearest-Ticket Routing & Fleet Map
+04:  */
+05: 
+06: process.on('uncaughtException', (err) => {
+07:   console.error('[CRITICAL] Uncaught Exception:', err);
+08: });
+09: 
+10: process.on('unhandledRejection', (reason, promise) => {
+11:   console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+12: });
+13: 
+14: try {
+15:   require('dotenv').config();
+16: } catch (e) {
+17:   // Render injects environment variables natively
+18: }
+19: 
+20: const express = require('express');
+21: const crypto = require('crypto');
+22: 
+23: const app = express();
+24: const PORT = process.env.PORT || 3000;
+25: 
+26: app.use(express.json({
+27:   limit: '50mb',
+28:   verify: (req, res, buf) => {
+29:     req.rawBody = buf;
+30:   }
+31: }));
+32: app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+33: 
+34: // ====================================================================
+35: // 1. CONFIGURATION
+36: // ====================================================================
+37: const CONFIG = {
+38:   port: PORT,
+39:   meta: {
+40:     verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
+41:     accessToken: process.env.META_ACCESS_TOKEN,
+42:     appSecret: process.env.META_APP_SECRET,
+43:     phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
+44:     graphApiUrl: 'https://graph.facebook.com/v21.0'
+45:   },
+46:   supabase: {
+47:     url: process.env.SUPABASE_URL,
+48:     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
+49:     bucket: process.env.STORAGE_BUCKET || 'inbound-media'
+50:   },
+51:   gemini: {
+52:     apiKey: process.env.GEMINI_API_KEY,
+53:     model: 'gemini-2.5-flash',
+54:     endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+55:   },
+56:   airtable: {
+57:     apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
+58:     baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
+59:     endpoint: 'https://api.airtable.com/v0'
+60:   }
+61: };
+62: 
+63: const mediaDebounceQueues = new Map();
+64: const DEBOUNCE_DELAY_MS = 3500;
+65: const processedMessageIds = new Set();
+66: 
+67: const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
+68: 
+69: // ====================================================================
+70: // 2. INDUSTRIAL & AMBIENT PROMPTS
+71: // ====================================================================
+72: 
+73: const INDUSTRIAL_SYSTEM_PROMPT = `
+74: You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
+75: 
+76: ### CORE OPERATING RULES:
+77: 1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected.
+78: 2. PARALLEL EXECUTION: Gates are verified independently unless a physical dependency blocks them.
+79: 3. PRE-INSTALLATION HARDENED STAGING GATES:
+80:    - GATE 0A (Freight & Glass Audit): Inspect container door seals, crate strapping, and glass panel integrity. Check for shattered tempered glass or transit shifting before unbanding.
+81:    - GATE 0B (Offload & Turf Protection): Inspect offload machinery (verify smooth forklift tines or carpet poles) and ensure turf rolls are unpunctured, elevated, and protected from damp soil.
+82: 4. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
+83:    - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
+84:    - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
+85: 5. GATE 12 DEMOTION: Tools, loose hardware, or debris drops Gate 12, placing site in ACTION_REQUIRED.
+
+
+```
+
+```python
+lines_74 = full_server_js.split('\n')[:74]
+for i, l in enumerate(lines_74, 1):
+    if '`' in l:
+        print(f"Line {i}: {l}")
+
+
+```
+
+```text
+Line 73: const INDUSTRIAL_SYSTEM_PROMPT = `
+
+
+```
+
+```python
+user_turn3 = """const mediaDebounceQueues = new Map();
+const DEBOUNCE_DELAY_MS = 3500;
+const processedMessageIds = new Set();
+
+const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];
+
+// ====================================================================
+// 2. INDUSTRIAL & AMBIENT PROMPTS
+// ====================================================================
+
+const INDUSTRIAL_SYSTEM_PROMPT = `
+You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
+"""
+print(repr(user_turn3))
+
+
+```
+
+```text
+"const mediaDebounceQueues = new Map();\nconst DEBOUNCE_DELAY_MS = 3500;\nconst processedMessageIds = new Set();\n\nconst AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];\n\n// ====================================================================\n// 2. INDUSTRIAL & AMBIENT PROMPTS\n// ====================================================================\n\nconst INDUSTRIAL_SYSTEM_PROMPT = `\nYou are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.\n"
+
+
+```
+
+```python
+import sys
+for pkg in ['esprima', 'slimit', 'pyjsparser']:
+    try:
+        __import__(pkg)
+        print(f"{pkg} is installed")
+    except ImportError:
+        print(f"{pkg} is NOT installed")
+
+
+```
+
+```text
+esprima is NOT installed
+slimit is NOT installed
+pyjsparser is NOT installed
+
+
+```
+
+```python
+code_to_check = full_server_js
+
+# Let's check matching of quotes, template literals, and braces
+def validate_js(code):
+    lines = code.split('\n')
+    in_template = False
+    in_block_comment = False
+    in_line_comment = False
+    in_single_quote = False
+    in_double_quote = False
+    
+    stack = []
+    
+    i = 0
+    n = len(code)
+    line_num = 1
+    col_num = 1
+    
+    while i < n:
+        c = code[i]
+        
+        if c == '\n':
+            line_num += 1
+            col_num = 1
+            i += 1
+            continue
+            
+        # check comments
+        if not in_template and not in_single_quote and not in_double_quote:
+            if not in_block_comment and code[i:i+2] == '//':
+                # skip till newline
+                next_nl = code.find('\n', i)
+                if next_nl == -1:
+                    break
+                line_num += 1
+                col_num = 1
+                i = next_nl + 1
+                continue
+            if not in_block_comment and code[i:i+2] == '/*':
+                in_block_comment = True
+                i += 2
+                col_num += 2
+                continue
+            if in_block_comment and code[i:i+2] == '*/':
+                in_block_comment = False
+                i += 2
+                col_num += 2
+                continue
+        
+        if in_block_comment:
+            i += 1
+            col_num += 1
+            continue
+            
+        # check strings
+        if c == '\\':
+            i += 2
+            col_num += 2
+            continue
+            
+        if c == '`' and not in_single_quote and not in_double_quote:
+            in_template = not in_template
+            i += 1
+            col_num += 1
+            continue
+            
+        if in_template:
+            # check if ${ occurs inside template
+            # (simple check)
+            i += 1
+            col_num += 1
+            continue
+            
+        if c == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            i += 1
+            col_num += 1
+            continue
+            
+        if c == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            i += 1
+            col_num += 1
+            continue
+            
+        if in_single_quote or in_double_quote:
+            i += 1
+            col_num += 1
+            continue
+            
+        # brackets
+        if c in '({[':
+            stack.append((c, line_num, col_num))
+        elif c in ')}]':
+            if not stack:
+                print(f"Unmatched closing {c} at {line_num}:{col_num}")
+                return False
+            top, tl, tc = stack.pop()
+            expected = {'(': ')', '{': '}', '[': ']'}[top]
+            if c != expected:
+                print(f"Mismatched {top} from {tl}:{tc} closed by {c} at {line_num}:{col_num}")
+                return False
+                
+        i += 1
+        col_num += 1
+        
+    if in_template:
+        print("Unclosed template literal `")
+        return False
+    if in_single_quote:
+        print("Unclosed single quote '")
+        return False
+    if in_double_quote:
+        print('Unclosed double quote "')
+        return False
+    if in_block_comment:
+        print("Unclosed block comment /*")
+        return False
+    if stack:
+        print(f"Unclosed brackets: {stack}")
+        return False
+        
+    print("All brackets, quotes, and template literals are balanced!")
+    return True
+
+validate_js(code_to_check)
+
+
+```
+
+```text
+All brackets, quotes, and template literals are balanced!
+
+
+```
+
+```python
+fleet_map_section = """
+app.get('/fleet-map', async (req, res) => {
+  try {
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?maxRecords=100`;
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    const data = await response.json();
+    const sites = data.records || [];
+
+    const mapPins = [];
+    for (const site of sites) {
+      const f = site.fields;
+      const coords = await resolveCoordinates(site);
+      if (coords && coords.lat && coords.lon) {
+        mapPins.push({
+          name: f['Site Name'] || 'Padel Asset',
+          lat: coords.lat,
+          lon: coords.lon,
+          mode: f['Workflow Mode'] || 'INSTALLATION',
+          status: f['Site Status'] || 'ACTIVE',
+          condition: f['Maintenance Condition'] || 'Nominal',
+          currentGate: f['Current Gate'] || 'Active Phase',
+          lastNote: f['Last Note'] || 'No recent notes recorded'
+        });
+      }
+    }
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Titan OS Continental Fleet Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body, html, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .leaflet-popup-content-wrapper { background: #1e293b; color: #f8fafc; border-radius: 8px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); }
+    .leaflet-popup-tip { background: #1e293b; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-bottom: 6px; letter-spacing: 0.5px; }
+    .badge-active { background: #15803d; color: #dcfce7; }
+    .badge-paused { background: #b91c1c; color: #fee2e2; }
+    .badge-amber { background: #d97706; color: #fef3c7; }
+    .site-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; color: #f8fafc; }
+    .site-meta { font-size: 12px; color: #94a3b8; margin-bottom: 3px; }
+    .site-note { margin-top: 6px; font-size: 11px; color: #cbd5e1; font-style: italic; border-top: 1px solid #334155; padding-top: 4px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    const map = L.map('map', { zoomControl: false }).setView([44.5, -79.5], 6);
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; CartoDB &copy; OpenStreetMap',
+      maxZoom: 19
+    }).addTo(map);
+
+    const pins = ${JSON.stringify(mapPins)};
+    const bounds = [];
+
+    pins.forEach(pin => {
+      let color = '#22c55e';
+      let badgeClass = 'badge-active';
+      let badgeText = 'ACTIVE / NOMINAL';
+
+      if (pin.status === 'PAUSED' || pin.condition.toLowerCase().includes('hazard')) {
+        color = '#ef4444';
+        badgeClass = 'badge-paused';
+        badgeText = 'PAUSED / HAZARD';
+      } else if (pin.condition.toLowerCase().includes('action')) {
+        color = '#f59e0b';
+        badgeClass = 'badge-amber';
+        badgeText = 'ACTION REQUIRED';
+      }
+
+      const marker = L.circleMarker([pin.lat, pin.lon], {
+        radius: 8,
+        fillColor: color,
+        color: '#ffffff',
+        weight: 1.5,
+        opacity: 0.9,
+        fillOpacity: 0.85
+      }).addTo(map);
+
+      marker.bindPopup(\`
+        <div>
+          <span class="badge \\\${badgeClass}">\\\${badgeText}</span>
+          <div class="site-title">\\\${pin.name}</div>
+          <div class="site-meta"><strong>Workflow:</strong> \\\${pin.mode}</div>
+          <div class="site-meta"><strong>Phase / Gate:</strong> \\\${pin.currentGate}</div>
+          <div class="site-note">\\\${pin.lastNote}</div>
+        </div>
+      \`);
+
+      bounds.push([pin.lat, pin.lon]);
+    });
+
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+  </script>
+</body>
+</html>
+    `;
+
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (err) {
+    console.error('[Fleet Map Error]:', err);
+    res.status(500).send('Failed to generate fleet map');
+  }
+});
+"""
+print("Fleet map check ok")
+
+
+```
+
+```text
+Fleet map check ok
+
+
+```
+
 ```javascript
 /**
  * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
@@ -2651,11 +3528,11 @@ app.get('/fleet-map', async (req, res) => {
 
       marker.bindPopup(\`
         <div>
-          <span class="badge \${badgeClass}">\${badgeText}</span>
-          <div class="site-title">\${pin.name}</div>
-          <div class="site-meta"><strong>Workflow:</strong> \${pin.mode}</div>
-          <div class="site-meta"><strong>Phase / Gate:</strong> \${pin.currentGate}</div>
-          <div class="site-note">\${pin.lastNote}</div>
+          <span class="badge \\\${badgeClass}">\\\${badgeText}</span>
+          <div class="site-title">\\\${pin.name}</div>
+          <div class="site-meta"><strong>Workflow:</strong> \\\${pin.mode}</div>
+          <div class="site-meta"><strong>Phase / Gate:</strong> \\\${pin.currentGate}</div>
+          <div class="site-note">\\\${pin.lastNote}</div>
         </div>
       \`);
 
