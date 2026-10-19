@@ -1,24 +1,3 @@
-Here is the complete, production-ready `server.js` updated to **Titan OS V4.7.0**.
-
-### Summary of Enhancements Integrated:
-
-1. **Roster Synchronization:** Added Michael, David, Edwin, Ranjit, Danish, Morris, Kate, and Alexis into the prompt context and identity resolution engines.
-
-
-2. **Unblocked Ambient & Maintenance Groups:** Added `'MAINTENANCE'` to `AMBIENT_CHAT_MODES` and updated group bouncer logic so field punchdown notes, supply alerts, and shop-floor chatter are parsed rather than dropped as casual noise.
-
-
-3. **Receivables & Cash-Flow Telemetry:** Added `INVOICE_REQUEST` and `PAYMENT_RECEIVED` intent handlers into `triageDispatchText` to process billing notices, wire receipts, and client deposit confirmations.
-4. **Interactive WhatsApp Buttons (Phase 2 HITL):** Added `sendWhatsAppButtons()` and an interactive button callback handler (`message.type === 'interactive'`) supporting 1-tap approvals in WhatsApp.
-
-
-5. **Proactive Proximity Dispatch:** After a work order is completed, Titan calculates the nearest open ticket using `haversineDistanceKm()` and pushes a 1-tap route recommendation card with interactive action buttons.
-
-
-6. **Self-Hosted `/fleet-map` Endpoint:** Integrated a full Leaflet map route using CartoDB dark tiles that dynamically pulls GPS coordinates and status badges from `Sites` for embedding in your Command Center.
-
-
-
 ```javascript
 /**
  * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
@@ -711,7 +690,6 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
   if (!toTarget || !buttons || buttons.length === 0) return false;
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
 
-  // Meta allows up to 3 quick-reply buttons with a 20-char title limit
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
     type: 'reply',
     reply: {
@@ -746,7 +724,6 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
 
     if (!res.ok) {
       console.warn(`[Interactive Button Fallback] API error: ${await res.text()}`);
-      // Fallback gracefully to plaintext with button choices
       const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
       return await sendWhatsAppMessage(toTarget, fallbackText);
     }
@@ -1134,7 +1111,6 @@ Output JSON only:
         pEnd = new Date(pStart.getTime() + 2 * 60 * 60 * 1000); // Strict 2-Hour Default
       }
 
-      // Query active reservations for overlap
       const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?maxRecords=100`;
       const cRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
       const cData = cRes.ok ? await cRes.json() : { records: [] };
@@ -2650,16 +2626,16 @@ app.get('/fleet-map', async (req, res) => {
     const bounds = [];
 
     pins.forEach(pin => {
-      let color = '#22c55e'; // Green (Active / Nominal)
+      let color = '#22c55e';
       let badgeClass = 'badge-active';
       let badgeText = 'ACTIVE / NOMINAL';
 
       if (pin.status === 'PAUSED' || pin.condition.toLowerCase().includes('hazard')) {
-        color = '#ef4444'; // Red
+        color = '#ef4444';
         badgeClass = 'badge-paused';
         badgeText = 'PAUSED / HAZARD';
       } else if (pin.condition.toLowerCase().includes('action')) {
-        color = '#f59e0b'; // Amber
+        color = '#f59e0b';
         badgeClass = 'badge-amber';
         badgeText = 'ACTION REQUIRED';
       }
