@@ -1,17 +1,6 @@
 /**
- * TITAN OS V4.6.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Compound Schedulers, Identity Matrix, Hardened Staging Gates & Asset Telemetry
- * 
- * Capabilities:
- * - Autonomous Receipt & Expense Forwarding: Direct Supabase-to-Airtable attachment array forwarding to QBO.
- * - Multi-Worker Dispatch: Broadcasts private WhatsApp assignment vouchers to 1–5 technicians per ticket.
- * - Identity Matrix Routing: Resolves senders across Contacts (VIP Owners, Handlers, Players) and Workers (Crew).
- * - Headless Compound Court Scheduler: Conversational natural-language booking & conflict resolution without apps.
- * - Dual-Cast Joy Cannon: Tailors outbound broadcasts for Executive Owners vs. Operational Property Handlers.
- * - Hardened Pre-Installation Staging Gates: Audits Gate 0A (Container & Glass) and Gate 0B (Offload & Turf).
- * - Autonomous Infrastructure Vision: Unattended court snapshot evaluation via POST /api/court-snapshot.
- * - Omni-Hub Ambient Channels: Passive noise-filtered monitoring for EXECUTIVE, LOGISTICS, PRODUCTION, and INVENTORY.
- * - Self-Healing AST Schema Engine: Automatic recovery from Airtable 422 errors.
+ * TITAN OS V4.6.1 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Compound Schedulers (2-Hr Default), Identity Matrix, Staging Gates & Telemetry
  */
 
 process.on('uncaughtException', (err) => {
@@ -75,7 +64,6 @@ const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3500;
 const processedMessageIds = new Set();
 
-// Modes permitted to run ambient natural-language background evaluation
 const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];
 
 // ====================================================================
@@ -227,6 +215,7 @@ const COMMAND_MAP = {
   '/spotcheck': 'MODE_SPOT_CHECK',
   '/l': 'LINK_SITE',
   '/link': 'LINK_SITE',
+  '/group': 'LINK_SITE',
   '/map': 'LOCATION',
   '/loc': 'LOCATION',
   '/location': 'LOCATION',
@@ -322,25 +311,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
   }
 
   return null;
-}
-
-async function formatMapUrl(rawLocationOrSite) {
-  let rawLocation = rawLocationOrSite;
-  if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
-    const coords = await resolveCoordinates(rawLocationOrSite);
-    if (coords) {
-      return `https://www.google.com/maps/search/?api=1&query=${coords.lat},${coords.lon}`;
-    }
-    const fields = rawLocationOrSite.fields || rawLocationOrSite;
-    rawLocation = fields['Site location'];
-  }
-
-  if (!rawLocation) return null;
-  const trimmed = String(rawLocation).trim();
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return trimmed;
-  }
-  return `https://maps.google.com/?q=${encodeURIComponent(trimmed)}`;
 }
 
 function haversineDistanceKm(lat1, lon1, lat2, lon2) {
@@ -525,7 +495,6 @@ async function resolveCallerIdentity(fromPhone) {
     return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: '' };
   }
 
-  // 1. Check Contacts Table first (Owners, Caretakers, Family, Club GMs)
   try {
     const contact = await lookupContact(fromPhone);
     if (contact) {
@@ -554,7 +523,6 @@ async function resolveCallerIdentity(fromPhone) {
     console.warn('[Identity Engine] Contacts check failed:', err.message);
   }
 
-  // 2. Check Worker Table (Field Crew, Techs, Admins)
   try {
     const worker = await lookupWorker(fromPhone);
     if (worker) {
@@ -874,24 +842,30 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
 // 8. HEADLESS COMPOUND SCHEDULER & VIP CONCIERGE HANDLERS
 // ====================================================================
 
-async function handleCompoundScheduler(text, identity, dispatchTarget, fromPhone) {
-  const targetSiteId = identity.siteId;
-  const siteName = identity.siteName || 'Private Compound Court';
+async function handleCompoundScheduler(text, identity, dispatchTarget, fromPhone, boundSite = null) {
+  const targetSite = identity.siteRecord || boundSite;
+  const targetSiteId = targetSite?.id || identity.siteId;
+  const siteName = targetSite?.fields?.['Site Name'] || identity.siteName || 'Private Compound Court';
   const nowIso = new Date().toISOString();
 
   const prompt = `
 You are the Titan OS Compound Court Scheduler.
 Current Time: ${nowIso}
-Sender: ${identity.name} (${identity.role})
+Sender: ${identity.name || 'Compound Member'}
 Court Asset: ${siteName}
 
 Extract the scheduling intent from this message: "${text}"
 
 ACTIONS:
-- "BOOK": User wants to reserve court time (e.g., "taking the court tomorrow at 10 for an hour", "playing doubles Sunday 4pm", "book 2 hours tomorrow at 9am").
-- "CANCEL": User wants to release/cancel their booking (e.g., "going on boat, court is free", "canceling our 10am game").
+- "BOOK": User wants to reserve court time (e.g., "taking the court tomorrow at 10", "playing doubles Sunday 4pm", "book court tomorrow at 9am").
+- "CANCEL": User wants to release/cancel their booking (e.g., "going on boat, court is free", "canceling our game").
 - "QUERY_SCHEDULE": User asks who is playing or what is available (e.g., "who is playing today?", "is court free at 2?", "show schedule", "board").
-- "CHATTER": General conversation unrelated to court times.
+- "CHATTER": General banter unrelated to court reservations.
+
+CRITICAL DURATION RULE:
+- DEFAULT BOOKING DURATION IS STRICTLY 2 HOURS (120 MINUTES) unless explicitly specified otherwise.
+- Example: "Tomorrow at 10 AM" -> startTime: 10:00 AM, endTime: 12:00 PM.
+- Example: "Saturday at 2" -> startTime: 2:00 PM, endTime: 4:00 PM.
 
 Output JSON only:
 {
@@ -930,16 +904,19 @@ Output JSON only:
     // 1. QUERY COURT BOARD
     if (intent.action === 'QUERY_SCHEDULE') {
       const todayStr = new Date().toISOString().split('T')[0];
-      const formula = `AND({Status}='Confirmed', IS_AFTER({Start Time}, '${todayStr}T00:00:00.000Z'))`;
-      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Start%20Time&sort%5B0%5D%5Bdirection%5D=asc`;
+      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?sort%5B0%5D%5Bfield%5D=Start%20Time&sort%5B0%5D%5Bdirection%5D=asc&maxRecords=50`;
 
       const qRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
       const qData = qRes.ok ? await qRes.json() : { records: [] };
-      const records = qData.records || [];
+      const records = (qData.records || []).filter(r => {
+        const isConfirmed = r.fields['Status'] === 'Confirmed';
+        const startTime = r.fields['Start Time'];
+        return isConfirmed && startTime && startTime >= `${todayStr}T00:00:00.000Z`;
+      });
 
       let boardText = `🎾 *${siteName.toUpperCase()} | COURT BOARD*\n━━━━━━━━━━━━━━━━━━━━\n`;
       if (records.length === 0) {
-        boardText += `🟢 *Court is wide open today!*\nSimply type your requested time here to lock it in.`;
+        boardText += `🟢 *Court is wide open today!*\nSimply type your requested time here to lock it in (2-hour blocks standard).`;
       } else {
         records.forEach(r => {
           const s = new Date(r.fields['Start Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -955,54 +932,72 @@ Output JSON only:
 
     // 2. CANCEL RESERVATION
     if (intent.action === 'CANCEL') {
-      const formula = `AND({Status}='Confirmed', IS_AFTER({Start Time}, '${nowIso}'))`;
-      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Start%20Time&sort%5B0%5D%5Bdirection%5D=asc&maxRecords=5`;
+      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?sort%5B0%5D%5Bfield%5D=Start%20Time&sort%5B0%5D%5Bdirection%5D=asc&maxRecords=20`;
       const qRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
       const qData = qRes.ok ? await qRes.json() : { records: [] };
 
-      const myReservation = (qData.records || []).find(r => (r.fields['Booked By'] || '').toLowerCase().includes(identity.name.toLowerCase()));
+      const myReservation = (qData.records || []).find(r => {
+        const isConfirmed = r.fields['Status'] === 'Confirmed';
+        const sTime = r.fields['Start Time'];
+        const bookedBy = (r.fields['Booked By'] || '').toLowerCase();
+        const searchName = (identity.name || intent.partyName || '').toLowerCase();
+        return isConfirmed && sTime && sTime >= nowIso && (searchName ? bookedBy.includes(searchName) : true);
+      });
+
       if (myReservation) {
         await airtableWriteWithAutoDrop('Reservations', { 'Status': 'Cancelled' }, myReservation.id);
-        await sendWhatsAppMessage(dispatchTarget, `🟢 *COURT RELEASED*\n\nYour reserved slot has been released back to the family pool. The court is now open!`);
+        await sendWhatsAppMessage(dispatchTarget, `🟢 *COURT RELEASED*\n\nYour 2-hour reserved block has been released back to the family pool. The court is now open!`);
       } else {
         await sendWhatsAppMessage(dispatchTarget, `ℹ️ No upcoming reservations found under your name to cancel.`);
       }
       return true;
     }
 
-    // 3. BOOK SLOT WITH CONFLICT RESOLUTION
+    // 3. BOOK SLOT WITH STRICT 2-HOUR DEFAULT & CONFLICT RESOLUTION
     if (intent.action === 'BOOK') {
-      if (!intent.startTimeIso || !intent.endTimeIso) {
-        await sendWhatsAppMessage(dispatchTarget, `Could you specify the exact day and time you'd like to play? (e.g. "Tomorrow at 10 AM for 1 hour")`);
+      if (!intent.startTimeIso) {
+        await sendWhatsAppMessage(dispatchTarget, `Could you specify the time you'd like to play? (e.g. "Tomorrow at 10 AM")`);
         return true;
       }
 
       const pStart = new Date(intent.startTimeIso);
-      const pEnd = new Date(intent.endTimeIso);
+      let pEnd;
+      if (intent.endTimeIso) {
+        pEnd = new Date(intent.endTimeIso);
+      } else {
+        pEnd = new Date(pStart.getTime() + 2 * 60 * 60 * 1000); // Strict 2-Hour Default
+      }
 
-      // Conflict Check: overlapping reservations
-      const conflictFormula = `AND({Status}='Confirmed', IS_AFTER({End Time}, '${pStart.toISOString()}'), IS_BEFORE({Start Time}, '${pEnd.toISOString()}'))`;
-      const conflictUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?filterByFormula=${encodeURIComponent(conflictFormula)}`;
-      const cRes = await fetch(conflictUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+      // Query active reservations for overlap
+      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?maxRecords=100`;
+      const cRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
       const cData = cRes.ok ? await cRes.json() : { records: [] };
 
-      if (cData.records && cData.records.length > 0) {
-        const conflict = cData.records[0];
+      const conflict = (cData.records || []).find(r => {
+        if (r.fields['Status'] !== 'Confirmed') return false;
+        const rStart = new Date(r.fields['Start Time']);
+        const rEnd = new Date(r.fields['End Time']);
+        return rStart < pEnd && rEnd > pStart;
+      });
+
+      if (conflict) {
         const holder = conflict.fields['Booked By'] || 'Another family member';
         const sTime = new Date(conflict.fields['Start Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const eTime = new Date(conflict.fields['End Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         const conflictMsg = `⚠️ *SCHEDULE OVERLAP*\n\n` +
           `*${holder}* already has the court reserved from *${sTime} to ${eTime}*.\n\n` +
-          `🟢 The court is open right after at *${eTime}*. Want me to book that window for you instead?`;
+          `🟢 The court is open right after at *${eTime}*. Want me to book a 2-hour window starting at ${eTime} for you?`;
 
         await sendWhatsAppMessage(dispatchTarget, conflictMsg);
         return true;
       }
 
-      // Write confirmed reservation
+      const bookedByName = intent.partyName ||
+        (identity.name !== 'External Caller' && identity.name !== 'VIP Member' ? identity.name : `Family Member (+${fromPhone.slice(-4)})`);
+
       const resPayload = {
-        'Booked By': identity.name,
+        'Booked By': bookedByName,
         'Start Time': pStart.toISOString(),
         'End Time': pEnd.toISOString(),
         'Status': 'Confirmed',
@@ -1018,9 +1013,9 @@ Output JSON only:
 
       const confirmationCard = `🎾 *${siteName.toUpperCase()} | RESERVATION LOCKED*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `👤 *Player / Party:* ${identity.name}\n` +
+        `👤 *Player / Party:* ${bookedByName}\n` +
         `📅 *Date:* ${dateFormatted}\n` +
-        `⏱️ *Time:* ${sFormatted} – ${eFormatted}\n` +
+        `⏱️ *Time:* ${sFormatted} – ${eFormatted} (2-Hour Block)\n` +
         `🟢 *Status:* Confirmed\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `*Have a great match! Court board updated.*`;
@@ -1473,7 +1468,6 @@ async function processMediaBatch(batch) {
     if (worker?.id) assignmentPayload['Worker'] = [worker.id];
     if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
 
-    // MAP SUPABASE SIGNED URLS DIRECTLY INTO AIRTABLE'S ATTACHMENT FIELD
     const validAttachments = storageResults
       .filter(r => r && r.signedUrl)
       .map((r, idx) => ({
@@ -1503,7 +1497,6 @@ async function processMediaBatch(batch) {
 
     await sendWhatsAppMessage(dispatchTarget, expVoucher);
 
-    // Save forensic record to Inbound Messages 2
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const storageResult = storageResults[i];
@@ -1760,7 +1753,6 @@ app.post('/webhook', async (req, res) => {
       }
     };
 
-    // IDENTITY RESOLUTION MATRIX
     const callerIdentity = await resolveCallerIdentity(fromPhone);
     let site = callerIdentity.siteRecord || await lookupSite(groupJid || fromPhone);
     const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
@@ -1769,7 +1761,7 @@ app.post('/webhook', async (req, res) => {
     const isAuthorizedClient = callerIdentity.type === 'CONTACT' || (!worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE');
 
     const isLinkCommand = message.type === 'text' &&
-      (message.text?.body?.trim().startsWith('/l') || message.text?.body?.trim().startsWith('/link'));
+      (message.text?.body?.trim().startsWith('/l') || message.text?.body?.trim().startsWith('/link') || message.text?.body?.trim().startsWith('/group'));
 
     if (!worker && !isBoundGroupMember && !isAuthorizedClient && !isLinkCommand) {
       console.warn(`[Bouncer] Dropped unauthorized message from ${fromPhone || rawFrom}`);
@@ -1793,7 +1785,7 @@ app.post('/webhook', async (req, res) => {
       const userLon = message.location.longitude;
 
       if (!site) {
-        await dispatchReply(`⚠️ This group is not connected to a court yet. Type */l <Court Name>* to connect.`);
+        await dispatchReply(`⚠️ This group is not connected to a court yet. Type */group <Court Name>* to connect.`);
         return;
       }
 
@@ -1861,19 +1853,19 @@ app.post('/webhook', async (req, res) => {
         }
 
         if (intent === 'COURT_BOARD') {
-          await handleCompoundScheduler('board', callerIdentity, dispatchTarget, fromPhone);
+          await handleCompoundScheduler('board', callerIdentity, dispatchTarget, fromPhone, site);
           return;
         }
 
         if (intent === 'HELP') {
-          await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n• */s* — Status\n• */w* — Weather\n• */map* — GPS Nav\n• */board* — Compound Court Board\n• Drop location pin to check in.\n• Chat naturally to reserve courts, request sand/grooming, or forward receipts.`);
+          await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n• */s* — Status\n• */w* — Weather\n• */map* — GPS Nav\n• */board* — Compound Court Board\n• */group <Court Name>* — Bind Group to Court\n• Chat naturally to reserve courts (2-hr blocks), request sand/grooming, or forward receipts.`);
           return;
         }
       }
 
-      // COMPOUND COURT SCHEDULER (FAMILY & COMPOUND MEMBERS)
-      if (callerIdentity.role === 'Family Member / Player' || callerIdentity.role === 'Compound Member') {
-        const handled = await handleCompoundScheduler(rawText, callerIdentity, dispatchTarget, fromPhone);
+      // AMBIENT COMPOUND COURT SCHEDULER (BOUND GROUPS OR RECOGNIZED FAMILY MEMBERS)
+      if (isBoundGroupMember || callerIdentity.role === 'Family Member / Player' || callerIdentity.role === 'Compound Member') {
+        const handled = await handleCompoundScheduler(rawText, callerIdentity, dispatchTarget, fromPhone, site);
         if (handled) return;
       }
 
@@ -1897,15 +1889,11 @@ app.post('/webhook', async (req, res) => {
         try {
           const triage = await triageDispatchText(rawText, worker, site);
 
-          // Gate 1: Check if this was just banter/casual chat in an ambient group
           if (triage && triage.is_actionable === false) {
             console.log(`[Ambient Scribe] Filtered non-actionable chatter: "${rawText}"`);
             return;
           }
 
-          // Gate 2: Actionable Directives
-
-          // BRANCH: COMMERCIAL QUOTE & BUILD INQUIRY
           if (triage && triage.intent === 'COMMERCIAL_QUOTE') {
             const comm = triage.commercial_quote_details || {};
             const directedTo = comm.directed_to || (rawText.toLowerCase().includes('rob') ? 'Rob' : 'Bob');
@@ -1959,7 +1947,6 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
-          // BRANCH: WORK ORDER CLOSEOUT
           if (triage && triage.intent === 'WORK_ORDER_CLOSEOUT') {
             await executeWorkOrderCloseout({
               site,
@@ -1973,7 +1960,6 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
-          // BRANCH: STANDARD DISPATCH, INVENTORY, LOGISTICS, OR PRODUCTION DIRECTIVES
           if (triage && triage.is_actionable) {
             let targetSite = null;
             if (triage.matched_site_name) targetSite = await lookupSite(null, triage.matched_site_name);
@@ -2067,7 +2053,6 @@ app.post('/webhook', async (req, res) => {
     const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
     const caption = mediaObj.caption || (isAudio ? '[Spoken Voice Memo]' : '');
 
-    // SUB-SECOND VISUAL CAPTURE REACTION (<400ms)
     const reactionEmoji = isAudio ? '🎧' : (isVideo ? '🎥' : '📸');
     sendWhatsAppReaction(dispatchTarget, messageId, reactionEmoji).catch(() => {});
 
@@ -2291,12 +2276,12 @@ app.post('/api/notify-worker', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.6.0',
-    engine: 'Titan OS V4.6.0 (Compound Schedulers, Identity Matrix & Staging Gates)',
+    version: '4.6.1',
+    engine: 'Titan OS V4.6.1 (2-Hr Compound Schedulers, Group Link & Staging Gates)',
     activePipes: ['QBO-Receipt-Bridge', 'Identity-Matrix', 'Compound-Scheduler', 'Joy-Cannon-Multicast', 'Staging-Gates-0A-0B', 'Court-Snapshot-Telemetry']
   });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.6.0 Clean Engine listening on Port 3000`);
+  console.log(`🚀 Titan OS V4.6.1 Clean Engine listening on Port 3000`);
 });
