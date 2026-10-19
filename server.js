@@ -1,13 +1,16 @@
 /**
- * TITAN OS V4.5.20 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Multi-Worker Dispatch Broadcast, Omni-Hub Ambient Engine & QBO Attachment Pipeline
+ * TITAN OS V4.6.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
+ * Production Build — Compound Schedulers, Identity Matrix, Hardened Staging Gates & Asset Telemetry
  * 
  * Capabilities:
- * - Autonomous Receipt & Expense Forwarding: Passes Supabase image URLs into Airtable Attachment(s) for QBO parsing.
- * - Multi-Worker Dispatch: Broadcasts private WhatsApp assignment vouchers to 1-5 technicians per ticket.
+ * - Autonomous Receipt & Expense Forwarding: Direct Supabase-to-Airtable attachment array forwarding to QBO.
+ * - Multi-Worker Dispatch: Broadcasts private WhatsApp assignment vouchers to 1–5 technicians per ticket.
+ * - Identity Matrix Routing: Resolves senders across Contacts (VIP Owners, Handlers, Players) and Workers (Crew).
+ * - Headless Compound Court Scheduler: Conversational natural-language booking & conflict resolution without apps.
+ * - Dual-Cast Joy Cannon: Tailors outbound broadcasts for Executive Owners vs. Operational Property Handlers.
+ * - Hardened Pre-Installation Staging Gates: Audits Gate 0A (Container & Glass) and Gate 0B (Offload & Turf).
+ * - Autonomous Infrastructure Vision: Unattended court snapshot evaluation via POST /api/court-snapshot.
  * - Omni-Hub Ambient Channels: Passive noise-filtered monitoring for EXECUTIVE, LOGISTICS, PRODUCTION, and INVENTORY.
- * - Autonomous Mode Handover: Shifts 12/12 verified courts from INSTALLATION to MAINTENANCE automatically.
- * - Seasonal Decommissioning Guard: Disambiguates seasonal court closing from sales deal closures.
  * - Self-Healing AST Schema Engine: Automatic recovery from Airtable 422 errors.
  */
 
@@ -32,10 +35,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({
+  limit: '50mb',
   verify: (req, res, buf) => {
     req.rawBody = buf;
   }
 }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ====================================================================
 // 1. CONFIGURATION
@@ -43,7 +48,7 @@ app.use(express.json({
 const CONFIG = {
   port: PORT,
   meta: {
-    verifyToken: process.env.META_VERIFY_TOKEN,
+    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
     accessToken: process.env.META_ACCESS_TOKEN,
     appSecret: process.env.META_APP_SECRET,
     phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
@@ -67,7 +72,8 @@ const CONFIG = {
 };
 
 const mediaDebounceQueues = new Map();
-const DEBOUNCE_DELAY_MS = 3000;
+const DEBOUNCE_DELAY_MS = 3500;
+const processedMessageIds = new Set();
 
 // Modes permitted to run ambient natural-language background evaluation
 const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];
@@ -82,11 +88,14 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 ### CORE OPERATING RULES:
 1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected.
 2. PARALLEL EXECUTION: Gates are verified independently unless a physical dependency blocks them.
-3. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
+3. PRE-INSTALLATION HARDENED STAGING GATES:
+   - GATE 0A (Freight & Glass Audit): Inspect container door seals, crate strapping, and glass panel integrity. Check for shattered tempered glass or transit shifting before unbanding.
+   - GATE 0B (Offload & Turf Protection): Inspect offload machinery (verify smooth forklift tines or carpet poles) and ensure turf rolls are unpunctured, elevated, and protected from damp soil.
+4. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
    - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
    - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
-4. GATE 12 DEMOTION: Tools, loose hardware, or debris drops Gate 12, placing site in ACTION_REQUIRED.
-5. MULTILINGUAL & LEDGER NORMALIZATION: Ingest in any language, mirror language on WhatsApp, normalize English in ledger.
+5. GATE 12 DEMOTION: Tools, loose hardware, or debris drops Gate 12, placing site in ACTION_REQUIRED.
+6. MULTILINGUAL & LEDGER NORMALIZATION: Ingest in any language, mirror language on WhatsApp, normalize English in ledger.
 
 VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
 ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
@@ -105,15 +114,9 @@ VALID TASK CATEGORIES:
 - "Annual Structural & Torque Audit"
 - "Post-Storm / High-Wind Inspection"
 
-SEMANTIC DISAMBIGUATION RULES:
-- "Court closing", "closing the court", "winterizing", "season closing", or "net removal for winter" MUST BE:
-  - intent: "DISPATCH_CREATE"
-  - assignment_type: "Service"
-  - task_category: "Season Closing"
-
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "INSTALLATION_INSPECTION",
+  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "INSTALLATION_INSPECTION" | "GATE_0A_AUDIT" | "GATE_0B_AUDIT",
   "target_court_name": "string or null",
   "ticket_id": integer or null,
   "resolution_summary": "string in English",
@@ -134,8 +137,8 @@ SEMANTIC DISAMBIGUATION RULES:
   "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
   "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED",
   "action_intent": "HAZARD_BLOCKER" | "DEFECT_REPORT" | "MILESTONE_CLEARANCE",
-  "verified_gates": [array of gate integers],
-  "needs_attention_gates": [array of gate integers],
+  "verified_gates": [array of gate strings or numbers e.g. "0A", "0B", 1, 2],
+  "needs_attention_gates": [array of gate strings or numbers],
   "site_conditions": "Short string in English",
   "action_items": ["Specific mechanical defect or punch item in English"],
   "worker_summary": "1-2 sentence executive brief in English for INOC ledger.",
@@ -172,7 +175,7 @@ SEMANTIC DISAMBIGUATION RULES:
 
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "MAINTENANCE_INSPECTION",
+  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "MAINTENANCE_INSPECTION" | "VIP_CONCIERGE_REQUEST",
   "target_court_name": "string or null",
   "ticket_id": integer or null,
   "resolution_summary": "string in English",
@@ -228,6 +231,8 @@ const COMMAND_MAP = {
   '/loc': 'LOCATION',
   '/location': 'LOCATION',
   '/gps': 'LOCATION',
+  '/board': 'COURT_BOARD',
+  '/schedule': 'COURT_BOARD',
   '/?': 'HELP',
   '/h': 'HELP',
   '/help': 'HELP',
@@ -235,6 +240,8 @@ const COMMAND_MAP = {
 };
 
 const GATE_NAMES = {
+  '0A': 'Freight & Glass Integrity (Container Audit)',
+  '0B': 'Offload & Turf Protection',
   1: 'Foundation & Anchor Slab',
   2: 'Steel Frame Assembly',
   3: 'Structural Mesh Panels',
@@ -481,6 +488,23 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
   throw new Error(`Airtable write failed on ${table} (${res.status}): ${JSON.stringify(errBody)}`);
 }
 
+// ====================================================================
+// 5. IDENTITY MATRIX RESOLUTION (CONTACTS & WORKERS)
+// ====================================================================
+
+async function lookupContact(phoneRaw) {
+  if (!phoneRaw) return null;
+  const cleanDigits = phoneRaw.replace(/\D/g, '');
+  const searchPhone = cleanDigits.startsWith('1') ? `+${cleanDigits}` : `+1${cleanDigits}`;
+  const formula = `OR({Phone Number}='${phoneRaw}', {Phone Number}='${cleanDigits}', {Phone Number}='${searchPhone}', {Phone Number}='+${cleanDigits}')`;
+  const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Contacts?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`;
+
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => ({}));
+  return data.records?.[0] || null;
+}
+
 async function lookupWorker(phoneRaw) {
   if (!phoneRaw) return null;
   const cleanDigits = phoneRaw.replace(/\D/g, '');
@@ -494,6 +518,64 @@ async function lookupWorker(phoneRaw) {
   if (!res.ok) return null;
   const data = await res.json().catch(() => ({}));
   return data.records?.[0] || null;
+}
+
+async function resolveCallerIdentity(fromPhone) {
+  if (!fromPhone) {
+    return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: '' };
+  }
+
+  // 1. Check Contacts Table first (Owners, Caretakers, Family, Club GMs)
+  try {
+    const contact = await lookupContact(fromPhone);
+    if (contact) {
+      const siteId = contact.fields['Linked Site']?.[0] || null;
+      let siteRecord = null;
+      if (siteId) {
+        const siteRes = await fetch(`${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites/${siteId}`, {
+          headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+        });
+        if (siteRes.ok) siteRecord = await siteRes.json();
+      }
+
+      return {
+        type: 'CONTACT',
+        id: contact.id,
+        name: contact.fields['Contact Name'] || 'VIP Member',
+        role: contact.fields['Role'] || 'Family Member / Player',
+        notificationTier: contact.fields['Notification Tier'] || [],
+        siteId,
+        siteRecord,
+        siteName: siteRecord?.fields?.['Site Name'] || 'Private Court Asset',
+        facilityTier: siteRecord?.fields?.['Facility Tier'] || 'Standard Residential'
+      };
+    }
+  } catch (err) {
+    console.warn('[Identity Engine] Contacts check failed:', err.message);
+  }
+
+  // 2. Check Worker Table (Field Crew, Techs, Admins)
+  try {
+    const worker = await lookupWorker(fromPhone);
+    if (worker) {
+      return {
+        type: 'WORKER',
+        id: worker.id,
+        name: worker.fields['Full Name'] || worker.fields['Worker Name'] || 'Field Tech',
+        role: worker.fields['Role'] || 'Field Crew',
+        workerRecord: worker
+      };
+    }
+  } catch (err) {
+    console.warn('[Identity Engine] Worker check failed:', err.message);
+  }
+
+  return {
+    type: 'UNKNOWN',
+    name: 'External Caller',
+    role: 'Unknown',
+    phone: fromPhone
+  };
 }
 
 async function lookupWorkerByName(name) {
@@ -549,7 +631,7 @@ async function getAllActiveSitesList() {
 }
 
 // ====================================================================
-// 5. SUB-SECOND EDGE REACTIONS & OUTBOUND MESSAGING
+// 6. JOY CANNON MULTI-CAST & SUB-SECOND MESSAGING
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -619,9 +701,69 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
   return true;
 }
 
+async function fireJoyCannonMultiCast(siteId, eventPayload) {
+  try {
+    const siteUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites/${siteId}`;
+    const siteRes = await fetch(siteUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!siteRes.ok) return false;
+
+    const site = await siteRes.json();
+    const siteName = site.fields['Site Name'] || 'Facility Court';
+    const linkedContactIds = site.fields['Linked Contacts'] || [];
+
+    if (!Array.isArray(linkedContactIds) || linkedContactIds.length === 0) {
+      console.log(`[Joy Cannon] No linked contacts found for ${siteName}.`);
+      return false;
+    }
+
+    console.log(`[Joy Cannon Multi-Cast] Broadcasting update for ${siteName} to ${linkedContactIds.length} contact(s)...`);
+
+    for (const contactId of linkedContactIds) {
+      const contactUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Contacts/${contactId}`;
+      const contactRes = await fetch(contactUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+      if (!contactRes.ok) continue;
+
+      const contact = await contactRes.json();
+      const phone = contact.fields['Phone Number'];
+      const role = contact.fields['Role'];
+      const name = contact.fields['Contact Name'] || 'VIP Member';
+
+      if (!phone) continue;
+      const cleanPhone = String(phone).replace(/\D/g, '');
+
+      let outboundText = '';
+      if (role === 'Property Manager / Caretaker') {
+        outboundText = `🛠️ *BOUNCE OPERATIONS | LOGISTICS ALERT*\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `Attention ${name} — Service update for *${siteName}*:\n\n` +
+          `• *Window:* ${eventPayload.window || 'Scheduled Route Window'}\n` +
+          `• *Directive:* ${eventPayload.operationalDetails || eventPayload.directive || 'Routine surface grooming & equipment audit.'}\n` +
+          `• *Access:* ${eventPayload.accessInstructions || 'Please ensure court gate is unlocked and clear.'}\n\n` +
+          `Questions? Reply here directly to reach INOC dispatch.`;
+      } else {
+        outboundText = `🎾 *BOUNCE CONCIERGE | PRIVATE RESERVE PASS*\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `Good morning ${name},\n\n` +
+          `${eventPayload.executiveSummary || 'Your court has been audited and certified.'}\n\n` +
+          `🏟️ *Court:* ${siteName}\n` +
+          `🟢 *Status:* ${eventPayload.status || '100% Tour-Ready'}\n` +
+          `⚡ *Playability:* ${eventPayload.playabilityScore ? `${eventPayload.playabilityScore}%` : 'Tournament Spec'}\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `*Service completed under your Private Reserve coverage.*`;
+      }
+
+      await sendWhatsAppMessage(cleanPhone, outboundText);
+    }
+    return true;
+  } catch (err) {
+    console.error('[Joy Cannon Broadcast Error]:', err);
+    return false;
+  }
+}
+
 async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, priority, directiveNotes, workerRecord) {
   if (!workerRecord) return false;
-  
+
   const workerPhone = workerRecord.fields?.['Phone E164'] || workerRecord.fields?.['WhatsApp Number'];
   if (!workerPhone) {
     console.warn(`[Dispatch Alert] Worker ${workerRecord.fields?.['Full Name']} has no Phone on file.`);
@@ -645,7 +787,7 @@ async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, prior
 }
 
 // ====================================================================
-// 6. WORK ORDER CLOSEOUT ENGINE (SPOKEN PUNCHDOWN)
+// 7. WORK ORDER CLOSEOUT ENGINE
 // ====================================================================
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
@@ -729,7 +871,205 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
 }
 
 // ====================================================================
-// 7. AMBIENT DISPATCH, COMMERCIAL & CHAT TRIAGE
+// 8. HEADLESS COMPOUND SCHEDULER & VIP CONCIERGE HANDLERS
+// ====================================================================
+
+async function handleCompoundScheduler(text, identity, dispatchTarget, fromPhone) {
+  const targetSiteId = identity.siteId;
+  const siteName = identity.siteName || 'Private Compound Court';
+  const nowIso = new Date().toISOString();
+
+  const prompt = `
+You are the Titan OS Compound Court Scheduler.
+Current Time: ${nowIso}
+Sender: ${identity.name} (${identity.role})
+Court Asset: ${siteName}
+
+Extract the scheduling intent from this message: "${text}"
+
+ACTIONS:
+- "BOOK": User wants to reserve court time (e.g., "taking the court tomorrow at 10 for an hour", "playing doubles Sunday 4pm", "book 2 hours tomorrow at 9am").
+- "CANCEL": User wants to release/cancel their booking (e.g., "going on boat, court is free", "canceling our 10am game").
+- "QUERY_SCHEDULE": User asks who is playing or what is available (e.g., "who is playing today?", "is court free at 2?", "show schedule", "board").
+- "CHATTER": General conversation unrelated to court times.
+
+Output JSON only:
+{
+  "action": "BOOK" | "CANCEL" | "QUERY_SCHEDULE" | "CHATTER",
+  "startTimeIso": "ISO 8601 string or null",
+  "endTimeIso": "ISO 8601 string or null",
+  "partyName": "string or null",
+  "confidence": number
+}
+`;
+
+  try {
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.0,
+        responseMimeType: 'application/json',
+        thinkingConfig: { thinkingBudget: 0 }
+      }
+    };
+
+    const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) return false;
+    const data = await res.json();
+    const rawParsed = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawParsed) return false;
+
+    const intent = JSON.parse(rawParsed);
+    if (intent.action === 'CHATTER') return false;
+
+    // 1. QUERY COURT BOARD
+    if (intent.action === 'QUERY_SCHEDULE') {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const formula = `AND({Status}='Confirmed', IS_AFTER({Start Time}, '${todayStr}T00:00:00.000Z'))`;
+      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Start%20Time&sort%5B0%5D%5Bdirection%5D=asc`;
+
+      const qRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+      const qData = qRes.ok ? await qRes.json() : { records: [] };
+      const records = qData.records || [];
+
+      let boardText = `🎾 *${siteName.toUpperCase()} | COURT BOARD*\n━━━━━━━━━━━━━━━━━━━━\n`;
+      if (records.length === 0) {
+        boardText += `🟢 *Court is wide open today!*\nSimply type your requested time here to lock it in.`;
+      } else {
+        records.forEach(r => {
+          const s = new Date(r.fields['Start Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const e = new Date(r.fields['End Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const by = r.fields['Booked By'] || 'Family Member';
+          boardText += `• ${s} – ${e}: *${by}*\n`;
+        });
+        boardText += `━━━━━━━━━━━━━━━━━━━━\n🟢 All other windows are open for play.`;
+      }
+      await sendWhatsAppMessage(dispatchTarget, boardText);
+      return true;
+    }
+
+    // 2. CANCEL RESERVATION
+    if (intent.action === 'CANCEL') {
+      const formula = `AND({Status}='Confirmed', IS_AFTER({Start Time}, '${nowIso}'))`;
+      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Start%20Time&sort%5B0%5D%5Bdirection%5D=asc&maxRecords=5`;
+      const qRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+      const qData = qRes.ok ? await qRes.json() : { records: [] };
+
+      const myReservation = (qData.records || []).find(r => (r.fields['Booked By'] || '').toLowerCase().includes(identity.name.toLowerCase()));
+      if (myReservation) {
+        await airtableWriteWithAutoDrop('Reservations', { 'Status': 'Cancelled' }, myReservation.id);
+        await sendWhatsAppMessage(dispatchTarget, `🟢 *COURT RELEASED*\n\nYour reserved slot has been released back to the family pool. The court is now open!`);
+      } else {
+        await sendWhatsAppMessage(dispatchTarget, `ℹ️ No upcoming reservations found under your name to cancel.`);
+      }
+      return true;
+    }
+
+    // 3. BOOK SLOT WITH CONFLICT RESOLUTION
+    if (intent.action === 'BOOK') {
+      if (!intent.startTimeIso || !intent.endTimeIso) {
+        await sendWhatsAppMessage(dispatchTarget, `Could you specify the exact day and time you'd like to play? (e.g. "Tomorrow at 10 AM for 1 hour")`);
+        return true;
+      }
+
+      const pStart = new Date(intent.startTimeIso);
+      const pEnd = new Date(intent.endTimeIso);
+
+      // Conflict Check: overlapping reservations
+      const conflictFormula = `AND({Status}='Confirmed', IS_AFTER({End Time}, '${pStart.toISOString()}'), IS_BEFORE({Start Time}, '${pEnd.toISOString()}'))`;
+      const conflictUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?filterByFormula=${encodeURIComponent(conflictFormula)}`;
+      const cRes = await fetch(conflictUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+      const cData = cRes.ok ? await cRes.json() : { records: [] };
+
+      if (cData.records && cData.records.length > 0) {
+        const conflict = cData.records[0];
+        const holder = conflict.fields['Booked By'] || 'Another family member';
+        const sTime = new Date(conflict.fields['Start Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const eTime = new Date(conflict.fields['End Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        const conflictMsg = `⚠️ *SCHEDULE OVERLAP*\n\n` +
+          `*${holder}* already has the court reserved from *${sTime} to ${eTime}*.\n\n` +
+          `🟢 The court is open right after at *${eTime}*. Want me to book that window for you instead?`;
+
+        await sendWhatsAppMessage(dispatchTarget, conflictMsg);
+        return true;
+      }
+
+      // Write confirmed reservation
+      const resPayload = {
+        'Booked By': identity.name,
+        'Start Time': pStart.toISOString(),
+        'End Time': pEnd.toISOString(),
+        'Status': 'Confirmed',
+        'Notes': `Booked via ambient WhatsApp NLP. Raw text: "${text}"`
+      };
+      if (targetSiteId) resPayload['Site'] = [targetSiteId];
+
+      await airtableWriteWithAutoDrop('Reservations', resPayload);
+
+      const sFormatted = pStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const eFormatted = pEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const dateFormatted = pStart.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+
+      const confirmationCard = `🎾 *${siteName.toUpperCase()} | RESERVATION LOCKED*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `👤 *Player / Party:* ${identity.name}\n` +
+        `📅 *Date:* ${dateFormatted}\n` +
+        `⏱️ *Time:* ${sFormatted} – ${eFormatted}\n` +
+        `🟢 *Status:* Confirmed\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `*Have a great match! Court board updated.*`;
+
+      await sendWhatsAppMessage(dispatchTarget, confirmationCard);
+      return true;
+    }
+  } catch (err) {
+    console.error('[Compound Scheduler Error]:', err.message);
+  }
+  return false;
+}
+
+async function handleVIPConcierge(text, identity, dispatchTarget, fromPhone) {
+  const siteId = identity.siteId;
+  const siteName = identity.siteName || 'Private Reserve Court';
+
+  const assignmentPayload = {
+    'Date': new Date().toISOString().split('T')[0],
+    'Assignment Type': 'Service',
+    'Priority': 'High',
+    'Source': 'Joy Cannon (Client)',
+    'Status': 'Open',
+    'Notes': `[VIP CONCIERGE — ${identity.name} (${identity.role})]\nDirective: "${text}"`
+  };
+
+  if (siteId) assignmentPayload['Sites'] = [siteId];
+
+  const bobWorker = await lookupWorkerByName('Bob');
+  if (bobWorker) assignmentPayload['Worker'] = [bobWorker.id];
+
+  const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+  const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
+
+  const voucherText = `💼 *BOUNCE CONCIERGE | REQUEST CONFIRMED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `Hello ${identity.name} — we've received your directive for *${siteName}*:\n\n` +
+    `> "${text}"\n\n` +
+    `🎫 *Ticket:* ${ticketId}\n` +
+    `⚡ *Priority:* High (VIP Private Reserve)\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `Our district service van has been notified. Handled seamlessly under your seasonal coverage.`;
+
+  await sendWhatsAppMessage(dispatchTarget, voucherText);
+  return true;
+}
+
+// ====================================================================
+// 9. AMBIENT DISPATCH, COMMERCIAL & CHAT TRIAGE
 // ====================================================================
 
 async function triageDispatchText(text, workerRecord, currentSite = null) {
@@ -826,7 +1166,7 @@ Output JSON only:
 }
 
 // ====================================================================
-// 8. BATCH MULTIMODAL FORENSIC EVALUATION
+// 10. BATCH MULTIMODAL FORENSIC EVALUATION
 // ====================================================================
 
 async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
@@ -846,14 +1186,16 @@ Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilesto
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
 DYNAMIC INTENT CLASSIFICATION RULES:
-1. "COMMERCIAL_QUOTE": Commercial build/pricing request. Set "assignment_type": "Sales".
-2. "SEASONAL_CLOSING": Mentions of "court closing", "winterizing", or seasonal shutdown. Set "assignment_type": "Service" and "task_category": "Season Closing".
-3. "INVENTORY_UPDATE": Pallets in warehouse, stock check, hardware bins, turf storage. Set "assignment_type": "Supply Delivery".
-4. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
-5. "PRE_TOURNAMENT_AUDIT": Sweep checks. Set "assignment_type": "Audit / Inspection".
-6. "EXPENSE_LOG": Hardware receipt. Set "assignment_type": "Expense".
-7. "DISPATCH_CREATE": Maintenance defects on existing courts.
-8. "INSTALLATION_INSPECTION": Standard physical build audit.`;
+1. "GATE_0A_AUDIT": Container seal, freight crate integrity, intact vs shattered tempered glass panels.
+2. "GATE_0B_AUDIT": Offload staging, turf roll storage, forklift tine verification, lack of punctures.
+3. "COMMERCIAL_QUOTE": Commercial build/pricing request. Set "assignment_type": "Sales".
+4. "SEASONAL_CLOSING": Mentions of "court closing", "winterizing", or seasonal shutdown. Set "assignment_type": "Service" and "task_category": "Season Closing".
+5. "INVENTORY_UPDATE": Pallets in warehouse, stock check, hardware bins, turf storage. Set "assignment_type": "Supply Delivery".
+6. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
+7. "PRE_TOURNAMENT_AUDIT": Sweep checks. Set "assignment_type": "Audit / Inspection".
+8. "EXPENSE_LOG": Hardware receipt. Set "assignment_type": "Expense".
+9. "DISPATCH_CREATE": Maintenance defects on existing courts.
+10. "INSTALLATION_INSPECTION": Standard physical build audit (Gates 1-12).`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -900,11 +1242,11 @@ DYNAMIC INTENT CLASSIFICATION RULES:
 }
 
 // ====================================================================
-// 9. BATCH PROCESSOR (DEBOUNCED MEDIA AGGREGATION & MULTI-INTENT)
+// 11. BATCH PROCESSOR (DEBOUNCED MEDIA AGGREGATION & MULTI-INTENT)
 // ====================================================================
 
 async function processMediaBatch(batch) {
-  const { items, site, worker, dispatchTarget, fromPhone, senderSource, indoorSite } = batch;
+  const { items, site, worker, dispatchTarget, fromPhone, senderSource, indoorSite, callerIdentity } = batch;
 
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
   const storageResults = await Promise.all(uploadPromises);
@@ -931,7 +1273,40 @@ async function processMediaBatch(batch) {
   };
 
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
-  
+
+  // ------------------------------------------------------------------
+  // BRANCH 0: HARDENED PRE-INSTALLATION STAGING GATES (0A & 0B)
+  // ------------------------------------------------------------------
+  if (forensicAudit.intent === 'GATE_0A_AUDIT' || forensicAudit.intent === 'GATE_0B_AUDIT' ||
+      forensicAudit.verified_gates?.includes('0A') || forensicAudit.verified_gates?.includes('0B')) {
+
+    const gateTag = (forensicAudit.verified_gates?.includes('0A') || forensicAudit.intent === 'GATE_0A_AUDIT') ? 'Gate 0A' : 'Gate 0B';
+    const isPass = forensicAudit.status_observed !== 'ACTION_REQUIRED' && !forensicAudit.hazard_detected;
+    const courtLabel = site?.fields?.['Site Name'] || forensicAudit.target_court_name || 'Project Site';
+
+    const gateVoucher = `🏗️ *TITAN OS | ${gateTag.toUpperCase()} STAGING AUDIT*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `🏟️ *Court:* ${courtLabel}\n` +
+      `🛡️ *Gate:* ${GATE_NAMES[gateTag.replace('Gate ', '')] || gateTag}\n` +
+      `⚡ *Verdict:* ${isPass ? 'APPROVED 🟢' : 'HOLD / ACTION REQUIRED 🔴'}\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `📋 *Forensic Findings:*\n` +
+      `${(forensicAudit.action_items || []).join('\n') || forensicAudit.worker_summary}\n\n` +
+      `${isPass ? '✅ Carrier / Freight liability cleared. Proceed to next phase.' : '⚠️ Rectify physical staging issues before mechanical build begins.'}`;
+
+    await sendWhatsAppMessage(dispatchTarget, gateVoucher);
+
+    if (site && isPass) {
+      const previouslyCleared = site.fields['Cleared Milestones'] || [];
+      const updatedCleared = Array.from(new Set([...previouslyCleared, gateTag]));
+      await airtableWriteWithAutoDrop('Sites', {
+        'Cleared Milestones': updatedCleared,
+        'Last Note': `${gateTag} approved: ${forensicAudit.worker_summary}`
+      }, site.id);
+    }
+    return;
+  }
+
   // ------------------------------------------------------------------
   // BRANCH A: COMMERCIAL QUOTE & NEW BUILD INQUIRY
   // ------------------------------------------------------------------
@@ -1076,7 +1451,7 @@ async function processMediaBatch(batch) {
   // ------------------------------------------------------------------
   // BRANCH D: EXPENSE / RECEIPT CAPTURE
   // ------------------------------------------------------------------
-  if (forensicAudit.intent === 'EXPENSE_LOG') {
+  if (forensicAudit.intent === 'EXPENSE_LOG' || forensicAudit.assignment_type === 'Expense') {
     const expense = forensicAudit.expense_details || {};
     let targetSite = null;
     if (forensicAudit.target_court_name) {
@@ -1084,6 +1459,7 @@ async function processMediaBatch(batch) {
     }
     if (!targetSite) targetSite = site;
 
+    const workerAttribution = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
     const expNotes = `[EXPENSE RECEIPT] ${expense.vendor || 'Supplier'}: ${expense.total || 'Total on file'}\nItems: ${(expense.items || []).join(', ')}`;
     const assignmentPayload = {
       'Date': new Date().toISOString().split('T')[0],
@@ -1119,10 +1495,11 @@ async function processMediaBatch(batch) {
       `🏪 *Vendor:* ${expense.vendor || 'Hardware Supplier'}\n` +
       `💰 *Total:* ${expense.total || 'Logged on file'}\n` +
       `📍 *Asset:* ${targetSite?.fields?.['Site Name'] || 'General Operations'}\n` +
+      `👤 *Attributed:* ${workerAttribution}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `📦 *Items:*\n` +
       `${(expense.items || []).join(', ') || 'Hardware & maintenance supplies'}\n\n` +
-      `✅ *Receipt signed into vault and expense recorded.*`;
+      `✅ *Receipt signed into vault and expense recorded for QuickBooks.*`;
 
     await sendWhatsAppMessage(dispatchTarget, expVoucher);
 
@@ -1283,7 +1660,7 @@ async function processMediaBatch(batch) {
     'Clean JSON': JSON.stringify(forensicAudit, null, 2)
   };
 
-  const reportRecord = await airtableWriteWithAutoDrop('Reports 2', reportsPayload);
+  await airtableWriteWithAutoDrop('Reports 2', reportsPayload);
 
   if (site) {
     const nowIso = new Date().toISOString();
@@ -1295,12 +1672,13 @@ async function processMediaBatch(batch) {
     if (currentMode === 'INSTALLATION') {
       const updatedTimestamps = { ...cumulativeContext.milestoneTimestamps };
       for (const gateNum of (forensicAudit.verified_gates || [])) {
-        if (!updatedTimestamps[`Gate ${gateNum}`]) updatedTimestamps[`Gate ${gateNum}`] = nowIso;
+        const key = typeof gateNum === 'string' && gateNum.startsWith('Gate') ? gateNum : `Gate ${gateNum}`;
+        if (!updatedTimestamps[key]) updatedTimestamps[key] = nowIso;
       }
       const previouslyCleared = cumulativeContext.clearedMilestones || [];
-      const newlyVerified = (forensicAudit.verified_gates || []).map(g => `Gate ${g}`);
+      const newlyVerified = (forensicAudit.verified_gates || []).map(g => (typeof g === 'string' && g.startsWith('Gate')) ? g : `Gate ${g}`);
       let allClearedGates = Array.from(new Set([...previouslyCleared, ...newlyVerified]));
-      if (forensicAudit.needs_attention_gates?.includes(12)) {
+      if (forensicAudit.needs_attention_gates?.includes(12) || forensicAudit.needs_attention_gates?.includes('Gate 12')) {
         allClearedGates = allClearedGates.filter(g => g !== 'Gate 12');
         delete updatedTimestamps['Gate 12'];
       }
@@ -1313,7 +1691,7 @@ async function processMediaBatch(batch) {
 }
 
 // ====================================================================
-// 10. WEBHOOK ROUTING & INGESTION ENGINE
+// 12. WEBHOOK ROUTING & INGESTION ENGINE
 // ====================================================================
 
 app.get('/webhook', (req, res) => {
@@ -1355,6 +1733,11 @@ app.post('/webhook', async (req, res) => {
 
     if (!message) return;
 
+    const messageId = message.id;
+    if (processedMessageIds.has(messageId)) return;
+    processedMessageIds.add(messageId);
+    if (processedMessageIds.size > 2000) processedMessageIds.clear();
+
     const rawFrom = message.from || '';
     const rawAuthor = message.author || message.participant || '';
     const rawChatId = message.chat_id || message.group_id || changes?.metadata?.phone_number_id || '';
@@ -1369,7 +1752,6 @@ app.post('/webhook', async (req, res) => {
       : (rawFrom.includes('@g.us') ? '' : rawFrom.replace(/\D/g, ''));
 
     const dispatchTarget = groupJid || fromPhone;
-    const messageId = message.id;
 
     const dispatchReply = async (text) => {
       const ok = await sendWhatsAppMessage(dispatchTarget, text);
@@ -1378,10 +1760,13 @@ app.post('/webhook', async (req, res) => {
       }
     };
 
-    let site = await lookupSite(groupJid || fromPhone);
-    const worker = fromPhone ? await lookupWorker(fromPhone) : null;
+    // IDENTITY RESOLUTION MATRIX
+    const callerIdentity = await resolveCallerIdentity(fromPhone);
+    let site = callerIdentity.siteRecord || await lookupSite(groupJid || fromPhone);
+    const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
+
     const isBoundGroupMember = Boolean(site && isGroupMessage);
-    const isAuthorizedClient = !worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE';
+    const isAuthorizedClient = callerIdentity.type === 'CONTACT' || (!worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE');
 
     const isLinkCommand = message.type === 'text' &&
       (message.text?.body?.trim().startsWith('/l') || message.text?.body?.trim().startsWith('/link'));
@@ -1428,7 +1813,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       const distanceMeters = haversineDistanceKm(userLat, userLon, siteCoords.lat, siteCoords.lon) * 1000;
-      const workerName = worker?.fields?.['Full Name'] || (fromPhone ? `Crew (+${fromPhone.slice(-4)})` : 'Field Tech');
+      const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || (fromPhone ? `Crew (+${fromPhone.slice(-4)})` : 'Field Tech');
       const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
       if (distanceMeters <= 300) {
@@ -1475,8 +1860,29 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
+        if (intent === 'COURT_BOARD') {
+          await handleCompoundScheduler('board', callerIdentity, dispatchTarget, fromPhone);
+          return;
+        }
+
         if (intent === 'HELP') {
-          await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n• */s* — Status\n• */w* — Weather\n• */map* — GPS Nav\n• Drop location pin to check in.\n• Chat or forward memos/photos to log work or quotes.`);
+          await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n• */s* — Status\n• */w* — Weather\n• */map* — GPS Nav\n• */board* — Compound Court Board\n• Drop location pin to check in.\n• Chat naturally to reserve courts, request sand/grooming, or forward receipts.`);
+          return;
+        }
+      }
+
+      // COMPOUND COURT SCHEDULER (FAMILY & COMPOUND MEMBERS)
+      if (callerIdentity.role === 'Family Member / Player' || callerIdentity.role === 'Compound Member') {
+        const handled = await handleCompoundScheduler(rawText, callerIdentity, dispatchTarget, fromPhone);
+        if (handled) return;
+      }
+
+      // VIP CONCIERGE (ESTATE OWNERS & PROPERTY HANDLERS)
+      if (callerIdentity.role === 'Owner / Principal' || callerIdentity.role === 'Property Manager / Caretaker') {
+        const lower = rawText.toLowerCase();
+        if (lower.includes('sand') || lower.includes('groom') || lower.includes('clean') ||
+            lower.includes('glass') || lower.includes('net') || lower.includes('tournament') || lower.includes('sweep')) {
+          await handleVIPConcierge(rawText, callerIdentity, dispatchTarget, fromPhone);
           return;
         }
       }
@@ -1698,7 +2104,8 @@ app.post('/webhook', async (req, res) => {
         dispatchTarget,
         fromPhone,
         senderSource,
-        indoorSite
+        indoorSite,
+        callerIdentity
       });
     }
 
@@ -1713,6 +2120,7 @@ app.post('/webhook', async (req, res) => {
     });
     queue.site = site;
     queue.worker = worker;
+    queue.callerIdentity = callerIdentity;
 
     if (queue.timer) {
       clearTimeout(queue.timer);
@@ -1737,7 +2145,94 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ====================================================================
-// 11. AIRTABLE AUTOMATION WEBHOOK (MULTI-WORKER DISPATCH NOTIFICATION)
+// 13. AUTONOMOUS INFRASTRUCTURE ASSET VISION SNAPSHOT
+// ====================================================================
+
+app.post('/api/court-snapshot', async (req, res) => {
+  try {
+    const { siteId, imageBase64, captureTime } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'Missing required imageBase64 payload.' });
+    }
+
+    console.log(`[Asset Vision Telemetry] Analyzing court snapshot for Site: ${siteId || 'Global Node'}`);
+
+    const systemPrompt = `
+You are the Titan OS Court Telemetry Engine. Analyze this high-resolution snapshot taken of an empty padel court.
+Measure:
+1. Center net tension and horizon sag (regulation baseline: 88 cm at center).
+2. Silica sand distribution (contrast between baseline traction wear vs corner drift).
+3. Surface debris, leaves, pine needles, or foreign safety hazards.
+4. Glass panel structural integrity and seam alignment.
+Output playability index score (0-100%) and certification status.
+`;
+
+    const payload = {
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [
+        {
+          parts: [
+            { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+            { text: `Analyze morning court readiness at ${captureTime || new Date().toISOString()}` }
+          ]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.0,
+        responseMimeType: 'application/json',
+        thinkingConfig: { thinkingBudget: 0 }
+      }
+    };
+
+    const gRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!gRes.ok) {
+      const errText = await gRes.text();
+      return res.status(500).json({ error: `Gemini vision failed: ${errText}` });
+    }
+
+    const gData = await gRes.json();
+    const rawParsed = gData.candidates?.[0]?.content?.parts?.[0]?.text;
+    const telemetry = JSON.parse(rawParsed);
+
+    if (siteId) {
+      const eventPayload = {
+        executiveSummary: `Morning scan verified at ${telemetry.playabilityIndex || 100}% playability. Condition: ${telemetry.certificationStatus || '100% Tour-Ready'}.`,
+        status: telemetry.certificationStatus || '100% Tour-Ready',
+        playabilityScore: telemetry.playabilityIndex || 100,
+        operationalDetails: telemetry.recommendedAction || 'Surface groomed and net calibrated.'
+      };
+      await fireJoyCannonMultiCast(siteId, eventPayload);
+    }
+
+    return res.status(200).json({ success: true, telemetry });
+  } catch (err) {
+    console.error('[Court Snapshot Error]:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ====================================================================
+// 14. JOY CANNON BROADCAST API ROUTE
+// ====================================================================
+
+app.post('/api/joy-cannon/broadcast', async (req, res) => {
+  res.sendStatus(200);
+  try {
+    const { siteId, eventPayload } = req.body;
+    if (!siteId || !eventPayload) return;
+    await fireJoyCannonMultiCast(siteId, eventPayload);
+  } catch (err) {
+    console.error('[API Broadcast Error]:', err);
+  }
+});
+
+// ====================================================================
+// 15. AIRTABLE AUTOMATION WEBHOOK (MULTI-WORKER DISPATCH NOTIFICATION)
 // ====================================================================
 
 app.post('/api/notify-worker', async (req, res) => {
@@ -1751,7 +2246,7 @@ app.post('/api/notify-worker', async (req, res) => {
     const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments/${recordId}`;
     const response = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
     if (!response.ok) return;
-    
+
     const ticket = await response.json();
     const workerLinks = ticket.fields['Worker'] || [];
     if (!Array.isArray(workerLinks) || workerLinks.length === 0) {
@@ -1759,7 +2254,6 @@ app.post('/api/notify-worker', async (req, res) => {
       return;
     }
 
-    // Resolve target site name if linked
     let courtName = 'General Facility';
     const siteLink = ticket.fields['Sites']?.[0];
     if (siteLink) {
@@ -1772,7 +2266,6 @@ app.post('/api/notify-worker', async (req, res) => {
       }
     }
 
-    // Iterate through all 1 to 5 assigned workers and notify each on WhatsApp
     console.log(`[Multi-Worker Broadcast] Alerting ${workerLinks.length} assigned technician(s)...`);
     for (const workerId of workerLinks) {
       const workerRes = await fetch(`${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Worker/${workerId}`, {
@@ -1796,9 +2289,14 @@ app.post('/api/notify-worker', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '4.5.20', engine: 'Titan OS V4.5.20 (Multi-Worker Broadcast & Omni-Hub Ambient)' });
+  res.status(200).json({
+    status: 'healthy',
+    version: '4.6.0',
+    engine: 'Titan OS V4.6.0 (Compound Schedulers, Identity Matrix & Staging Gates)',
+    activePipes: ['QBO-Receipt-Bridge', 'Identity-Matrix', 'Compound-Scheduler', 'Joy-Cannon-Multicast', 'Staging-Gates-0A-0B', 'Court-Snapshot-Telemetry']
+  });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.5.20 Clean Engine listening on Port 3000`);
+  console.log(`🚀 Titan OS V4.6.0 Clean Engine listening on Port 3000`);
 });
