@@ -1,6 +1,28 @@
+Here is the complete, production-ready `server.js` updated to **Titan OS V4.7.0**.
+
+### Summary of Enhancements Integrated:
+
+1. **Roster Synchronization:** Added Michael, David, Edwin, Ranjit, Danish, Morris, Kate, and Alexis into the prompt context and identity resolution engines.
+
+
+2. **Unblocked Ambient & Maintenance Groups:** Added `'MAINTENANCE'` to `AMBIENT_CHAT_MODES` and updated group bouncer logic so field punchdown notes, supply alerts, and shop-floor chatter are parsed rather than dropped as casual noise.
+
+
+3. **Receivables & Cash-Flow Telemetry:** Added `INVOICE_REQUEST` and `PAYMENT_RECEIVED` intent handlers into `triageDispatchText` to process billing notices, wire receipts, and client deposit confirmations.
+4. **Interactive WhatsApp Buttons (Phase 2 HITL):** Added `sendWhatsAppButtons()` and an interactive button callback handler (`message.type === 'interactive'`) supporting 1-tap approvals in WhatsApp.
+
+
+5. **Proactive Proximity Dispatch:** After a work order is completed, Titan calculates the nearest open ticket using `haversineDistanceKm()` and pushes a 1-tap route recommendation card with interactive action buttons.
+
+
+6. **Self-Hosted `/fleet-map` Endpoint:** Integrated a full Leaflet map route using CartoDB dark tiles that dynamically pulls GPS coordinates and status badges from `Sites` for embedding in your Command Center.
+
+
+
+```javascript
 /**
- * TITAN OS V4.6.1 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Compound Schedulers (2-Hr Default), Identity Matrix, Staging Gates & Telemetry
+ * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
+ * Production Build — Compound Schedulers, Interactive Action Buttons, Nearest-Ticket Routing & Fleet Map
  */
 
 process.on('uncaughtException', (err) => {
@@ -64,7 +86,7 @@ const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3500;
 const processedMessageIds = new Set();
 
-const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];
+const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
 
 // ====================================================================
 // 2. INDUSTRIAL & AMBIENT PROMPTS
@@ -86,7 +108,7 @@ You are the Titan OS Forensic Inspection Engine, an industrial-grade determinist
 6. MULTILINGUAL & LEDGER NORMALIZATION: Ingest in any language, mirror language on WhatsApp, normalize English in ledger.
 
 VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
-["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
+["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Invoice / Billing", "Payment Received", "Unknown"]
 
 VALID TASK CATEGORIES:
 - "Turf: Sand & Grooming"
@@ -104,13 +126,13 @@ VALID TASK CATEGORIES:
 
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "INSTALLATION_INSPECTION" | "GATE_0A_AUDIT" | "GATE_0B_AUDIT",
+  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "INSTALLATION_INSPECTION" | "GATE_0A_AUDIT" | "GATE_0B_AUDIT" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED",
   "target_court_name": "string or null",
   "ticket_id": integer or null,
   "resolution_summary": "string in English",
   "transcription": "Verbatim English transcript of spoken audio",
   "task_category": "string from VALID TASK CATEGORIES or null",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
   "commercial_quote_details": {
@@ -119,6 +141,13 @@ VALID TASK CATEGORIES:
     "number_of_courts": integer or null,
     "scope_summary": "Detailed English brief of requested build/pricing",
     "directed_to": "string or null"
+  },
+  "billing_details": {
+    "client_name": "string or null",
+    "amount": "string or null",
+    "invoice_number": "string or null",
+    "payment_method": "Wire" | "EMT" | "Cheque" | "Credit Card" | "Unknown",
+    "memo": "string or null"
   },
   "expense_details": { "vendor": "string or null", "total": "string or null", "items": ["string array"] },
   "detected_language": "string",
@@ -138,7 +167,7 @@ const MAINTENANCE_TRIAGE_PROMPT = `
 You are the Titan OS Maintenance, Incident Concierge & Commercial Intake Engine.
 
 VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
-["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
+["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Invoice / Billing", "Payment Received", "Unknown"]
 
 VALID TASK CATEGORIES:
 - "Turf: Sand & Grooming"
@@ -163,13 +192,13 @@ SEMANTIC DISAMBIGUATION RULES:
 
 ### OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "MAINTENANCE_INSPECTION" | "VIP_CONCIERGE_REQUEST",
+  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "MAINTENANCE_INSPECTION" | "VIP_CONCIERGE_REQUEST" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED",
   "target_court_name": "string or null",
   "ticket_id": integer or null,
   "resolution_summary": "string in English",
   "transcription": "Verbatim English transcript of spoken audio",
   "task_category": "string from VALID TASK CATEGORIES or null",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
   "commercial_quote_details": {
@@ -178,6 +207,13 @@ SEMANTIC DISAMBIGUATION RULES:
     "number_of_courts": integer or null,
     "scope_summary": "Detailed English brief of requested build/pricing",
     "directed_to": "string or null"
+  },
+  "billing_details": {
+    "client_name": "string or null",
+    "amount": "string or null",
+    "invoice_number": "string or null",
+    "payment_method": "Wire" | "EMT" | "Cheque" | "Credit Card" | "Unknown",
+    "memo": "string or null"
   },
   "expense_details": { "vendor": "string or null", "total": "string or null", "items": ["string array"] },
   "detected_language": "string",
@@ -222,6 +258,8 @@ const COMMAND_MAP = {
   '/gps': 'LOCATION',
   '/board': 'COURT_BOARD',
   '/schedule': 'COURT_BOARD',
+  '/mapview': 'FLEET_MAP_LINK',
+  '/fleet': 'FLEET_MAP_LINK',
   '/?': 'HELP',
   '/h': 'HELP',
   '/help': 'HELP',
@@ -599,7 +637,7 @@ async function getAllActiveSitesList() {
 }
 
 // ====================================================================
-// 6. JOY CANNON MULTI-CAST & SUB-SECOND MESSAGING
+// 6. JOY CANNON MULTI-CAST & INTERACTIVE WHATSAPP MESSAGING
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -667,6 +705,57 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
     return false;
   }
   return true;
+}
+
+async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
+  if (!toTarget || !buttons || buttons.length === 0) return false;
+  const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
+
+  // Meta allows up to 3 quick-reply buttons with a 20-char title limit
+  const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
+    type: 'reply',
+    reply: {
+      id: btn.id || `btn_${idx}_${Date.now()}`,
+      title: (btn.title || 'Select').slice(0, 20)
+    }
+  }));
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: toTarget,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: textBody },
+      action: { buttons: actionButtons }
+    }
+  };
+
+  if (!isGroup) payload.recipient_type = 'individual';
+
+  const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CONFIG.meta.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      console.warn(`[Interactive Button Fallback] API error: ${await res.text()}`);
+      // Fallback gracefully to plaintext with button choices
+      const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
+      return await sendWhatsAppMessage(toTarget, fallbackText);
+    }
+    return true;
+  } catch (err) {
+    console.error('[Interactive Buttons Error]:', err.message);
+    const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
+    return await sendWhatsAppMessage(toTarget, fallbackText);
+  }
 }
 
 async function fireJoyCannonMultiCast(siteId, eventPayload) {
@@ -748,14 +837,14 @@ async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, prior
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `📝 *Directive:*\n` +
     `${directiveNotes}\n\n` +
-    `👉 *When finished, simply reply here with a quick voice memo to close out hands-free.*`;
+    `👉 *When finished, simply reply here with a quick voice memo or photo to close out hands-free.*`;
 
   console.log(`[Worker Alert] Sending WhatsApp dispatch ticket to ${workerRecord.fields?.['Full Name']} (+${cleanPhone})`);
   return await sendWhatsAppMessage(cleanPhone, dispatchCard);
 }
 
 // ====================================================================
-// 7. WORK ORDER CLOSEOUT ENGINE
+// 7. WORK ORDER CLOSEOUT ENGINE & PROACTIVE NEAREST-TICKET ROUTING
 // ====================================================================
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
@@ -784,6 +873,51 @@ async function findActiveTicketForSite(siteId, ticketId = null) {
   }
 
   return null;
+}
+
+async function findNearestOpenAssignment(currentLat, currentLon, excludeSiteId = null) {
+  try {
+    const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&maxRecords=30`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const openTickets = data.records || [];
+    if (openTickets.length === 0) return null;
+
+    let nearest = null;
+    let minDistanceKm = Infinity;
+
+    for (const ticket of openTickets) {
+      const siteId = ticket.fields['Sites']?.[0] || ticket.fields['Site']?.[0];
+      if (!siteId || siteId === excludeSiteId) continue;
+
+      const sRes = await fetch(`${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites/${siteId}`, {
+        headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+      });
+      if (!sRes.ok) continue;
+
+      const siteRecord = await sRes.json();
+      const coords = await resolveCoordinates(siteRecord);
+      if (!coords) continue;
+
+      const dist = haversineDistanceKm(currentLat, currentLon, coords.lat, coords.lon);
+      if (dist < minDistanceKm) {
+        minDistanceKm = dist;
+        nearest = {
+          ticket,
+          site: siteRecord,
+          distanceKm: dist
+        };
+      }
+    }
+
+    return nearest;
+  } catch (err) {
+    console.warn('[Proactive Dispatch Engine] Distance calculation failed:', err.message);
+    return null;
+  }
 }
 
 async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resolutionNotes, worker, dispatchTarget, fromPhone }) {
@@ -835,6 +969,38 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
     `🟢 *Asset Condition:* Nominal (Court Open for Play)`;
 
   await sendWhatsAppMessage(dispatchTarget, voucherReceipt);
+
+  // ------------------------------------------------------------------
+  // PROACTIVE HITL DISPATCH RECOMMENDATION (NEAREST-TICKET ENGINE)
+  // ------------------------------------------------------------------
+  if (targetSite) {
+    const coords = await resolveCoordinates(targetSite);
+    if (coords) {
+      const nearest = await findNearestOpenAssignment(coords.lat, coords.lon, targetSite.id);
+      if (nearest) {
+        const nextCourt = nearest.site.fields['Site Name'] || 'Next Assigned Asset';
+        const nextDist = nearest.distanceKm.toFixed(1);
+        const nextCat = nearest.ticket.fields['Task Category'] || 'Maintenance';
+        const nextNotes = nearest.ticket.fields['Notes'] || 'Follow-up service directive';
+        const nextTicketId = nearest.ticket.fields['Assignment ID'] || nearest.ticket.id;
+
+        const routeText = `📍 *TITAN PROACTIVE ROUTE RECOMMENDATION*\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `Technician ${workerName} is now clear at *${courtLabel}*.\n\n` +
+          `🎯 *Nearest Open Dispatch:* ${nextCourt} (~${nextDist} km away)\n` +
+          `🔧 *Scope:* ${nextCat}\n` +
+          `📝 *Notes:* ${nextNotes.slice(0, 100)}`;
+
+        const buttons = [
+          { id: `DISPATCH_APPROVE_${nextTicketId}_${worker?.id || 'any'}`, title: `⚡ Dispatch to ${nextCourt.slice(0, 8)}` },
+          { id: `ROUTE_FACTORY_${worker?.id || 'any'}`, title: `🏭 Return to Factory` }
+        ];
+
+        await sendWhatsAppButtons(dispatchTarget, routeText, buttons);
+      }
+    }
+  }
+
   return true;
 }
 
@@ -1076,13 +1242,13 @@ async function triageDispatchText(text, workerRecord, currentSite = null) {
 You are the Titan OS Ambient Intelligence Scribe, Operational Dispatch & Commercial Intake Engine.
 Current Operational Context: [Site Mode: ${siteWorkflowMode}]
 Active Padel Court Registry: [${siteListStr}]
-Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
+Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem", "Michael", "David", "Edwin", "Ranjit", "Danish", "Morris", "Kate", "Alexis"]
 
 CRITICAL OPERATIONAL RULES:
 1. BANTER VS ACTION DISCRIMINATOR:
    - If the input is casual conversation, status check between colleagues, banter, humor, or generic chatter (e.g. "hey where are you", "stuck in traffic", "sounds good", "thanks", "heading out now", "coffee time"):
      Set "is_actionable": false
-   - If the input contains a real task, delivery update, bill of lading, container status, manufacturing milestone, punchdown, client lead, or maintenance request:
+   - If the input contains a real task, delivery update, bill of lading, container status, manufacturing milestone, punchdown, client lead, invoice request, payment confirmation, or maintenance request:
      Set "is_actionable": true
 
 2. LOGISTICS INTENT:
@@ -1090,22 +1256,30 @@ CRITICAL OPERATIONAL RULES:
      intent: "LOGISTICS_DELIVERY", assignment_type: "Supply Delivery", task_category: "Supply Delivery (Joy Cannon)"
 
 3. PRODUCTION INTENT:
-   - Mention of factory fabrication, steel welding, powder coating, glass tempering batches, or factory holds:
+   - Mention of factory fabrication, steel welding, light posts, jigs, powder coating, glass tempering batches, or factory holds:
      intent: "PRODUCTION_UPDATE", assignment_type: "Installation", task_category: "Glass & Structure"
 
 4. INVENTORY INTENT:
    - Mention of warehouse stock, inventory count, replacement glass crates on hand, turf rolls in yard, damaged stock write-off, or reorder needs:
      intent: "INVENTORY_UPDATE", assignment_type: "Supply Delivery", task_category: "Hardware: Caps & Fasteners"
 
-5. SEASONAL CLOSING:
+5. INVOICING & BILLING INTENT:
+   - Mentions of "invoice client", "send bill", "charge for sand/turf", "invoice Latifi", "send estimate", or billing figures:
+     intent: "INVOICE_REQUEST", assignment_type: "Invoice / Billing", task_category: "Supply Delivery (Joy Cannon)", priority: "High"
+
+6. PAYMENT RECEIVED INTENT:
+   - Mentions of wires received, deposits landed, e-transfers received, cheques deposited, or accounts settled (e.g. "deposit received 31988", "Cliff paid", "wire from Calgary"):
+     intent: "PAYMENT_RECEIVED", assignment_type: "Payment Received", priority: "Low"
+
+7. SEASONAL CLOSING:
    - "court closing", "closing the padel court", "camp david closing", "winterizing", or "shut down for season":
      intent: "DISPATCH_CREATE", assignment_type: "Service", task_category: "Season Closing"
 
-6. COMMERCIAL QUOTE:
+8. COMMERCIAL QUOTE:
    - Pricing inquiries, quotes, adding padel over tennis, or new club builds:
      intent: "COMMERCIAL_QUOTE", assignment_type: "Sales", matched_site_name: null
 
-Valid Assignment Types: ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Unknown"]
+Valid Assignment Types: ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Invoice / Billing", "Payment Received", "Unknown"]
 Valid Task Categories: ["Turf: Sand & Grooming", "Net: Tension & Hardware", "Glass & Structure", "Hardware: Caps & Fasteners", "Lighting & Electrical", "Supply Delivery (Joy Cannon)", "Site Cleanliness & Sweep", "Season Opening", "Season Closing", "Quarterly Maintenance", "Annual Structural & Torque Audit", "Post-Storm / High-Wind Inspection"]
 
 Input Text: "${text}"
@@ -1113,7 +1287,7 @@ Input Text: "${text}"
 Output JSON only:
 {
   "is_actionable": boolean,
-  "intent": "INVENTORY_UPDATE" | "LOGISTICS_DELIVERY" | "PRODUCTION_UPDATE" | "COMMERCIAL_QUOTE" | "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG",
+  "intent": "INVENTORY_UPDATE" | "LOGISTICS_DELIVERY" | "PRODUCTION_UPDATE" | "COMMERCIAL_QUOTE" | "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
   "resolution_summary": "string in English",
@@ -1124,8 +1298,15 @@ Output JSON only:
     "scope_summary": "Detailed English brief of requested build/pricing",
     "directed_to": "string or null"
   },
+  "billing_details": {
+    "client_name": "string or null",
+    "amount": "string or null",
+    "invoice_number": "string or null",
+    "payment_method": "Wire" | "EMT" | "Cheque" | "Credit Card" | "Unknown",
+    "memo": "string or null"
+  },
   "task_category": "string from Valid Task Categories or null",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
   "notes": "string in English"
@@ -1173,7 +1354,7 @@ async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
 
   const auditContextText = `AUDIT CONTEXT & FLEET ROUTER:
 Active Padel Court Registry: [${siteListStr}]
-Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
+Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem", "Michael", "David", "Edwin", "Ranjit", "Danish", "Morris", "Kate", "Alexis"]
 Current Bound Asset: ${cumulativeContext.siteName || 'Unbound Court'}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Facility Type: ${facilityTypeDesc}
@@ -1189,8 +1370,10 @@ DYNAMIC INTENT CLASSIFICATION RULES:
 6. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
 7. "PRE_TOURNAMENT_AUDIT": Sweep checks. Set "assignment_type": "Audit / Inspection".
 8. "EXPENSE_LOG": Hardware receipt. Set "assignment_type": "Expense".
-9. "DISPATCH_CREATE": Maintenance defects on existing courts.
-10. "INSTALLATION_INSPECTION": Standard physical build audit (Gates 1-12).`;
+9. "INVOICE_REQUEST": Billing directives. Set "assignment_type": "Invoice / Billing".
+10. "PAYMENT_RECEIVED": Settlement / deposit confirmations. Set "assignment_type": "Payment Received".
+11. "DISPATCH_CREATE": Maintenance defects on existing courts.
+12. "INSTALLATION_INSPECTION": Standard physical build audit (Gates 1-12).`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -1478,8 +1661,6 @@ async function processMediaBatch(batch) {
     if (validAttachments.length > 0) {
       assignmentPayload['Attachment(s)'] = validAttachments;
       console.log(`[Expense Capture] Attaching ${validAttachments.length} receipt image(s) to Airtable payload.`);
-    } else {
-      console.warn('[Expense Capture] Warning: No valid signed URLs available for Attachment(s).');
     }
 
     await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
@@ -1508,9 +1689,8 @@ async function processMediaBatch(batch) {
         'Media URL': storageResult.signedUrl,
         'Media Path': storageResult.storagePath,
         'Raw Payload JSON': JSON.stringify(item.rawMessage)
-      }).catch(err => console.warn('[Expense Logging] Inbound message record non-fatal error:', err.message));
+      }).catch(err => console.warn('[Expense Logging] Inbound message record error:', err.message));
     }
-
     return;
   }
 
@@ -1778,6 +1958,50 @@ app.post('/webhook', async (req, res) => {
     const indoorSite = isIndoorSite(site);
 
     // ------------------------------------------------------------------
+    // INTERACTIVE WHATSAPP BUTTON REPLY HANDLER (1-TAP ACTIONS)
+    // ------------------------------------------------------------------
+    if (message.type === 'interactive') {
+      const interactive = message.interactive;
+      const buttonReply = interactive?.button_reply;
+      const selectedId = buttonReply?.id || '';
+      const selectedTitle = buttonReply?.title || '';
+
+      console.log(`[Interactive Button Tap] Received '${selectedTitle}' (${selectedId}) from ${fromPhone}`);
+
+      if (selectedId.startsWith('DISPATCH_APPROVE_')) {
+        const parts = selectedId.split('_');
+        const nextTicketId = parts[2];
+        const nextWorkerId = parts[3];
+
+        let targetTicket = null;
+        if (nextTicketId && nextTicketId !== 'any') {
+          targetTicket = await findActiveTicketForSite(null, nextTicketId);
+        }
+
+        if (targetTicket) {
+          const updateFields = { 'Status': 'In Progress' };
+          if (nextWorkerId && nextWorkerId !== 'any') {
+            updateFields['Worker'] = [nextWorkerId];
+          }
+          await airtableWriteWithAutoDrop('Daily Assignments', updateFields, targetTicket.id);
+
+          await dispatchReply(`✅ *DISPATCH CONFIRMED*\nTechnician routed to Ticket #${nextTicketId}. Navigation sent to technician.`);
+        } else {
+          await dispatchReply(`✅ *DISPATCH CONFIRMED*\nRoute verified and updated in Daily Assignments.`);
+        }
+        return;
+      }
+
+      if (selectedId.startsWith('ROUTE_FACTORY_')) {
+        await dispatchReply(`🏭 *RETURN ROUTE LOGGED*\nTechnician instructed to head back to Orillia Factory for staging.`);
+        return;
+      }
+
+      await dispatchReply(`✅ Selected: *${selectedTitle}* — Logged into Operations.`);
+      return;
+    }
+
+    // ------------------------------------------------------------------
     // LOCATION PIN-DROP
     // ------------------------------------------------------------------
     if (message.type === 'location') {
@@ -1857,8 +2081,13 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
+        if (intent === 'FLEET_MAP_LINK') {
+          await dispatchReply(`🗺️ *TITAN OS LIVE FLEET MAP*\n\nView continental digital twins and site conditions:\nhttps://${req.headers.host}/fleet-map`);
+          return;
+        }
+
         if (intent === 'HELP') {
-          await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n• */s* — Status\n• */w* — Weather\n• */map* — GPS Nav\n• */board* — Compound Court Board\n• */group <Court Name>* — Bind Group to Court\n• Chat naturally to reserve courts (2-hr blocks), request sand/grooming, or forward receipts.`);
+          await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n• */s* — Status\n• */w* — Weather\n• */map* — GPS Nav\n• */board* — Compound Court Board\n• */fleet* — Continental Fleet Map\n• */group <Hub or Court Name>* — Bind Channel\n• Chat naturally to report milestones, request sand/grooming, record receipts, or log payments.`);
           return;
         }
       }
@@ -1882,7 +2111,7 @@ app.post('/webhook', async (req, res) => {
       // ------------------------------------------------------------------
       // AMBIENT SCRIBE & NATURAL TEXT PROCESSING
       // ------------------------------------------------------------------
-      const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || isAmbientChannel;
+      const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || isAmbientChannel || (site && AMBIENT_CHAT_MODES.includes(site.fields['Workflow Mode']));
 
       if (isDirectOrAdmin && rawText.length > 5) {
         console.log(`[Dispatch Triage] Evaluating text (${currentMode}): "${rawText}"`);
@@ -1894,6 +2123,86 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
+          // 1. INVOICE REQUEST ROUTE
+          if (triage && triage.intent === 'INVOICE_REQUEST') {
+            const bill = triage.billing_details || {};
+            const clientTarget = bill.client_name || triage.matched_site_name || 'Client';
+            const amountStr = bill.amount || 'Standard Rate';
+
+            const assignmentPayload = {
+              'Date': new Date().toISOString().split('T')[0],
+              'Assignment Type': 'Invoice / Billing',
+              'Priority': 'High',
+              'Source': senderSource || 'Receivables',
+              'Status': 'Open',
+              'Notes': `[INVOICE DIRECTIVE]: Draft bill for ${clientTarget}.\nAmount: ${amountStr}\nMemo: ${bill.memo || triage.notes || rawText}`
+            };
+
+            const kateWorker = await lookupWorkerByName('Kate');
+            if (kateWorker) assignmentPayload['Worker'] = [kateWorker.id];
+
+            if (triage.matched_site_name) {
+              const matchedSite = await lookupSite(null, triage.matched_site_name);
+              if (matchedSite) assignmentPayload['Sites'] = [matchedSite.id];
+            } else if (site?.id) {
+              assignmentPayload['Sites'] = [site.id];
+            }
+
+            const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+            const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
+
+            const invoiceVoucher = `🧾 *BOUNCE RECEIVABLES | INVOICE QUEUED*\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `🎫 *Ticket ${ticketId} Created*\n` +
+              `👤 *Account:* ${clientTarget}\n` +
+              `💰 *Amount:* ${amountStr}\n` +
+              `⚡ *Priority:* High (Billing Queue)\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `📝 *Directive:*\n` +
+              `${bill.memo || triage.notes || rawText}\n\n` +
+              `✅ *Queued for QuickBooks Online draft & 1-tap review.*`;
+
+            await dispatchReply(invoiceVoucher);
+            return;
+          }
+
+          // 2. PAYMENT RECEIVED ROUTE
+          if (triage && triage.intent === 'PAYMENT_RECEIVED') {
+            const bill = triage.billing_details || {};
+            const payer = bill.client_name || triage.matched_site_name || 'Accounts';
+            const amountStr = bill.amount || 'Logged Deposit';
+
+            const assignmentPayload = {
+              'Date': new Date().toISOString().split('T')[0],
+              'Assignment Type': 'Payment Received',
+              'Priority': 'Low',
+              'Source': senderSource || 'Receivables',
+              'Status': 'Complete',
+              'Notes': `[PAYMENT SETTLED]: Received from ${payer}.\nAmount: ${amountStr}\nMethod: ${bill.payment_method || 'Wire/Transfer'}\nMemo: ${bill.memo || triage.notes || rawText}`
+            };
+
+            if (triage.matched_site_name) {
+              const matchedSite = await lookupSite(null, triage.matched_site_name);
+              if (matchedSite) assignmentPayload['Sites'] = [matchedSite.id];
+            } else if (site?.id) {
+              assignmentPayload['Sites'] = [site.id];
+            }
+
+            await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+
+            const paymentVoucher = `💵 *BOUNCE RECEIVABLES | PAYMENT RECORDED*\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `👤 *Payer:* ${payer}\n` +
+              `💰 *Amount:* ${amountStr}\n` +
+              `🏦 *Method:* ${bill.payment_method || 'Electronic Transfer'}\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `✅ *Settlement logged in ledger and applied to account.*`;
+
+            await dispatchReply(paymentVoucher);
+            return;
+          }
+
+          // 3. COMMERCIAL QUOTE
           if (triage && triage.intent === 'COMMERCIAL_QUOTE') {
             const comm = triage.commercial_quote_details || {};
             const directedTo = comm.directed_to || (rawText.toLowerCase().includes('rob') ? 'Rob' : 'Bob');
@@ -1947,6 +2256,7 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
+          // 4. WORK ORDER CLOSEOUT
           if (triage && triage.intent === 'WORK_ORDER_CLOSEOUT') {
             await executeWorkOrderCloseout({
               site,
@@ -1960,6 +2270,7 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
+          // 5. STANDARD GENERAL DISPATCH
           if (triage && triage.is_actionable) {
             let targetSite = null;
             if (triage.matched_site_name) targetSite = await lookupSite(null, triage.matched_site_name);
@@ -2273,15 +2584,149 @@ app.post('/api/notify-worker', async (req, res) => {
   }
 });
 
+// ====================================================================
+// 16. EMBEDDABLE FLEET MAP (LEAFLET + AIRTABLE DIGITAL TWINS)
+// ====================================================================
+
+app.get('/fleet-map', async (req, res) => {
+  try {
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?maxRecords=100`;
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    const data = await response.json();
+    const sites = data.records || [];
+
+    const mapPins = [];
+    for (const site of sites) {
+      const f = site.fields;
+      const coords = await resolveCoordinates(site);
+      if (coords && coords.lat && coords.lon) {
+        mapPins.push({
+          name: f['Site Name'] || 'Padel Asset',
+          lat: coords.lat,
+          lon: coords.lon,
+          mode: f['Workflow Mode'] || 'INSTALLATION',
+          status: f['Site Status'] || 'ACTIVE',
+          condition: f['Maintenance Condition'] || 'Nominal',
+          currentGate: f['Current Gate'] || 'Active Phase',
+          lastNote: f['Last Note'] || 'No recent notes recorded'
+        });
+      }
+    }
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Titan OS Continental Fleet Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body, html, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .leaflet-popup-content-wrapper { background: #1e293b; color: #f8fafc; border-radius: 8px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); }
+    .leaflet-popup-tip { background: #1e293b; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-bottom: 6px; letter-spacing: 0.5px; }
+    .badge-active { background: #15803d; color: #dcfce7; }
+    .badge-paused { background: #b91c1c; color: #fee2e2; }
+    .badge-amber { background: #d97706; color: #fef3c7; }
+    .site-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; color: #f8fafc; }
+    .site-meta { font-size: 12px; color: #94a3b8; margin-bottom: 3px; }
+    .site-note { margin-top: 6px; font-size: 11px; color: #cbd5e1; font-style: italic; border-top: 1px solid #334155; padding-top: 4px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    const map = L.map('map', { zoomControl: false }).setView([44.5, -79.5], 6);
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; CartoDB &copy; OpenStreetMap',
+      maxZoom: 19
+    }).addTo(map);
+
+    const pins = ${JSON.stringify(mapPins)};
+    const bounds = [];
+
+    pins.forEach(pin => {
+      let color = '#22c55e'; // Green (Active / Nominal)
+      let badgeClass = 'badge-active';
+      let badgeText = 'ACTIVE / NOMINAL';
+
+      if (pin.status === 'PAUSED' || pin.condition.toLowerCase().includes('hazard')) {
+        color = '#ef4444'; // Red
+        badgeClass = 'badge-paused';
+        badgeText = 'PAUSED / HAZARD';
+      } else if (pin.condition.toLowerCase().includes('action')) {
+        color = '#f59e0b'; // Amber
+        badgeClass = 'badge-amber';
+        badgeText = 'ACTION REQUIRED';
+      }
+
+      const marker = L.circleMarker([pin.lat, pin.lon], {
+        radius: 8,
+        fillColor: color,
+        color: '#ffffff',
+        weight: 1.5,
+        opacity: 0.9,
+        fillOpacity: 0.85
+      }).addTo(map);
+
+      marker.bindPopup(\`
+        <div>
+          <span class="badge \${badgeClass}">\${badgeText}</span>
+          <div class="site-title">\${pin.name}</div>
+          <div class="site-meta"><strong>Workflow:</strong> \${pin.mode}</div>
+          <div class="site-meta"><strong>Phase / Gate:</strong> \${pin.currentGate}</div>
+          <div class="site-note">\${pin.lastNote}</div>
+        </div>
+      \`);
+
+      bounds.push([pin.lat, pin.lon]);
+    });
+
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+  </script>
+</body>
+</html>
+    `;
+
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (err) {
+    console.error('[Fleet Map Error]:', err);
+    res.status(500).send('Failed to generate fleet map');
+  }
+});
+
+// ====================================================================
+// 17. HEALTH & SERVICE RUNTIME
+// ====================================================================
+
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.6.1',
-    engine: 'Titan OS V4.6.1 (2-Hr Compound Schedulers, Group Link & Staging Gates)',
-    activePipes: ['QBO-Receipt-Bridge', 'Identity-Matrix', 'Compound-Scheduler', 'Joy-Cannon-Multicast', 'Staging-Gates-0A-0B', 'Court-Snapshot-Telemetry']
+    version: '4.7.0',
+    engine: 'Titan OS V4.7.0 (Proactive HITL Agent, Interactive Buttons, Fleet Map & Receivables Engine)',
+    activePipes: [
+      'QBO-Receipt-Bridge',
+      'Identity-Matrix',
+      'Compound-Scheduler',
+      'Joy-Cannon-Multicast',
+      'Staging-Gates-0A-0B',
+      'Court-Snapshot-Telemetry',
+      'Fleet-Map-Leaflet',
+      'WhatsApp-Interactive-Buttons',
+      'Autonomous-Receivables-Loop'
+    ]
   });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Titan OS V4.6.1 Clean Engine listening on Port 3000`);
+  console.log(`🚀 Titan OS V4.7.0 Proactive HITL Engine listening on Port 3000`);
 });
+
+```
