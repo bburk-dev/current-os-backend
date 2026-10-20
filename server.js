@@ -1,16 +1,19 @@
 /**
- * TITAN OS V4.9.4 — DECOUPLED BLIND VISION GATE & FORENSIC FIELD ORCHESTRATOR
+ * TITAN OS V4.9.5 — FRICTIONLESS ZERO-PIN VIDEO DELTA & ERGONOMIC EDGE DISPATCH
  * 
  * Production Build Features:
- * 1. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (guarantees rejection of patios, desks, and trucks).
- * 2. Phonetic & Spoken Entity Router: Resolves "RCR" -> "RCOR", parses spoken court names and explicit ticket IDs (#15, #9, etc.).
- * 3. Video Delta Engine: Locks pre-work baseline (extracting spoken blockers) and post-work completion sweep.
- * 4. Proximity-Aware Smart Dispatcher: Suppresses redundant GPS routing for co-located courts (<0.15 km).
- * 5. Zero-Polling In-Memory Cache-Aside Engine (Protects Airtable 100k API ceiling).
- * 6. 3-Tier Data Exhaust Siphon (Noise dropped in RAM; Dark Matter to Supabase; State changes to Airtable).
- * 7. Typecast Schema Auto-Provisioner & Auto-Healer (Eliminates 422 errors).
- * 8. Spring 2027 Pre-Con Mobilization Gates (50% Deposit, 7-Day Cure Lockout, Frost Laws).
- * 9. Hardened Staging Gates (0A Container/Glass & 0B Turf Offload Protection).
+ * 1. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
+ * 2. Dedicated Media URL Persistence: Direct writes to 'Pre-Work Media' and 'Post-Work Media' in Daily Assignments.
+ * 3. "Be The Water" Ingestion: 100% functionality with or without GPS pin drops; physical presence proven by vision.
+ * 4. Additive Proximity Pin Cue: Optional 300m pin-drop automatically surfaces open work orders and intake prompts.
+ * 5. Phonetic & Spoken Entity Router: Resolves "RCR" -> "RCOR", "Cinnamon" -> "Cynamon", spoken ticket IDs (#15, #9).
+ * 6. Two-Phase Video Delta State Machine: Pre-work baseline (spoken blockers vaulted) -> post-work completion sweep.
+ * 7. Proximity-Aware Smart Dispatcher: Suppresses redundant GPS navigation links for co-located courts (<0.15 km).
+ * 8. Zero-Polling In-Memory Cache-Aside Engine: Protects Airtable 100k API ceiling via 10-minute RAM cache.
+ * 9. 3-Tier Data Exhaust Siphon: Noise dropped in RAM; Dark Matter to Supabase; State mutations to Airtable.
+ * 10. Self-Healing Schema Auto-Provisioner: Universal AST pruning for 422 error immunity.
+ * 11. Spring 2027 Mobilization Gates: 50% Deposit, 7-Day Concrete Cure Lockout, Municipal Frost Law tripwires.
+ * 12. Hardened Staging Gates: 0A Container/Glass & 0B Turf Offload verification.
  */
 
 process.on('uncaughtException', (err) => {
@@ -351,7 +354,7 @@ function evaluateReadinessGate(siteRecord) {
 async function inspectBlindVisualGroundTruth(mediaItem) {
   const systemInstruction = `
 You are the Titan OS Ground Truth Vision Gate.
-Your job is to classify the physical physical environment visible in these video frames.
+Your job is to classify the physical environment visible in these video frames.
 
 STRICT GROUND TRUTH RULES:
 1. PADEL COURT VERIFICATION:
@@ -814,6 +817,8 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
       .replace(/\brcr\b/gi, 'rcor')
       .replace(/\breef club\b/gi, 'rcor')
       .replace(/\bcinnamon\b/gi, 'cynamon')
+      .replace(/\bdon walker\b/gi, 'don walker')
+      .replace(/\bnorth padel\b/gi, 'north padel')
       .replace(/\b(?:bpc|court)\b/gi, '')
       .trim();
 
@@ -1923,7 +1928,9 @@ app.post('/webhook', async (req, res) => {
 
     const indoorSite = isIndoorSite(site);
 
+    // ================================================================
     // INTERACTIVE BUTTON REPLIES
+    // ================================================================
     if (message.type === 'interactive') {
       const interactive = message.interactive;
       const buttonReply = interactive?.button_reply;
@@ -2060,7 +2067,9 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // LOCATION PIN-DROP
+    // ================================================================
+    // LOCATION PIN-DROP (ZERO-FRICTION OPTIONAL CHECK-IN NUDGE)
+    // ================================================================
     if (message.type === 'location') {
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
@@ -2093,11 +2102,29 @@ app.post('/webhook', async (req, res) => {
         const checkinNote = `On-site presence verified for ${workerName} at ${timestamp} (${Math.round(distanceMeters)}m from court center).`;
         await airtableWriteWithAutoDrop('Sites', { 'Last Note': checkinNote, 'Last Intent': 'PRESENCE_VERIFIED' }, site.id);
 
-        let checkinResponse = `📍 *ON-SITE CHECK-IN CONFIRMED*\n` +
-          `👤 *Crew:* ${workerName}\n` +
+        const activeTicket = await findActiveTicketForSite(site.id);
+
+        let checkinResponse = `📍 *ON-SITE ARRIVAL VERIFIED*\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `👤 *Technician:* ${workerName}\n` +
           `🏟️ *Court:* ${site.fields['Site Name']}\n` +
-          `⏱️ *Time:* ${timestamp} (within ${Math.round(distanceMeters)}m)\n\n` +
-          `✅ Shift logged on court record.`;
+          `⏱️ *Time:* ${timestamp} (within ${Math.round(distanceMeters)}m)\n`;
+
+        if (activeTicket) {
+          const ticketNum = activeTicket.fields['Assignment ID'] ? `#${activeTicket.fields['Assignment ID']}` : '';
+          const taskCat = activeTicket.fields['Task Category'] || activeTicket.fields['Assignment Type'] || 'Service';
+
+          // Shift status to In Progress
+          await airtableWriteWithAutoDrop('Daily Assignments', { 'Status': 'In Progress' }, activeTicket.id);
+
+          checkinResponse += `🎫 *Active Ticket:* ${ticketNum} (${taskCat})\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `👉 *STEP 1: INTAKE SWEEP*\n` +
+            `Send a 15-second walkaround video before touching tools.\n` +
+            `Speak court condition and any blockers out loud to lock your baseline.`;
+        } else {
+          checkinResponse += `\n🟢 No active work orders pending. Shift logged on court twin.`;
+        }
 
         await dispatchReply(checkinResponse);
       } else {
@@ -2110,7 +2137,9 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // ================================================================
     // TEXT PROCESSING & AMBIENT SIPHON
+    // ================================================================
     if (message.type === 'text') {
       const rawText = message.text.body.trim();
       const [trigger, ...args] = rawText.split(' ');
@@ -2237,7 +2266,6 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 3-TIER TEXT EXHAUST SIPHON
       const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || isAmbientChannel || (site && AMBIENT_CHAT_MODES.includes(site.fields['Workflow Mode']));
 
       if (isDirectOrAdmin && rawText.length > 2) {
@@ -2304,7 +2332,9 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // ================================================================
     // MULTIMODAL MEDIA BATCHING (PHOTOS, VIDEOS & AUDIO)
+    // ================================================================
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
     const isAudio = message.type === 'audio' || message.type === 'voice';
@@ -2396,8 +2426,8 @@ app.post('/webhook', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.9.4',
-    engine: 'Titan OS V4.9.4 (Decoupled Blind Vision Gate & Phonetic Router)',
+    version: '4.9.5',
+    engine: 'Titan OS V4.9.5 (Frictionless Zero-Pin Video Delta & Ergonomic Edge Dispatch)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0
@@ -2407,9 +2437,10 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V4.9.4 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V4.9.5 RUNNING ON PORT ${PORT}`);
   console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
-  console.log(`🎙️ PHONETIC ROUTER: RCR->RCOR & Spoken Ticket Priority Active`);
+  console.log(`🎥 VIDEO DELTA: Pre/Post URL Persistence & Zero-Pin Ingestion Active`);
+  console.log(`🎙️ PHONETIC ROUTER: RCR->RCOR, Cinnamon->Cynamon Priority Active`);
   console.log(`====================================================================`);
 
   try {
