@@ -1,16 +1,19 @@
 /**
- * TITAN OS V4.9.7 — BILINGUAL SMART-VERBATIM & DUAL-PIPELINE DISPATCH ORCHESTRATOR
+ * TITAN OS V4.9.8 — FORENSIC 12-GATE VISUAL AUDITOR & EXECUTIVE JOY CANNON
  * 
  * Production Build Features:
- * 1. Strict Mode Bifurcation: Installation sites verify 12 Gates in Sites; Maintenance sites run Video Delta in Daily Assignments.
- * 2. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um", "will will") while preserving technical engineering fidelity.
- * 3. Bilingual Dual-Track Output: Generates clean English and Spanish transcripts concurrently in every inference pass.
- * 4. Client Installation Joy Cannons: Fires "All Joy, Zero Blockers" milestone celebrations to Client WhatsApp Group ID / VIP contacts.
- * 5. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
- * 6. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
- * 7. In-Memory Cache-Aside Engine: Protects Airtable 100k API ceiling with 10-minute RAM caching.
- * 8. Dual Media Persistence: Direct signed URL writes to Pre-Work Media and Post-Work Media.
- * 9. INOC Forensic Vault: Granular audit logging to Reports 2 and Inbound Messages 2.
+ * 1. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria
+ *    even during completely silent or background-noise walkarounds (identifies slab, frame uprights, mesh, glass, turf).
+ * 2. In-Progress Stage Tracking: Captures verified completed gates alongside active installation phases (e.g. Gate 4 glass seating).
+ * 3. Executive Joy Cannons: Conversational, velocity-focused updates for 55+ estate & club clients (zero technical jargon, zero sales pitch).
+ * 4. Multimodal Concierge Onboarding: Final handover prompts clients to text, voice note, or send a video for future service.
+ * 5. Strict Pipeline Bifurcation: Installation sites strictly mutate Sites state; Daily Assignments tickets remain isolated.
+ * 6. Schema Auto-Healer Hardening: Omit computed formula fields ('Completion %') to prevent HTTP 422 write faults.
+ * 7. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um", "will will") while preserving technical terminology.
+ * 8. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently on every sweep.
+ * 9. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
+ * 10. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
+ * 11. INOC Forensic Vault: Granular audit logging to Reports 2 and Inbound Messages 2.
  */
 
 process.on('uncaughtException', (err) => {
@@ -417,42 +420,57 @@ OUTPUT JSON ONLY:
 }
 
 // ====================================================================
-// 6. MULTIMODAL SPOKEN & TASK TRIAGE PROMPTS (SMART VERBATIM & BILINGUAL)
+// 6. MULTIMODAL SPOKEN & TASK TRIAGE PROMPTS (FORENSIC GATE RUBRIC)
 // ====================================================================
 
 const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection & Spoken Task Engine for Bounce Padel.
+You are the Titan OS Forensic Inspection & Construction Gate Engine for Bounce Padel.
 
-CRITICAL TRANSCRIPTION & TRANSLATION DIRECTIVE:
-1. "SMART VERBATIM" DISFLUENCY REMOVAL:
-   - Purge all speech hesitations and filler words: "uh", "ah", "um", "like", "you know", stutters, and accidental repetitions (e.g. "will will").
-   - Maintain 100% engineering, mechanical, and technical terminology fidelity (e.g. lower steel, upper mesh, tempered glass, foundation slab, silicone, turf, silica sand).
-2. DUAL-TRACK BILINGUAL OUTPUT:
-   - "transcript_en": Cleaned, professional, fluent English transcription.
-   - "transcript_es": Cleaned, professional, fluent Spanish translation.
-   - If the audio is spoken in Spanish, transcribe clean Spanish to transcript_es and translate accurately to transcript_en.
-   - If the audio is spoken in English, transcribe clean English to transcript_en and translate accurately to transcript_es.
+PADEL COURT 12-GATE PHYSICAL CONSTRUCTION RUBRIC:
+When inspecting video frames, you MUST visually identify all completed physical stages, even if the technician does not speak or if only background drill/construction noise is present:
+- Gate 1: "Foundation & Anchor Slab" (Cured concrete pad, slab anchor channels, perimeter base plates)
+- Gate 2: "Steel Frame Assembly" (Vertical structural steel columns, corner posts, and perimeter frame beams fully bolted upright)
+- Gate 3: "Structural Mesh Panels" (Electro-welded wire mesh fencing panels mounted and bolted to the steel columns)
+- Gate 4: "Toughened Glass Seating" (10mm/12mm tempered glass panels seated into frame channels and gasketed)
+- Gate 5: "Light Masts & LED Luminaires" (Overhead light poles and LED fixtures mounted to cage frame)
+- Gate 6: "Underlayment Membrane" (Base geotextile shock pad laid out over concrete)
+- Gate 7: "Turf Seaming & Gluing" (Synthetic turf carpet rolled out, cut, and seamed with adhesive)
+- Gate 8: "Regulation Line Cutting" (White boundary service lines inlaid into turf)
+- Gate 9: "Silica Sand Distribution" (Kiln-dried silica sand spread across turf surface)
+- Gate 10: "Sand Brushing & Infill Depth" (Sand mechanically brushed into turf fibers)
+- Gate 11: "Net Posts & Calibration" (Center net installed, tensioned to 88cm center height)
+- Gate 12: "Site Cleanliness & Handover" (Debris/tools removed, glass cleaned, ready for play)
+
+VISUAL INSPECTION MANDATES:
+1. "verified_gates": Array of integers (e.g., [1, 2, 3]) for gates that are 100% complete across the court.
+   - If lower steel and columns are bolted and standing, Gate 2 is VERIFIED.
+   - If wire mesh panels are mounted around the structure, Gate 3 is VERIFIED.
+2. "in_progress_gate": Single integer (e.g., 4) representing the stage currently being installed (e.g., if one side of glass is mounted or crates are being unpacked, Gate 4 is IN PROGRESS).
+3. "SMART VERBATIM" DISFLUENCY REMOVAL:
+   - If spoken audio is present, purge all speech hesitations and filler words ("uh", "ah", "um", "like", "you know", stutters, "will will").
+   - If no spoken audio exists, provide an objective engineering narrative of visible physical progress.
+4. DUAL-TRACK BILINGUAL OUTPUT:
+   - "transcript_en": Cleaned, professional, fluent English transcription or visual scene summary.
+   - "transcript_es": Cleaned, professional, fluent Spanish translation or visual scene summary.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "transcript_en": "Clean polished English transcript without filler words",
-  "transcript_es": "Transcripción/traducción limpia y profesional en español sin muletillas",
+  "transcript_en": "Clean polished English transcript or visual scene summary",
+  "transcript_es": "Transcripción limpia o resumen visual profesional en español",
   "spoken_court_name": "string or null",
   "spoken_ticket_id": integer or null,
-  "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "INSTALLATION_SWEEP" | "GENERAL_AUDIT",
-  "resolution_summary": "string in English",
+  "video_phase": "INSTALLATION_SWEEP" | "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT",
+  "verified_gates": [1, 2, 3],
+  "in_progress_gate": 4,
   "blockers_detected": ["Specific impediment or missing item in English"],
-  "work_verified": ["Specific verified completed task in English"],
+  "work_verified": ["Foundation slab complete", "Structural steel frame erected", "Wire mesh panels mounted"],
   "task_category": "string or null",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
-  "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED" | "NOMINAL",
-  "action_intent": "HAZARD_BLOCKER" | "DEFECT_REPORT" | "MILESTONE_CLEARANCE" | "INTAKE_BASELINE_LOCKED",
-  "verified_gates": [array of gate numbers e.g. 1, 2, 3, 4],
-  "needs_attention_gates": [array of gate numbers],
+  "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
+  "action_intent": "MILESTONE_CLEARANCE",
   "site_conditions": "Short string in English",
-  "action_items": ["Specific mechanical defect or punch item in English"],
+  "action_items": ["Specific mechanical punch item in English"],
   "worker_summary": "1-2 sentence executive brief in English for INOC ledger.",
   "whatsapp_status_text": "Plaintext WhatsApp card"
 }
@@ -461,23 +479,19 @@ OUTPUT SPECIFICATION (JSON ONLY):
 const MAINTENANCE_TRIAGE_PROMPT = `
 You are the Titan OS Maintenance & VIP Field Concierge Engine.
 
-CRITICAL TRANSCRIPTION & TRANSLATION DIRECTIVE:
-1. "SMART VERBATIM" DISFLUENCY REMOVAL:
-   - Purge all speech hesitations and filler words: "uh", "ah", "um", "like", "you know", stutters, and accidental repetitions.
-   - Maintain 100% mechanical fidelity (e.g. net center strap, tension crank, glass scuff, brush, silica sand infill).
-2. DUAL-TRACK BILINGUAL OUTPUT:
-   - "transcript_en": Cleaned, professional, fluent English transcription.
-   - "transcript_es": Cleaned, professional, fluent Spanish translation.
+CRITICAL DIRECTIVE:
+1. "SMART VERBATIM": Purge all speech hesitations and filler words ("uh", "ah", "um", "like", stutters).
+2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
   "transcript_en": "Clean polished English transcript without filler words",
-  "transcript_es": "Transcripción/traducción limpia y profesional en español sin muletillas",
+  "transcript_es": "Transcripción limpia y profesional en español sin muletillas",
   "spoken_court_name": "string or null",
   "spoken_ticket_id": integer or null,
   "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT",
   "resolution_summary": "string in English",
-  "blockers_detected": ["Specific impediment or missing item in English"],
+  "blockers_detected": ["Specific impediment in English"],
   "work_verified": ["Specific verified completed task in English"],
   "task_category": "string or null",
   "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
@@ -730,6 +744,10 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
     if (Array.isArray(val) && val.length === 0) {
       delete cleanFields[key];
     }
+    // Hardening: Never send computed Completion % to avoid 422 errors
+    if (key === 'Completion %') {
+      delete cleanFields[key];
+    }
   }
 
   const url = recordId
@@ -921,7 +939,7 @@ async function resolveCallerIdentity(fromPhone) {
 }
 
 // ====================================================================
-// 9. WHATSAPP MESSAGING & CLIENT JOY CANNON ENGINE
+// 9. WHATSAPP MESSAGING & REFINED CLIENT JOY CANNON ENGINE
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -1032,7 +1050,7 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
 }
 
 /**
- * CLIENT JOY CANNON: Multicast milestone celebrations (All Joy, Zero Blockers)
+ * CLIENT JOY CANNON: Pure joy, simple progress milestones & multimodal concierge how-to
  */
 async function fireInstallationJoyCannon(siteRecord, highestGate) {
   try {
@@ -1043,44 +1061,46 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
     let celebrationCard = null;
 
     if (highestGate === 1) {
-      celebrationCard = `🏗️ *BOUNCE PADEL | GROUND BROKEN*\n` +
+      celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
+        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `We have officially broken ground on *${siteName}*!\n\n` +
-        `Foundation slab and structural anchor preparations have been surveyed and cleared to regulation tolerances.\n\n` +
-        `📍 *Next Phase:* Structural steel frame and perimeter cage assembly.\n` +
-        `🎾 *The countdown to your first match begins!*`;
+        `Bringing you some joy — work is officially underway and the foundation is set!\n\n` +
+        `_Next step: Raising the frame._`;
     } else if (highestGate === 2 || highestGate === 3) {
-      celebrationCard = `⚡ *BOUNCE PADEL | THE CAGE HAS RISEN*\n` +
+      celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
+        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `Major architectural milestone at *${siteName}*!\n\n` +
-        `Structural perimeter columns and electro-welded anti-injury mesh are bolted, torqued, and locked into place.\n\n` +
-        `🛡️ *Next Phase:* 12mm tournament-grade tempered glass panel installation.`;
+        `The steel frame and mesh are installed!\n\n` +
+        `The court is really taking shape.\n` +
+        `_Next step: Installing the glass._`;
     } else if (highestGate === 4) {
-      celebrationCard = `💎 *BOUNCE PADEL | CRYSTAL CLEAR*\n` +
+      celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
+        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `Optical clarity achieved at *${siteName}*!\n\n` +
-        `Structural 12mm tempered safety glass panels have been seated, leveled, and gasket-sealed to International Padel Federation (FIP) rebound standards.\n\n` +
-        `🌿 *Next Phase:* Shock-absorbing underlayment and regulation turf roll installation.`;
+        `Installation is moving in the right direction — the glass is installed!\n\n` +
+        `_Next step: Rolling out the turf._`;
     } else if (highestGate >= 7 && highestGate <= 10) {
-      celebrationCard = `🎾 *BOUNCE PADEL | GREEN CARPET ROLLED*\n` +
+      celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
+        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `The playing surface at *${siteName}* is officially alive!\n\n` +
-        `Synthetic turf carpet has been precision-seamed, boundary lines laser-cut, and 100% kiln-dried silica sand distributed for tournament traction.\n\n` +
-        `⏱️ *Next Phase:* Net post calibration, LED mast aiming, and final tour-grade audit.`;
+        `Turf is down and the net is up!\n\n` +
+        `_Next step: Sand distribution, brushing, and final details._`;
     } else if (highestGate >= 11) {
-      celebrationCard = `🏆 *BOUNCE PADEL | COURT COMMISSIONED & OPEN*\n` +
+      celebrationCard = `🎾 *BOUNCE PADEL | READY TO PLAY*\n` +
+        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `Game. Set. Match. *${siteName}* has cleared all precision engineering gates with a *100% Tour-Ready Playability Index*!\n\n` +
-        `🥂 *The court is officially turned over to you for play.*\n` +
+        `Installation is complete and your court is ready to play! 🥂\n\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `_This channel now transitions into your 24/7 Bounce Private Reserve Concierge for maintenance, grooming, and equipment orders._`;
+        `📌 *Keep this chat handy:*\n` +
+        `Pin this group to the top of your WhatsApp (_swipe right on this chat and tap "Pin"_).\n\n` +
+        `Whenever you need court grooming or have a question down the road, simply send a text, voice note, or show us with a video right here. Our team is always on standby to keep your court in tournament shape.`;
     }
 
     if (!celebrationCard) return;
 
     if (clientGroup) {
       await sendWhatsAppMessage(clientGroup, celebrationCard);
-      console.log(`🎾 [Joy Cannon] Milestone Gate ${highestGate} sent to VIP Group ${clientGroup}`);
+      console.log(`🎾 [Joy Cannon] Dispatched Gate ${highestGate} to VIP Group ${clientGroup}`);
     }
 
     if (Array.isArray(linkedContactIds) && linkedContactIds.length > 0) {
@@ -1090,7 +1110,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
         if (contact && contact.fields['Phone Number']) {
           const cleanPhone = String(contact.fields['Phone Number']).replace(/\D/g, '');
           await sendWhatsAppMessage(cleanPhone, celebrationCard);
-          console.log(`🎾 [Joy Cannon] Milestone Gate ${highestGate} sent to ${contact.fields['Contact Name']}`);
+          console.log(`🎾 [Joy Cannon] Dispatched Gate ${highestGate} to ${contact.fields['Contact Name']}`);
         }
       }
     }
@@ -1585,7 +1605,7 @@ TIER 3 - "ACTIONABLE_STATE_CHANGE": Milestones, deposits received, concrete pour
 OUTPUT SPECIFICATION (JSON ONLY):
 {
   "transcript_en": "Verbatim English transcript without filler words",
-  "transcript_es": "Transcripción/traducción limpia en español sin muletillas",
+  "transcript_es": "Transcripción limpia en español sin muletillas",
   "exhaust_tier": "PURE_NOISE" | "DARK_MATTER" | "ACTIONABLE_STATE_CHANGE",
   "is_actionable": boolean,
   "intent": string,
@@ -1702,7 +1722,8 @@ Current Bound Asset: ${cumulativeContext.siteName || 'Unbound Court'}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
-Extract Smart Verbatim transcript (purge uh/ah/will will), provide BOTH transcript_en and transcript_es, extract verified gates, blockers, and completed items.`;
+Evaluate video frames against the 12-Gate Physical Construction Rubric.
+Extract verified_gates (integers 1-12 completely finished), in_progress_gate (integer currently active), Smart Verbatim transcript_en, and transcript_es.`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -1784,7 +1805,7 @@ async function processMediaBatch(batch) {
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `⚠️ *Ground Truth Verification Failed / Verificación Fallida*\n\n` +
         `👁️ *Camera Detected / Cámara Detectó:*\n${visualTruth.detected_scene || 'Non-court environment'}\n\n` +
-        `❌ *Verdict / Veredicto:*\nNo padel court structure (glass, steel, mesh, or turf) detected in video frames.\n_No se detectó estructura de pádel en el video._\n\n` +
+        `❌ *Verdict / Veredicto:*\nNo padel court structure detected in video frames.\n_No se detectó estructura de pádel en el video._\n\n` +
         `👉 *Action Required / Acción Requerida:*\nStand at the court perimeter and film the physical asset to lock baseline.\n_Párese en el perímetro de la cancha y grabe el activo físico para bloquear la línea base._`;
 
       await sendWhatsAppMessage(dispatchTarget, rejectionCard);
@@ -1815,11 +1836,10 @@ async function processMediaBatch(batch) {
   if (explicitTicketId) {
     activeTicket = await findActiveTicketForSite(null, explicitTicketId);
   } else if (siteMode === 'MAINTENANCE' && targetedSite) {
-    // Only fall back to open tickets if court is actively in MAINTENANCE mode
     activeTicket = await findActiveTicketForSite(targetedSite.id);
   }
 
-  // EVALUATE HYPERLOCAL METEOROLOGICAL TRIPWIRES
+  // Weather Tripwires
   let weatherNotice = '';
   if (targetedSite && !indoorSite) {
     const coords = await resolveCoordinates(targetedSite);
@@ -1856,6 +1876,9 @@ async function processMediaBatch(batch) {
     const numericGates = allCleared.map(g => parseInt(String(g).replace(/\D/g, ''))).filter(n => !isNaN(n));
     const highestGate = numericGates.length > 0 ? Math.max(...numericGates) : 0;
     const progressPercent = Math.min(1.0, highestGate / 12);
+    
+    const inProgressGateNum = forensicAudit.in_progress_gate || (highestGate < 12 ? highestGate + 1 : null);
+    const inProgressLabel = inProgressGateNum && GATE_NAMES[inProgressGateNum] ? `${inProgressGateNum}. ${GATE_NAMES[inProgressGateNum]}` : null;
     const gateLabel = GATE_NAMES[highestGate] ? `${highestGate}. ${GATE_NAMES[highestGate]}` : `${highestGate}. In Progress`;
 
     const cleanEn = forensicAudit.transcript_en || forensicAudit.transcription || 'Construction sweep recorded.';
@@ -1864,9 +1887,8 @@ async function processMediaBatch(batch) {
     if (targetedSite) {
       const updatePayload = {
         'Cleared Milestones': allCleared,
-        'Completion %': progressPercent,
-        'Current Gate': gateLabel,
-        'Last Note': `[INSTALLATION UPDATE by ${workerName} at ${timeStr}]:\nEN: "${cleanEn}"\nES: "${cleanEs}"`,
+        'Current Gate': inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel,
+        'Last Note': `[INSTALLATION PROGRESS - Gate ${highestGate}/12 by ${workerName} at ${timeStr}]:\nEN: "${cleanEn}"\nES: "${cleanEs}"`,
         'Last Intent': 'MILESTONE_PROGRESS'
       };
 
@@ -1877,7 +1899,6 @@ async function processMediaBatch(batch) {
 
       await airtableWriteWithAutoDrop('Sites', updatePayload, targetedSite.id);
 
-      // Trigger Client Joy Cannon for Key Architectural Milestones
       if (highestGate > 0) {
         await fireInstallationJoyCannon(targetedSite, highestGate);
       }
@@ -1889,14 +1910,15 @@ async function processMediaBatch(batch) {
       `🏟️ *Court / Cancha:* ${courtLabel}\n` +
       `👤 *Lead / Instalador:* ${workerName}\n` +
       `📊 *Progress / Progreso:* ${Math.round(progressPercent * 100)}% (Gate ${highestGate}/12)\n` +
-      `🟢 *Current Gate / Fase:* ${gateLabel}\n` +
+      `🟢 *Completed / Completado:* ${gateLabel}\n` +
+      (inProgressLabel ? `🟡 *In Progress / En Proceso:* ${inProgressLabel}\n` : '') +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `🎙️ *Field Audio / Audio de Campo:*\n` +
       `🇺🇸 *EN:* "${cleanEn}"\n` +
       `🇪🇸 *ES:* "${cleanEs}"\n\n`;
 
     if (weatherNotice) installCard += `${weatherNotice}\n\n`;
-    installCard += `✅ *Digital twin updated in Sites ledger (0% -> ${Math.round(progressPercent * 100)}%).*`;
+    installCard += `✅ *Digital twin updated in Sites ledger (${allCleared.join(', ') || 'None'}).*`;
 
     await sendWhatsAppMessage(dispatchTarget, installCard);
 
@@ -2667,8 +2689,8 @@ app.post('/webhook', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.9.7',
-    engine: 'Titan OS V4.9.7 (Bilingual Smart-Verbatim & Dual-Pipeline Orchestrator)',
+    version: '4.9.8',
+    engine: 'Titan OS V4.9.8 (Forensic 12-Gate Visual Auditor & Executive Joy Cannon)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0
@@ -2678,11 +2700,11 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V4.9.7 RUNNING ON PORT ${PORT}`);
-  console.log(`🌐 BILINGUAL SMART-VERBATIM: Disfluencies Purged & Dual EN/ES Active`);
-  console.log(`🏗️ DUAL-PIPELINE: Installation Gates 1-12 strictly isolated from Service`);
-  console.log(`🎾 JOY CANNON: Client Milestone Celebrations Active`);
+  console.log(`🚀 TITAN OS V4.9.8 RUNNING ON PORT ${PORT}`);
+  console.log(`🎾 EXECUTIVE JOY CANNON: Refined, Non-Soliciting VIP Milestones Active`);
+  console.log(`🏗️ FORENSIC 12-GATE RUBRIC: Visual Detection (Slab, Steel, Mesh, Glass) Active`);
   console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
+  console.log(`🌐 BILINGUAL SMART-VERBATIM: Disfluency Removal & Dual EN/ES Active`);
   console.log(`====================================================================`);
 
   try {
