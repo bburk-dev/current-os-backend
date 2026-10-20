@@ -1,21 +1,16 @@
 /**
- * TITAN OS V4.9.6 — BILINGUAL EDGE & MULTIMODAL TELEMETRY ORCHESTRATOR
+ * TITAN OS V4.9.7 — BILINGUAL SMART-VERBATIM & DUAL-PIPELINE DISPATCH ORCHESTRATOR
  * 
  * Production Build Features:
- * 1. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
- * 2. Dedicated Media URL Persistence: Direct writes to 'Pre-Work Media' and 'Post-Work Media' in Daily Assignments.
- * 3. Bilingual Edge Presentation: High-density English/Spanish cards for baseline lock, closeout, and rejections.
- * 4. Psychrometric & Wind Meteorological Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive guards.
- * 5. Autonomous Joy Cannon VIP Multicast: Fires playability certificates to compound owners/managers on closeout.
- * 6. Full INOC Exhaust Vault: Restores granular writes to Inbound Messages 2 & Reports 2 for complete auditability.
- * 7. "Be The Water" Ingestion: 100% functionality with or without GPS pins; presence proven forensically by camera.
- * 8. Additive 300m Arrival Nudge: Optional location pin surfaces active work orders and intake directives.
- * 9. Phonetic & Spoken Entity Router: Resolves "RCR" -> "RCOR", "Cinnamon" -> "Cynamon", spoken ticket IDs (#15, #9).
- * 10. Proximity-Aware Smart Dispatcher: Suppresses redundant GPS navigation links for co-located courts (<0.15 km).
- * 11. Zero-Polling In-Memory Cache-Aside Engine: Protects Airtable 100k API ceiling via 10-minute RAM cache.
- * 12. 3-Tier Data Exhaust Siphon: Noise dropped in RAM; Dark Matter to Supabase; State mutations to Airtable.
- * 13. Self-Healing Schema Auto-Provisioner: Universal AST pruning for 422 error immunity.
- * 14. Spring 2027 Mobilization Gates: 50% Deposit, 7-Day Concrete Cure Lockout, Municipal Frost Law tripwires.
+ * 1. Strict Mode Bifurcation: Installation sites verify 12 Gates in Sites; Maintenance sites run Video Delta in Daily Assignments.
+ * 2. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um", "will will") while preserving technical engineering fidelity.
+ * 3. Bilingual Dual-Track Output: Generates clean English and Spanish transcripts concurrently in every inference pass.
+ * 4. Client Installation Joy Cannons: Fires "All Joy, Zero Blockers" milestone celebrations to Client WhatsApp Group ID / VIP contacts.
+ * 5. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
+ * 6. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
+ * 7. In-Memory Cache-Aside Engine: Protects Airtable 100k API ceiling with 10-minute RAM caching.
+ * 8. Dual Media Persistence: Direct signed URL writes to Pre-Work Media and Post-Work Media.
+ * 9. INOC Forensic Vault: Granular audit logging to Reports 2 and Inbound Messages 2.
  */
 
 process.on('uncaughtException', (err) => {
@@ -422,20 +417,30 @@ OUTPUT JSON ONLY:
 }
 
 // ====================================================================
-// 6. MULTIMODAL SPOKEN & TASK TRIAGE PROMPTS
+// 6. MULTIMODAL SPOKEN & TASK TRIAGE PROMPTS (SMART VERBATIM & BILINGUAL)
 // ====================================================================
 
 const INDUSTRIAL_SYSTEM_PROMPT = `
 You are the Titan OS Forensic Inspection & Spoken Task Engine for Bounce Padel.
-Transcribe spoken audio verbatim and extract operational directives, blockers, and entity names.
+
+CRITICAL TRANSCRIPTION & TRANSLATION DIRECTIVE:
+1. "SMART VERBATIM" DISFLUENCY REMOVAL:
+   - Purge all speech hesitations and filler words: "uh", "ah", "um", "like", "you know", stutters, and accidental repetitions (e.g. "will will").
+   - Maintain 100% engineering, mechanical, and technical terminology fidelity (e.g. lower steel, upper mesh, tempered glass, foundation slab, silicone, turf, silica sand).
+2. DUAL-TRACK BILINGUAL OUTPUT:
+   - "transcript_en": Cleaned, professional, fluent English transcription.
+   - "transcript_es": Cleaned, professional, fluent Spanish translation.
+   - If the audio is spoken in Spanish, transcribe clean Spanish to transcript_es and translate accurately to transcript_en.
+   - If the audio is spoken in English, transcribe clean English to transcript_en and translate accurately to transcript_es.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
+  "transcript_en": "Clean polished English transcript without filler words",
+  "transcript_es": "Transcripción/traducción limpia y profesional en español sin muletillas",
   "spoken_court_name": "string or null",
   "spoken_ticket_id": integer or null,
-  "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT" | "NONE",
+  "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "INSTALLATION_SWEEP" | "GENERAL_AUDIT",
   "resolution_summary": "string in English",
-  "transcription": "Verbatim English transcript of spoken audio",
   "blockers_detected": ["Specific impediment or missing item in English"],
   "work_verified": ["Specific verified completed task in English"],
   "task_category": "string or null",
@@ -444,26 +449,34 @@ OUTPUT SPECIFICATION (JSON ONLY):
   "suggested_worker_name": "string or null",
   "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED" | "NOMINAL",
   "action_intent": "HAZARD_BLOCKER" | "DEFECT_REPORT" | "MILESTONE_CLEARANCE" | "INTAKE_BASELINE_LOCKED",
-  "verified_gates": [array of gate strings or numbers],
-  "needs_attention_gates": [array of gate strings or numbers],
+  "verified_gates": [array of gate numbers e.g. 1, 2, 3, 4],
+  "needs_attention_gates": [array of gate numbers],
   "site_conditions": "Short string in English",
   "action_items": ["Specific mechanical defect or punch item in English"],
   "worker_summary": "1-2 sentence executive brief in English for INOC ledger.",
-  "whatsapp_status_text": "Plaintext WhatsApp card in worker's language."
+  "whatsapp_status_text": "Plaintext WhatsApp card"
 }
 `;
 
 const MAINTENANCE_TRIAGE_PROMPT = `
 You are the Titan OS Maintenance & VIP Field Concierge Engine.
-Transcribe spoken audio verbatim and extract operational directives, blockers, and entity names.
+
+CRITICAL TRANSCRIPTION & TRANSLATION DIRECTIVE:
+1. "SMART VERBATIM" DISFLUENCY REMOVAL:
+   - Purge all speech hesitations and filler words: "uh", "ah", "um", "like", "you know", stutters, and accidental repetitions.
+   - Maintain 100% mechanical fidelity (e.g. net center strap, tension crank, glass scuff, brush, silica sand infill).
+2. DUAL-TRACK BILINGUAL OUTPUT:
+   - "transcript_en": Cleaned, professional, fluent English transcription.
+   - "transcript_es": Cleaned, professional, fluent Spanish translation.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
+  "transcript_en": "Clean polished English transcript without filler words",
+  "transcript_es": "Transcripción/traducción limpia y profesional en español sin muletillas",
   "spoken_court_name": "string or null",
   "spoken_ticket_id": integer or null,
-  "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT" | "NONE",
+  "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT",
   "resolution_summary": "string in English",
-  "transcription": "Verbatim English transcript of spoken audio",
   "blockers_detected": ["Specific impediment or missing item in English"],
   "work_verified": ["Specific verified completed task in English"],
   "task_category": "string or null",
@@ -476,7 +489,7 @@ OUTPUT SPECIFICATION (JSON ONLY):
   "action_items": ["Action item in English"],
   "site_conditions": "Short string in English",
   "worker_summary": "1-2 sentence executive summary in English for INOC.",
-  "whatsapp_status_text": "Plaintext WhatsApp card in client's language."
+  "whatsapp_status_text": "Plaintext WhatsApp card"
 }
 `;
 
@@ -837,7 +850,9 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
     const cleanTarget = String(groupIdOrPhone).trim();
     const match = sites.find(s => {
       const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
-      return gid && (gid === cleanTarget || cleanTarget.includes(gid));
+      const clientGid = String(s.fields['Client WhatsApp Group ID'] || '').trim();
+      return (gid && (gid === cleanTarget || cleanTarget.includes(gid))) ||
+             (clientGid && (clientGid === cleanTarget || cleanTarget.includes(clientGid)));
     });
     if (match) return match;
   }
@@ -906,7 +921,7 @@ async function resolveCallerIdentity(fromPhone) {
 }
 
 // ====================================================================
-// 9. WHATSAPP MESSAGING & JOY CANNON ENGINE
+// 9. WHATSAPP MESSAGING & CLIENT JOY CANNON ENGINE
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -1016,57 +1031,71 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
   }
 }
 
-async function fireJoyCannonMultiCast(siteId, eventPayload) {
+/**
+ * CLIENT JOY CANNON: Multicast milestone celebrations (All Joy, Zero Blockers)
+ */
+async function fireInstallationJoyCannon(siteRecord, highestGate) {
   try {
-    const sites = await getCachedSites();
-    const site = sites.find(s => s.id === siteId);
-    if (!site) return false;
+    const siteName = siteRecord.fields['Site Name'] || 'Facility Court';
+    const clientGroup = siteRecord.fields['Client WhatsApp Group ID'];
+    const linkedContactIds = siteRecord.fields['Linked Contacts'] || [];
 
-    const siteName = site.fields['Site Name'] || 'Facility Court';
-    const linkedContactIds = site.fields['Linked Contacts'] || [];
+    let celebrationCard = null;
 
-    if (!Array.isArray(linkedContactIds) || linkedContactIds.length === 0) return false;
-
-    const contacts = await getCachedContacts();
-    for (const contactId of linkedContactIds) {
-      const contact = contacts.find(c => c.id === contactId);
-      if (!contact) continue;
-
-      const phone = contact.fields['Phone Number'];
-      const role = contact.fields['Role'];
-      const name = contact.fields['Contact Name'] || 'VIP Member';
-
-      if (!phone) continue;
-      const cleanPhone = String(phone).replace(/\D/g, '');
-
-      let outboundText = '';
-      if (role === 'Property Manager / Caretaker') {
-        outboundText = `🛠️ *BOUNCE OPERATIONS | LOGISTICS ALERT*\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `Attention ${name} — Service update for *${siteName}*:\n\n` +
-          `• *Window:* ${eventPayload.window || 'Completed Service Window'}\n` +
-          `• *Directive / Result:* ${eventPayload.operationalDetails || eventPayload.directive || 'Routine surface grooming & equipment audit verified.'}\n` +
-          `• *Court State:* ${eventPayload.status || '100% Tour-Ready'}\n\n` +
-          `Questions? Reply directly to reach INOC dispatch.`;
-      } else {
-        outboundText = `🎾 *BOUNCE CONCIERGE | PRIVATE RESERVE PASS*\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `Good day ${name},\n\n` +
-          `${eventPayload.executiveSummary || 'Your court has been audited and certified.'}\n\n` +
-          `🏟️ *Court:* ${siteName}\n` +
-          `🟢 *Status:* ${eventPayload.status || '100% Tour-Ready'}\n` +
-          `⚡ *Playability:* ${eventPayload.playabilityScore ? `${eventPayload.playabilityScore}%` : 'Tournament Spec'}\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `*Service completed and verified under your Private Reserve coverage.*`;
-      }
-
-      await sendWhatsAppMessage(cleanPhone, outboundText);
-      console.log(`🎾 [Joy Cannon] Multicast dispatched to ${name} (${role}) for ${siteName}`);
+    if (highestGate === 1) {
+      celebrationCard = `🏗️ *BOUNCE PADEL | GROUND BROKEN*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `We have officially broken ground on *${siteName}*!\n\n` +
+        `Foundation slab and structural anchor preparations have been surveyed and cleared to regulation tolerances.\n\n` +
+        `📍 *Next Phase:* Structural steel frame and perimeter cage assembly.\n` +
+        `🎾 *The countdown to your first match begins!*`;
+    } else if (highestGate === 2 || highestGate === 3) {
+      celebrationCard = `⚡ *BOUNCE PADEL | THE CAGE HAS RISEN*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `Major architectural milestone at *${siteName}*!\n\n` +
+        `Structural perimeter columns and electro-welded anti-injury mesh are bolted, torqued, and locked into place.\n\n` +
+        `🛡️ *Next Phase:* 12mm tournament-grade tempered glass panel installation.`;
+    } else if (highestGate === 4) {
+      celebrationCard = `💎 *BOUNCE PADEL | CRYSTAL CLEAR*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `Optical clarity achieved at *${siteName}*!\n\n` +
+        `Structural 12mm tempered safety glass panels have been seated, leveled, and gasket-sealed to International Padel Federation (FIP) rebound standards.\n\n` +
+        `🌿 *Next Phase:* Shock-absorbing underlayment and regulation turf roll installation.`;
+    } else if (highestGate >= 7 && highestGate <= 10) {
+      celebrationCard = `🎾 *BOUNCE PADEL | GREEN CARPET ROLLED*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `The playing surface at *${siteName}* is officially alive!\n\n` +
+        `Synthetic turf carpet has been precision-seamed, boundary lines laser-cut, and 100% kiln-dried silica sand distributed for tournament traction.\n\n` +
+        `⏱️ *Next Phase:* Net post calibration, LED mast aiming, and final tour-grade audit.`;
+    } else if (highestGate >= 11) {
+      celebrationCard = `🏆 *BOUNCE PADEL | COURT COMMISSIONED & OPEN*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `Game. Set. Match. *${siteName}* has cleared all precision engineering gates with a *100% Tour-Ready Playability Index*!\n\n` +
+        `🥂 *The court is officially turned over to you for play.*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `_This channel now transitions into your 24/7 Bounce Private Reserve Concierge for maintenance, grooming, and equipment orders._`;
     }
-    return true;
+
+    if (!celebrationCard) return;
+
+    if (clientGroup) {
+      await sendWhatsAppMessage(clientGroup, celebrationCard);
+      console.log(`🎾 [Joy Cannon] Milestone Gate ${highestGate} sent to VIP Group ${clientGroup}`);
+    }
+
+    if (Array.isArray(linkedContactIds) && linkedContactIds.length > 0) {
+      const contacts = await getCachedContacts();
+      for (const cid of linkedContactIds) {
+        const contact = contacts.find(c => c.id === cid);
+        if (contact && contact.fields['Phone Number']) {
+          const cleanPhone = String(contact.fields['Phone Number']).replace(/\D/g, '');
+          await sendWhatsAppMessage(cleanPhone, celebrationCard);
+          console.log(`🎾 [Joy Cannon] Milestone Gate ${highestGate} sent to ${contact.fields['Contact Name']}`);
+        }
+      }
+    }
   } catch (err) {
-    console.error('[Joy Cannon Broadcast Error]:', err);
-    return false;
+    console.error('[Installation Joy Cannon Error]:', err.message);
   }
 }
 
@@ -1087,14 +1116,14 @@ async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, prior
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `📝 *Directive / Directiva:*\n${directiveNotes}\n\n` +
     `👉 *VIDEO DELTA PROTOCOL:*\n` +
-    `1. *Intake / Entrada:* Send a 15-sec walkaround video narrating blockers before starting / Grabe video de 15s narrando impedimentos antes de empezar.\n` +
-    `2. *Closeout / Cierre:* Send a 10-sec completion sweep when finished to close hands-free / Grabe video de 10s de la cancha lista para cerrar.`;
+    `1. *Intake / Entrada:* Send a 15-sec walkaround video narrating blockers before starting.\n` +
+    `2. *Closeout / Cierre:* Send a 10-sec completion sweep when finished to close hands-free.`;
 
   return await sendWhatsAppMessage(cleanPhone, dispatchCard);
 }
 
 // ====================================================================
-// 10. WORK ORDER CLOSEOUT ENGINE WITH JOY CANNON TRIGGER
+// 10. WORK ORDER CLOSEOUT ENGINE
 // ====================================================================
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
@@ -1209,20 +1238,6 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
     `🟢 *Asset Condition / Estado:* Nominal (Court Open for Play / Cancha Lista para Juego)`;
 
   await sendWhatsAppMessage(dispatchTarget, voucherReceipt);
-
-  // AUTONOMOUS JOY CANNON TRIGGER (VIP / Compound courts)
-  if (targetSite && targetSite.id) {
-    const linkedContacts = targetSite.fields['Linked Contacts'] || [];
-    if (linkedContacts.length > 0) {
-      await fireJoyCannonMultiCast(targetSite.id, {
-        executiveSummary: `Service verified by technician ${workerName}. Your court has been audited and certified 100% Tour-Ready.`,
-        status: '100% Tour-Ready',
-        playabilityScore: 100,
-        operationalDetails: resolutionNotes,
-        window: 'Completed Service Window'
-      });
-    }
-  }
 
   if (targetSite) {
     const coords = await resolveCoordinates(targetSite);
@@ -1557,7 +1572,8 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   const audioPrompt = `
 You are the Titan OS Spoken Voice Triage Engine for Bounce Padel.
-Transcribe the spoken audio verbatim in English, then classify its operational intent under the 3-Tier Siphon.
+Transcribe spoken audio with "Smart Verbatim" (purge all "uh", "ah", "um", stutters, and verbal fillers).
+Generate both clean fluent English (transcript_en) and clean Spanish (transcript_es).
 
 Active Padel Court Registry: [${siteListStr}]
 Field Personnel: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem", "Michael", "David", "Edwin"]
@@ -1568,7 +1584,8 @@ TIER 3 - "ACTIONABLE_STATE_CHANGE": Milestones, deposits received, concrete pour
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "transcription": "Verbatim English transcript of spoken audio",
+  "transcript_en": "Verbatim English transcript without filler words",
+  "transcript_es": "Transcripción/traducción limpia en español sin muletillas",
   "exhaust_tier": "PURE_NOISE" | "DARK_MATTER" | "ACTIONABLE_STATE_CHANGE",
   "is_actionable": boolean,
   "intent": string,
@@ -1617,7 +1634,7 @@ OUTPUT SPECIFICATION (JSON ONLY):
   if (!rawText) return;
 
   const triage = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-  console.log('[Voice Memo Siphon]:', { transcript: triage.transcription, tier: triage.exhaust_tier });
+  console.log('[Voice Memo Siphon]:', { transcript_en: triage.transcript_en, tier: triage.exhaust_tier });
 
   if (triage.exhaust_tier === 'PURE_NOISE') return;
 
@@ -1630,9 +1647,9 @@ OUTPUT SPECIFICATION (JSON ONLY):
       siteName: siteLabel,
       senderPhone: fromPhone,
       senderName: senderName,
-      rawText: triage.transcription,
+      rawText: triage.transcript_en || triage.transcription,
       category: triage.dark_matter_category || 'Logistics',
-      distilledContext: triage.distilled_context || triage.transcription,
+      distilledContext: triage.distilled_context || triage.transcript_en,
       urgency: triage.urgency || 'LOW',
       gravityScore: triage.gravity_score || 1
     });
@@ -1663,7 +1680,7 @@ OUTPUT SPECIFICATION (JSON ONLY):
         site,
         targetCourtName: triage.matched_site_name,
         ticketId: triage.ticket_id,
-        resolutionNotes: triage.resolution_summary || triage.transcription || 'Spoken closeout verified on site.',
+        resolutionNotes: triage.resolution_summary || triage.transcript_en || 'Spoken closeout verified on site.',
         worker,
         dispatchTarget,
         fromPhone
@@ -1685,7 +1702,7 @@ Current Bound Asset: ${cumulativeContext.siteName || 'Unbound Court'}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
-Extract verbatim transcription, spoken court name, spoken ticket ID, blockers, and completed items.`;
+Extract Smart Verbatim transcript (purge uh/ah/will will), provide BOTH transcript_en and transcript_es, extract verified gates, blockers, and completed items.`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -1767,41 +1784,40 @@ async function processMediaBatch(batch) {
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `⚠️ *Ground Truth Verification Failed / Verificación Fallida*\n\n` +
         `👁️ *Camera Detected / Cámara Detectó:*\n${visualTruth.detected_scene || 'Non-court environment'}\n\n` +
-        `❌ *Verdict / Veredicto:*\nNo padel court structure (glass, steel, mesh, or turf) detected in video frames.\n_No se detectó estructura de pádel (cristal, acero, malla o césped) en el video._\n\n` +
+        `❌ *Verdict / Veredicto:*\nNo padel court structure (glass, steel, mesh, or turf) detected in video frames.\n_No se detectó estructura de pádel en el video._\n\n` +
         `👉 *Action Required / Acción Requerida:*\nStand at the court perimeter and film the physical asset to lock baseline.\n_Párese en el perímetro de la cancha y grabe el activo físico para bloquear la línea base._`;
 
       await sendWhatsAppMessage(dispatchTarget, rejectionCard);
-      return; // HARD STOP — 0 Airtable writes, zero database corruption!
+      return; // HARD STOP — 0 database corruption!
     }
   }
 
   // ==================================================================
-  // STAGE 2: MULTIMODAL INGESTION & ENTITY ROUTING
+  // STAGE 2: MULTIMODAL INGESTION & MODE-AWARE ROUTING
   // ==================================================================
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
 
-  // RESOLVE TARGETED TICKET (Spoken Entity Priority)
-  let activeTicket = null;
   let targetedSite = site;
-
-  if (forensicAudit.spoken_ticket_id || forensicAudit.ticket_id) {
-    const explicitId = forensicAudit.spoken_ticket_id || forensicAudit.ticket_id;
-    activeTicket = await findActiveTicketForSite(null, explicitId);
-  }
-
-  if (!activeTicket && forensicAudit.spoken_court_name) {
+  if (forensicAudit.spoken_court_name) {
     const spokenSite = await lookupSite(null, forensicAudit.spoken_court_name);
-    if (spokenSite) {
-      targetedSite = spokenSite;
-      activeTicket = await findActiveTicketForSite(spokenSite.id);
-    }
+    if (spokenSite) targetedSite = spokenSite;
   }
 
-  if (!activeTicket && targetedSite) {
+  const siteMode = targetedSite?.fields?.['Workflow Mode'] || cumulativeContext.workflowMode || 'INSTALLATION';
+  const courtLabel = targetedSite?.fields?.['Site Name'] || forensicAudit.target_court_name || 'Assigned Court';
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Technician';
+  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  // Resolve Explicit Ticket
+  let activeTicket = null;
+  const explicitTicketId = forensicAudit.spoken_ticket_id || forensicAudit.ticket_id;
+
+  if (explicitTicketId) {
+    activeTicket = await findActiveTicketForSite(null, explicitTicketId);
+  } else if (siteMode === 'MAINTENANCE' && targetedSite) {
+    // Only fall back to open tickets if court is actively in MAINTENANCE mode
     activeTicket = await findActiveTicketForSite(targetedSite.id);
   }
-
-  const courtLabel = targetedSite?.fields?.['Site Name'] || forensicAudit.target_court_name || 'Assigned Court';
 
   // EVALUATE HYPERLOCAL METEOROLOGICAL TRIPWIRES
   let weatherNotice = '';
@@ -1812,21 +1828,117 @@ async function processMediaBatch(batch) {
       if (weather) {
         const dewDelta = weather.temp - weather.dewPoint;
         if (weather.windGusts > 37) {
-          weatherNotice += `\n⛔ *SAFETY NOTICE / ALERTA DE SEGURIDAD:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 4 glass seating suspended / Ráfagas de viento peligrosas. Montaje de cristal suspendido.`;
+          weatherNotice += `\n⛔ *SAFETY NOTICE / ALERTA DE SEGURIDAD:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 4 glass seating suspended / Montaje de cristal suspendido por viento.`;
         } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
-          weatherNotice += `\n🌧️ *WEATHER NOTICE / ALERTA DE LLUVIA:* Rain/storm detected. Hold outdoor assembly & gluing / Lluvia activa. Suspender pegado y montaje exterior.`;
+          weatherNotice += `\n🌧️ *WEATHER NOTICE / ALERTA DE LLUVIA:* Rain/storm detected. Hold outdoor assembly & gluing / Suspender pegado y montaje exterior.`;
         } else if (weather.humidity > 85 || dewDelta <= 2) {
-          weatherNotice += `\n⚠️ *CONDENSATION NOTICE / ALERTA DE HUMEDAD:* High surface moisture risk. Hold Gate 7 turf adhesive / Riesgo de condensación. Suspender adhesivo de césped.`;
+          weatherNotice += `\n⚠️ *CONDENSATION NOTICE / ALERTA DE HUMEDAD:* High surface moisture risk. Hold Gate 7 turf adhesive / Suspender adhesivo de césped.`;
         }
       }
     }
   }
 
+  // ==================================================================
+  // PIPELINE A: INSTALLATION MILESTONE ENGINE (GATES 1 - 12)
+  // Executes whenever site is in INSTALLATION mode and no explicit repair ticket was spoken
+  // ==================================================================
+  if (siteMode === 'INSTALLATION' && !explicitTicketId) {
+    console.log(`[Installation Engine] Processing construction progress sweep for ${courtLabel}`);
+
+    const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
+      const num = parseInt(String(g).replace(/\D/g, ''));
+      return isNaN(num) ? String(g) : `Gate ${num}`;
+    });
+
+    const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
+    const allCleared = Array.from(new Set([...previouslyCleared, ...newlyVerifiedGates]));
+
+    const numericGates = allCleared.map(g => parseInt(String(g).replace(/\D/g, ''))).filter(n => !isNaN(n));
+    const highestGate = numericGates.length > 0 ? Math.max(...numericGates) : 0;
+    const progressPercent = Math.min(1.0, highestGate / 12);
+    const gateLabel = GATE_NAMES[highestGate] ? `${highestGate}. ${GATE_NAMES[highestGate]}` : `${highestGate}. In Progress`;
+
+    const cleanEn = forensicAudit.transcript_en || forensicAudit.transcription || 'Construction sweep recorded.';
+    const cleanEs = forensicAudit.transcript_es || 'Barrido de construcción registrado.';
+
+    if (targetedSite) {
+      const updatePayload = {
+        'Cleared Milestones': allCleared,
+        'Completion %': progressPercent,
+        'Current Gate': gateLabel,
+        'Last Note': `[INSTALLATION UPDATE by ${workerName} at ${timeStr}]:\nEN: "${cleanEn}"\nES: "${cleanEs}"`,
+        'Last Intent': 'MILESTONE_PROGRESS'
+      };
+
+      if (highestGate === 12) {
+        updatePayload['Workflow Mode'] = 'MAINTENANCE';
+        updatePayload['Site Status'] = 'ACTIVE';
+      }
+
+      await airtableWriteWithAutoDrop('Sites', updatePayload, targetedSite.id);
+
+      // Trigger Client Joy Cannon for Key Architectural Milestones
+      if (highestGate > 0) {
+        await fireInstallationJoyCannon(targetedSite, highestGate);
+      }
+    }
+
+    let installCard = `🏗️ *TITAN OS | INSTALLATION MILESTONE VERIFIED*\n` +
+      `*(Hito de Instalación Verificado)*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `🏟️ *Court / Cancha:* ${courtLabel}\n` +
+      `👤 *Lead / Instalador:* ${workerName}\n` +
+      `📊 *Progress / Progreso:* ${Math.round(progressPercent * 100)}% (Gate ${highestGate}/12)\n` +
+      `🟢 *Current Gate / Fase:* ${gateLabel}\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `🎙️ *Field Audio / Audio de Campo:*\n` +
+      `🇺🇸 *EN:* "${cleanEn}"\n` +
+      `🇪🇸 *ES:* "${cleanEs}"\n\n`;
+
+    if (weatherNotice) installCard += `${weatherNotice}\n\n`;
+    installCard += `✅ *Digital twin updated in Sites ledger (0% -> ${Math.round(progressPercent * 100)}%).*`;
+
+    await sendWhatsAppMessage(dispatchTarget, installCard);
+
+    // Full INOC Vault Sync
+    try {
+      const videoIndex = items.findIndex(item => item.type === 'video');
+      const storageResult = storageResults[videoIndex >= 0 ? videoIndex : 0];
+      const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
+        'Message ID': items[0]?.messageId,
+        'Worker Phone Raw': fromPhone,
+        'Message Type': hasVideo ? 'video' : 'image',
+        'Caption Text': `[INSTALLATION SWEEP - Gate ${highestGate}/12]: ${cleanEn}`,
+        'Media URL': storageResult?.signedUrl,
+        'Media Path': storageResult?.storagePath,
+        'Raw Payload JSON': JSON.stringify(items[0]?.rawMessage)
+      });
+
+      await airtableWriteWithAutoDrop('Reports 2', {
+        'Inbound Messages 2': inboundRecord?.id ? [inboundRecord.id] : [],
+        'Sites': targetedSite ? [targetedSite.id] : [],
+        'Workflow Mode': 'INSTALLATION',
+        'Overall Status': 'MILESTONE_PROGRESS',
+        'Site Conditions': forensicAudit.site_conditions || 'Construction Active',
+        'Action Items': (forensicAudit.action_items || []).join('\n'),
+        'Status Observed': 'MILESTONE_PROGRESS',
+        'Action Intent': 'MILESTONE_CLEARANCE',
+        'WhatsApp Reply Text': installCard,
+        'Clean JSON': JSON.stringify(forensicAudit, null, 2)
+      });
+    } catch (e) {
+      console.warn('[INOC Vault Sync Warning]:', e.message);
+    }
+    return;
+  }
+
+  // ==================================================================
+  // PIPELINE B: MAINTENANCE VIDEO DELTA (PRE-WORK -> POST-WORK)
+  // Executes on MAINTENANCE mode courts OR when explicit ticket ID is spoken
+  // ==================================================================
   if (hasVideo) {
     const videoIndex = items.findIndex(item => item.type === 'video');
     const videoStorageUrl = storageResults[videoIndex]?.signedUrl || '';
-    const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Technician';
-    const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
     if (!activeTicket) {
       await sendWhatsAppMessage(dispatchTarget, `⚠️ Visual verified, but no active open work order was found for *${courtLabel}*.`);
@@ -1841,11 +1953,14 @@ async function processMediaBatch(batch) {
     const isIntakeBaseline = (forensicAudit.video_phase === 'INTAKE_BASELINE') ||
       (!hasExistingPreWork && forensicAudit.video_phase !== 'COMPLETION_CLOSEOUT');
 
+    const cleanEn = forensicAudit.transcript_en || forensicAudit.transcription || 'Court sweep logged.';
+    const cleanEs = forensicAudit.transcript_es || 'Barrido de cancha registrado.';
+
     if (isIntakeBaseline) {
       const blockers = forensicAudit.blockers_detected || [];
       const blockerList = blockers.length > 0 ? blockers.map(b => `• ${b}`).join('\n') : 'None reported / Ninguno';
 
-      const updatedNotes = `${ticketExistingNotes}\n\n[PRE-WORK BASELINE VIDEO - ${timeStr} by ${workerName}]:\nURL: ${videoStorageUrl}\nSpoken Narration: "${forensicAudit.transcription || 'Court sweep logged.'}"\nBlockers: ${blockers.join(', ') || 'None'}`.trim();
+      const updatedNotes = `${ticketExistingNotes}\n\n[PRE-WORK BASELINE VIDEO - ${timeStr} by ${workerName}]:\nURL: ${videoStorageUrl}\nEN: "${cleanEn}"\nES: "${cleanEs}"\nBlockers: ${blockers.join(', ') || 'None'}`.trim();
 
       await airtableWriteWithAutoDrop('Daily Assignments', {
         'Status': 'In Progress',
@@ -1868,17 +1983,17 @@ async function processMediaBatch(batch) {
         `👤 *Technician / Técnico:* ${workerName}\n` +
         `⏱️ *Time / Hora:* ${timeStr}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `🎙️ *Spoken Narration / Audio:*\n"${forensicAudit.transcription || 'Visual sweep recorded / Barrido visual registrado.'}"\n\n`;
+        `🎙️ *Field Audio / Audio de Campo:*\n` +
+        `🇺🇸 *EN:* "${cleanEn}"\n` +
+        `🇪🇸 *ES:* "${cleanEs}"\n\n`;
 
       if (blockers.length > 0) {
         baselineCard += `⚠️ *Blockers Detected / Bloqueadores:*\n${blockerList}\n\n`;
       } else {
-        baselineCard += `🟢 *Baseline Condition / Condición:* Nominal (No blockers logged / Sin bloqueadores)\n\n`;
+        baselineCard += `🟢 *Baseline Condition / Condición:* Nominal (No blockers logged)\n\n`;
       }
 
-      if (weatherNotice) {
-        baselineCard += `${weatherNotice}\n\n`;
-      }
+      if (weatherNotice) baselineCard += `${weatherNotice}\n\n`;
 
       baselineCard += `👉 *Status: IN PROGRESS / EN PROGRESO.*\n` +
         `Proceed with service. When finished, send a 10-second completion video to auto-verify and close hands-free.\n` +
@@ -1915,60 +2030,10 @@ async function processMediaBatch(batch) {
     }
   }
 
-  // STANDARD PHOTO AUDIT & STAGING GATES (0A & 0B)
+  // Standard photo execution fallback
   let replyText = forensicAudit.whatsapp_status_text || 'Audit logged.';
   if (weatherNotice) replyText += `\n\n${weatherNotice}`;
-
-  const ok = await sendWhatsAppMessage(dispatchTarget, replyText);
-  if (!ok && dispatchTarget !== fromPhone && fromPhone) {
-    await sendWhatsAppMessage(fromPhone, replyText);
-  }
-
-  // RESTORE FULL INOC FORENSIC DATA EXHAUST (Inbound Messages 2 & Reports 2)
-  try {
-    const inboundRecordIds = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const storageResult = storageResults[i];
-      const speechTranscript = forensicAudit.transcription ? `[Transcribed Speech]: ${forensicAudit.transcription}` : item.caption;
-
-      const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
-        'Message ID': item.messageId,
-        'Worker Phone Raw': fromPhone,
-        'Message Type': item.type,
-        'Caption Text': speechTranscript,
-        'Media URL': storageResult.signedUrl,
-        'Media Path': storageResult.storagePath,
-        'Raw Payload JSON': JSON.stringify(item.rawMessage)
-      });
-      if (inboundRecord?.id) inboundRecordIds.push(inboundRecord.id);
-    }
-
-    const reportsPayload = {
-      'Inbound Messages 2': inboundRecordIds,
-      'Sites': targetedSite ? [targetedSite.id] : [],
-      'Workflow Mode': cumulativeContext.workflowMode,
-      'Overall Status': forensicAudit.status_observed,
-      'Site Conditions': forensicAudit.site_conditions || 'Clear',
-      'Action Items': (forensicAudit.action_items || []).join('\n'),
-      'Status Observed': forensicAudit.status_observed,
-      'Action Intent': forensicAudit.action_intent || 'MAINTENANCE_LOG',
-      'WhatsApp Reply Text': replyText,
-      'Clean JSON': JSON.stringify(forensicAudit, null, 2)
-    };
-
-    await airtableWriteWithAutoDrop('Reports 2', reportsPayload);
-
-    if (targetedSite) {
-      await airtableWriteWithAutoDrop('Sites', {
-        'Last Intent': forensicAudit.action_intent || 'TRIAGE_LOG',
-        'Last Note': forensicAudit.worker_summary
-      }, targetedSite.id);
-    }
-    console.log(`📊 [INOC Vault] Successfully synced forensic report to Reports 2 & Inbound Messages 2.`);
-  } catch (inocErr) {
-    console.warn('[INOC Vault Exception]:', inocErr.message);
-  }
+  await sendWhatsAppMessage(dispatchTarget, replyText);
 }
 
 // ====================================================================
@@ -2126,13 +2191,13 @@ app.post('/webhook', async (req, res) => {
               `━━━━━━━━━━━━━━━━━━━━\n` +
               `🎫 *Ticket #${nextTicketId} Activated / Activado*\n` +
               `🏟️ *Court / Cancha:* ${targetCourtName}\n` +
-              `📍 *Distance / Distancia:* ~0.0 km (Co-located at current venue / En el mismo club)\n` +
+              `📍 *Distance / Distancia:* ~0.0 km (Co-located at venue / En el mismo club)\n` +
               `🔧 *Scope / Alcance:* ${taskCategory}\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
               `👉 *STEP 1: INTAKE SWEEP (BEFORE TOUCHING TOOLS)*\n` +
-              `Record a 15-second walkaround video of the court. Speak court conditions & blockers out loud.\n\n` +
+              `Record a 15-second walkaround video of the court. Speak conditions & blockers out loud.\n\n` +
               `👉 *PASO 1: BARRIDO DE ENTRADA (ANTES DE TOCAR HERRAMIENTAS)*\n` +
-              `Grabe un video de 15 segundos alrededor de la cancha. Mencione en voz alta el estado y cualquier impedimento.`;
+              `Grabe un video de 15 segundos alrededor de la cancha. Mencione el estado y cualquier impedimento.`;
 
             await dispatchReply(onSiteCard);
           } else {
@@ -2150,7 +2215,7 @@ app.post('/webhook', async (req, res) => {
               `🔧 *Scope / Tarea:* ${taskCategory}\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
               `👉 *UPON ARRIVAL (STEP 1) / AL LLEGAR (PASO 1):*\n` +
-              `Send a 15-second walkaround video before starting work / Envíe video de 10-15s antes de empezar a trabajar.`;
+              `Send a 15-second walkaround video before starting work / Envíe video de 15s antes de empezar.`;
 
             await dispatchReply(transitCard);
           }
@@ -2198,7 +2263,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (selectedId.startsWith('ROUTE_FACTORY_')) {
-        await dispatchReply(`🏭 *RETURN ROUTE LOGGED / REGRESO A FÁBRICA*\nTechnician heading back to Orillia Factory for staging / Técnico en camino a la planta de Orillia.`);
+        await dispatchReply(`🏭 *RETURN ROUTE LOGGED / REGRESO A FÁBRICA*\nTechnician heading back to Orillia Factory for staging.`);
         return;
       }
 
@@ -2602,8 +2667,8 @@ app.post('/webhook', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.9.6',
-    engine: 'Titan OS V4.9.6 (Bilingual Edge & Multimodal Telemetry Hub)',
+    version: '4.9.7',
+    engine: 'Titan OS V4.9.7 (Bilingual Smart-Verbatim & Dual-Pipeline Orchestrator)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0
@@ -2613,11 +2678,11 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V4.9.6 RUNNING ON PORT ${PORT}`);
-  console.log(`🌐 BILINGUAL EDGE: English & Spanish Operations Active`);
-  console.log(`🌦️ METEOROLOGY: Wind Gust & Psychrometric Safety Tripwires Re-engaged`);
-  console.log(`🎾 JOY CANNON: Autonomous VIP Playability Multicast Active`);
-  console.log(`📊 INOC EXHAUST: Granular Reports 2 & Inbound Messages 2 Vaulting Active`);
+  console.log(`🚀 TITAN OS V4.9.7 RUNNING ON PORT ${PORT}`);
+  console.log(`🌐 BILINGUAL SMART-VERBATIM: Disfluencies Purged & Dual EN/ES Active`);
+  console.log(`🏗️ DUAL-PIPELINE: Installation Gates 1-12 strictly isolated from Service`);
+  console.log(`🎾 JOY CANNON: Client Milestone Celebrations Active`);
+  console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
   console.log(`====================================================================`);
 
   try {
