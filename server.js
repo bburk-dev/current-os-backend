@@ -1,14 +1,15 @@
 /**
- * TITAN OS V4.9.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & SPRING 2027 MOBILIZATION ENGINE
+ * TITAN OS V4.9.1 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & SPRING 2027 MOBILIZATION ENGINE
  * 
  * Production Build Features:
  * 1. Zero-Polling In-Memory Cache-Aside Engine (Protects Airtable 100k API ceiling)
- * 2. 3-Tier Data Exhaust Siphon (Noise dropped in RAM; Dark Matter stored in Supabase; State changes in Airtable)
- * 3. Ambient Context Retrieval Engine (/context, /history, /search, and on-demand ticket promotion via /promote)
- * 4. Spring 2027 Pre-Con Mobilization Gates (50% Deposit, 7-Day Concrete Cure Lockout, Muskoka Half-Load Frost Laws)
- * 5. Concurrent 2-Court Crew Routing (Team Alpha: Dee/Yeikol, Team Beta: Edison/Sub, Logistics: Rob - Orillia Yard)
- * 6. Hardened Staging Gates (0A Container/Glass & 0B Turf Offload Protection)
- * 7. Multimodal Forensic Vision, Interactive Action Buttons, Compound Court Scheduler, Hyperlocal Weather Tripwires & Fleet Map
+ * 2. 3-Tier Data Exhaust Siphon for Text & Voice-Only Memos (Noise dropped in RAM; Dark Matter to Supabase; State changes to Airtable)
+ * 3. Typecast Schema Auto-Provisioner (Eliminates 422 errors on dynamic multi-select tags like Gate 0A/0B)
+ * 4. Ambient Context Retrieval Engine (/context, /history, /search, and on-demand ticket promotion via /promote)
+ * 5. Spring 2027 Pre-Con Mobilization Gates (50% Deposit, 7-Day Concrete Cure Lockout, Muskoka Half-Load Frost Laws)
+ * 6. Shortcut Navigation (/g, /gate, /context, /fleet, /board, /status)
+ * 7. Concurrent 2-Court Crew Routing (Team Alpha: Dee/Yeikol, Team Beta: Edison/Sub, Logistics: Rob - Orillia Yard, Shop: Michael/David/Edwin)
+ * 8. Hardened Staging Gates (0A Container/Glass & 0B Turf Offload Protection)
  */
 
 process.on('uncaughtException', (err) => {
@@ -126,7 +127,7 @@ async function getCachedWorkers(forceRefresh = false) {
   try {
     let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Workers?maxRecords=100`;
     let res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok && res.status === 404) {
+    if (!res.ok && (res.status === 404 || res.status === 403)) {
       url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Worker?maxRecords=100`;
       res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
     }
@@ -364,15 +365,15 @@ CORE OPERATING RULES:
 2. PARALLEL EXECUTION: Gates are verified independently unless a physical dependency blocks them.
 3. PRE-INSTALLATION HARDENED STAGING GATES:
    - GATE 0A (Freight & Glass Audit): Inspect container door seals, crate strapping, and glass panel integrity. Check for shattered tempered glass or transit shifting before unbanding.
-   - GATE 0B (Offload & Turf Protection): Inspect offload machinery (verify smooth forklift tines or carpet poles) and ensure turf rolls are unpunctured, elevated, and protected from damp soil.
+   - GATE 0B (Offload & Turf Protection): Inspect offload machinery (verify smooth forklift tines or carpet poles) and ensure turf rolls are unpunctured, elevated, and protected from damp soil. Requires physical photo/video evidence.
 4. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
    - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
    - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
 5. GATE 12 DEMOTION: Tools, loose hardware, or debris drops Gate 12, placing site in ACTION_REQUIRED.
 6. MULTILINGUAL & LEDGER NORMALIZATION: Ingest in any language, mirror language on WhatsApp, normalize English in ledger.
 
-SPRING 2027 CONCURRENT BUILD ROUTING:
-- Execution units: Team Alpha (Dee, Yeikol), Team Beta (Edison, Sub), Logistics (Rob - Orillia Yard).
+SPRING 2027 CONCURRENT BUILD & SHOP UNITS:
+- Execution units: Team Alpha (Dee, Yeikol), Team Beta (Edison, Sub), Logistics (Rob - Orillia Yard), Shop/Fabrication (Michael, David, Edwin).
 
 VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
 ["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Invoice / Billing", "Payment Received", "Unknown"]
@@ -527,7 +528,9 @@ const COMMAND_MAP = {
   '/schedule': 'COURT_BOARD',
   '/mapview': 'FLEET_MAP_LINK',
   '/fleet': 'FLEET_MAP_LINK',
+  '/g': 'READINESS_GATE_CHECK',
   '/gate': 'READINESS_GATE_CHECK',
+  '/r': 'READINESS_GATE_CHECK',
   '/readiness': 'READINESS_GATE_CHECK',
   '/context': 'SITE_CONTEXT',
   '/history': 'SITE_CONTEXT',
@@ -724,6 +727,9 @@ async function uploadToSupabase(fileBuffer, mimeType) {
   return { storagePath, signedUrl: fullSignedUrl };
 }
 
+/**
+ * Universal Airtable Write with Auto-Healer and typecast: true
+ */
 async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
   const cleanFields = { ...fields };
 
@@ -745,7 +751,7 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
       'Authorization': `Bearer ${CONFIG.airtable.apiKey}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ fields: cleanFields })
+    body: JSON.stringify({ fields: cleanFields, typecast: true })
   });
 
   if (res.ok) {
@@ -1448,7 +1454,7 @@ async function handleVIPConcierge(text, identity, dispatchTarget, fromPhone) {
 }
 
 // ====================================================================
-// 12. 3-TIER AMBIENT INTELLIGENCE & EXHAUST TRIAGE
+// 12. 3-TIER AMBIENT INTELLIGENCE & EXHAUST TRIAGE (TEXT)
 // ====================================================================
 
 async function triageDispatchText(text, workerRecord, currentSite = null, recentAmbientSnippets = []) {
@@ -1464,8 +1470,8 @@ async function triageDispatchText(text, workerRecord, currentSite = null, recent
 You are the Titan OS Ambient Intelligence Scribe, Operational Dispatch & Data Exhaust Siphon for Bounce Padel.
 Current Operational Context: [Site Mode: ${siteWorkflowMode}]
 Active Padel Court Registry: [${siteListStr}]
-Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
-Execution Teams: ["Team Alpha" (Dee/Yeikol), "Team Beta" (Edison/Sub), "Logistics" (Rob)]
+Field Personnel & Fabrication Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem", "Michael", "David", "Edwin"]
+Execution Teams: ["Team Alpha" (Dee/Yeikol), "Team Beta" (Edison/Sub), "Logistics" (Rob - Orillia Yard), "Production" (Michael, David, Edwin)]
 ${ambientMemory}
 3-TIER EXHAUST CLASSIFICATION DIRECTIVE:
 Classify the incoming text into EXACTLY ONE of three tiers:
@@ -1480,7 +1486,7 @@ Informal field intelligence, micro-status updates, weather observations, GC conv
 - is_actionable: false
 - exhaust_tier: "DARK_MATTER"
 - intent: "AMBIENT_OBSERVATION"
-- dark_matter_category: "Site Conditions" | "Logistics" | "Subcontractor/GC" | "Hardware/Supplies" | "Weather"
+- dark_matter_category: "Site Conditions" | "Logistics" | "Subcontractor/GC" | "Hardware/Supplies" | "Weather" | "Fabrication"
 - distilled_context: High-density 10-15 word factual summary
 - urgency: "LOW" | "MEDIUM" | "HIGH"
 - gravity_score: 1 to 5 (5 being a critical blocker like a delayed GC slab)
@@ -1562,9 +1568,237 @@ Output JSON only:
 }
 
 // ====================================================================
-// 13. MULTIMODAL FORENSIC EVALUATION & BATCH PROCESSOR
+// 13. DEDICATED VOICE-ONLY SIPHON & MULTIMODAL BATCH PROCESSOR
 // ====================================================================
 
+/**
+ * Handles voice-only memos without visual media, running them through the 3-Tier Siphon
+ */
+async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity) {
+  const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
+  const storageResults = await Promise.all(uploadPromises);
+
+  const recentDarkMatter = site ? await fetchRecentDarkMatter(site.fields['Site Name'], 3) : [];
+  const ambientMemory = recentDarkMatter.length > 0
+    ? `\nRECENT AMBIENT FIELD MEMORY FOR THIS SITE:\n${recentDarkMatter.map(n => `- [${n.category}]: ${n.distilled_context}`).join('\n')}\n`
+    : '';
+
+  const activeSites = await getAllActiveSitesList();
+  const siteListStr = activeSites.join(', ') || 'BPC RCOR Court 1, BPC RCOR Court 2, BPC Don Walker, BPC North Padel 1';
+
+  const audioPrompt = `
+You are the Titan OS Spoken Voice Triage Engine for Bounce Padel.
+Transcribe the spoken audio verbatim in English, then classify its operational intent under the 3-Tier Siphon.
+
+Current Context: [Site: ${cumulativeContext.siteName || 'Unbound Court'}, Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}]
+Active Padel Court Registry: [${siteListStr}]
+Field Personnel & Fabrication Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem", "Michael", "David", "Edwin"]
+Execution Teams: ["Team Alpha" (Dee/Yeikol), "Team Beta" (Edison/Sub), "Logistics" (Rob - Orillia Yard), "Production" (Michael, David, Edwin)]
+${ambientMemory}
+3-TIER SPOKEN EXHAUST DIRECTIVE:
+Classify into EXACTLY ONE tier:
+
+TIER 1 - "PURE_NOISE":
+Casual banter, short greeting filler, non-operational speech ("sounds good", "heading out now", "coffee break").
+- is_actionable: false
+- exhaust_tier: "PURE_NOISE"
+
+TIER 2 - "DARK_MATTER":
+Informal field intelligence, trailer staging logs, parts deliveries, weather notes, traffic remarks, sub conversations ("Trailer 1 is staged at Orillia with turf rolls...", "dropped off 2 boxes", "GC says slab is Friday").
+- is_actionable: false
+- exhaust_tier: "DARK_MATTER"
+- intent: "AMBIENT_OBSERVATION"
+- dark_matter_category: "Logistics" | "Site Conditions" | "Subcontractor/GC" | "Hardware/Supplies" | "Weather" | "Fabrication"
+- distilled_context: High-density 10-15 word factual summary
+- urgency: "LOW" | "MEDIUM" | "HIGH"
+- gravity_score: 1 to 5 (5 is a critical blocker)
+
+TIER 3 - "ACTIONABLE_STATE_CHANGE":
+Explicit milestone completion ("Gate 2 steel frame is torqued", "Silicone finished"), 50% deposits received, concrete pour dates, formal quote leads, or ticket closeouts.
+- is_actionable: true
+- exhaust_tier: "ACTIONABLE_STATE_CHANGE"
+- intent: "WORK_ORDER_CLOSEOUT" | "DEPOSIT_RECEIVED" | "CONCRETE_POUR_UPDATE" | "COMMERCIAL_QUOTE" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED" | "DISPATCH_CREATE"
+
+OUTPUT SPECIFICATION (JSON ONLY):
+{
+  "transcription": "Verbatim English transcript of spoken audio",
+  "exhaust_tier": "PURE_NOISE" | "DARK_MATTER" | "ACTIONABLE_STATE_CHANGE",
+  "is_actionable": boolean,
+  "intent": string,
+  "dark_matter_category": string | null,
+  "distilled_context": string | null,
+  "urgency": "LOW" | "MEDIUM" | "HIGH" | null,
+  "gravity_score": integer | null,
+  "matched_site_name": "string or null",
+  "ticket_id": integer or null,
+  "resolution_summary": "string in English or null",
+  "pour_date": "YYYY-MM-DD or null",
+  "deposit_status": "50% Deposit Received" | "Paid in Full" | null,
+  "assigned_crew": "Team Alpha" | "Team Beta" | "Logistics" | null,
+  "task_category": string | null,
+  "assignment_type": string | null,
+  "priority": "Critical" | "High" | "Medium" | "Low" | null,
+  "suggested_worker_name": string | null,
+  "notes": "string in English"
+}
+`;
+
+  const contentParts = [{ text: audioPrompt }];
+  for (const item of items) {
+    contentParts.push({
+      inline_data: {
+        mime_type: item.mimeType,
+        data: item.buffer.toString('base64')
+      }
+    });
+  }
+
+  const payload = {
+    contents: [{ parts: contentParts }],
+    generationConfig: {
+      temperature: 0.0,
+      responseMimeType: 'application/json',
+      thinkingConfig: { thinkingBudget: 0 }
+    }
+  };
+
+  const gRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!gRes.ok) {
+    throw new Error(`Gemini voice triage failed (${gRes.status}): ${await gRes.text()}`);
+  }
+
+  const gData = await gRes.json();
+  const rawText = gData.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) return;
+
+  const triage = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+  console.log('[Voice Memo Siphon]:', {
+    transcript: triage.transcription,
+    tier: triage.exhaust_tier,
+    category: triage.dark_matter_category
+  });
+
+  // TIER 1: PURE NOISE
+  if (triage.exhaust_tier === 'PURE_NOISE') {
+    console.log(`[Noise Filter] Ignored voice chatter: "${triage.transcription}"`);
+    return;
+  }
+
+  // TIER 2: DARK MATTER (SILENT TO SUPABASE - NO JUNK AIRTABLE CALLS OR CHAT SPAM)
+  if (triage.exhaust_tier === 'DARK_MATTER') {
+    const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
+    const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Fleet General';
+
+    const archivedRecord = await streamToDarkMatterVault({
+      siteId: site?.id || null,
+      siteName: siteLabel,
+      senderPhone: fromPhone,
+      senderName: senderName,
+      rawText: triage.transcription,
+      category: triage.dark_matter_category || 'Logistics',
+      distilledContext: triage.distilled_context || triage.transcription,
+      urgency: triage.urgency || 'LOW',
+      gravityScore: triage.gravity_score || 1
+    });
+
+    // High gravity alert
+    if (site && (triage.gravity_score >= 4 || triage.urgency === 'HIGH')) {
+      await airtableWriteWithAutoDrop('Sites', {
+        'Last Note': `[VOICE ALERT - ${triage.dark_matter_category}]: ${triage.distilled_context}`,
+        'Last Intent': 'AMBIENT_ALERT'
+      }, site.id);
+
+      if (archivedRecord?.id) {
+        const alertPrompt = `⚠️ *FIELD INTELLIGENCE RECORDED (VOICE)*\n\n` +
+          `*Site:* ${siteLabel}\n` +
+          `*Observation:* "${triage.distilled_context}"\n` +
+          `*Category:* ${triage.dark_matter_category} (Urgency: ${triage.urgency})\n\n` +
+          `Archived into Supabase vault. Want to promote this into an active dispatch ticket?`;
+
+        const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Promote to Ticket' }];
+        await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
+      }
+    }
+
+    return; // Complete. Zero Airtable API burn!
+  }
+
+  // TIER 3: ACTIONABLE STATE CHANGE FROM SPOKEN VOICE
+  if (triage.exhaust_tier === 'ACTIONABLE_STATE_CHANGE') {
+    if (triage.intent === 'WORK_ORDER_CLOSEOUT') {
+      await executeWorkOrderCloseout({
+        site,
+        targetCourtName: triage.matched_site_name,
+        ticketId: triage.ticket_id,
+        resolutionNotes: triage.resolution_summary || triage.transcription || 'Spoken closeout verified on site.',
+        worker,
+        dispatchTarget,
+        fromPhone
+      });
+      return;
+    }
+
+    if (triage.intent === 'DEPOSIT_RECEIVED') {
+      let matchedTargetSite = null;
+      if (triage.matched_site_name) matchedTargetSite = await lookupSite(null, triage.matched_site_name);
+      if (!matchedTargetSite && site) matchedTargetSite = site;
+
+      if (matchedTargetSite) {
+        await airtableWriteWithAutoDrop('Sites', {
+          'Deposit Status': '50% Deposit Received',
+          'Last Note': `Commercial Milestone: 50% Deposit logged via voice: ${triage.transcription}`,
+          'Last Intent': 'DEPOSIT_CLEARED'
+        }, matchedTargetSite.id);
+      }
+
+      const depositVoucher = `💵 *BOUNCE COMMERCIAL | 50% DEPOSIT LOCKED*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `🏟️ *Project:* ${matchedTargetSite ? matchedTargetSite.fields['Site Name'] : 'Commercial Pipeline'}\n` +
+        `🚦 *Gate 1 Status:* CLEARED 🟢 (50% Deposit Received)\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `✅ *Recorded via spoken voice memo. Moved to Spring 2027 Mobilization Queue.*`;
+
+      await sendWhatsAppMessage(dispatchTarget, depositVoucher);
+      return;
+    }
+
+    if (triage.intent === 'CONCRETE_POUR_UPDATE') {
+      let matchedTargetSite = null;
+      if (triage.matched_site_name) matchedTargetSite = await lookupSite(null, triage.matched_site_name);
+      if (!matchedTargetSite && site) matchedTargetSite = site;
+
+      const pourDate = triage.pour_date || new Date().toISOString().split('T')[0];
+      if (matchedTargetSite) {
+        await airtableWriteWithAutoDrop('Sites', {
+          'Slab Pour Date': pourDate,
+          'Last Note': `Foundation poured on ${pourDate}. 7-day cure anchor lockout initiated.`,
+          'Last Intent': 'SLAB_POURED'
+        }, matchedTargetSite.id);
+
+        const cureTarget = new Date(new Date(pourDate).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const pourVoucher = `🏗️ *BOUNCE ENGINEERING | FOUNDATION POURED*\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `🏟️ *Site:* ${matchedTargetSite.fields['Site Name']}\n` +
+          `📅 *Pour Date:* ${pourDate}\n` +
+          `🔒 *Cure Lockout:* 7 Days (Anchor drilling unlocked on: *${cureTarget}*)\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `⚠️ *Field Reminder:* Do not drill steel column anchors prior to ${cureTarget}.`;
+
+        await sendWhatsAppMessage(dispatchTarget, pourVoucher);
+        return;
+      }
+    }
+  }
+}
+
+/**
+ * Handles multimodal media batches containing Photos or Videos (Physical Inspections)
+ */
 async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
   const isMaintenanceMode = cumulativeContext.workflowMode === 'MAINTENANCE' || cumulativeContext.workflowMode === 'SPOT_VISIT';
   const systemInstruction = isMaintenanceMode ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT;
@@ -1574,8 +1808,8 @@ async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
 
   const auditContextText = `AUDIT CONTEXT & FLEET ROUTER:
 Active Padel Court Registry: [${siteListStr}]
-Field Personnel Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem"]
-Execution Crews: ["Team Alpha", "Team Beta", "Logistics"]
+Field Personnel & Fabrication Roster: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem", "Michael", "David", "Edwin"]
+Execution Crews: ["Team Alpha", "Team Beta", "Logistics", "Production"]
 Current Bound Asset: ${cumulativeContext.siteName || 'Unbound Court'}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Facility Type: ${facilityTypeDesc}
@@ -1583,18 +1817,11 @@ Previously Cleared Milestones: ${JSON.stringify(cumulativeContext.clearedMilesto
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
 DYNAMIC INTENT CLASSIFICATION RULES:
-1. "GATE_0A_AUDIT": Container seal, freight crate integrity, intact vs shattered tempered glass panels.
-2. "GATE_0B_AUDIT": Offload staging, turf roll storage, forklift tine verification, lack of punctures.
+1. "GATE_0A_AUDIT": Container seal, freight crate strapping, intact vs shattered tempered glass panels.
+2. "GATE_0B_AUDIT": Offload staging, turf roll storage, forklift tine verification, lack of punctures. Requires visual media.
 3. "COMMERCIAL_QUOTE": Commercial build/pricing request. Set "assignment_type": "Sales".
-4. "SEASONAL_CLOSING": Mentions of "court closing", "winterizing", or seasonal shutdown. Set "assignment_type": "Service" and "task_category": "Season Closing".
-5. "INVENTORY_UPDATE": Pallets in warehouse, stock check, hardware bins, turf storage. Set "assignment_type": "Supply Delivery".
-6. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
-7. "PRE_TOURNAMENT_AUDIT": Sweep checks. Set "assignment_type": "Audit / Inspection".
-8. "EXPENSE_LOG": Hardware receipt. Set "assignment_type": "Expense".
-9. "INVOICE_REQUEST": Billing directives. Set "assignment_type": "Invoice / Billing".
-10. "PAYMENT_RECEIVED": Settlement / deposit confirmations. Set "assignment_type": "Payment Received".
-11. "DISPATCH_CREATE": Maintenance defects on existing courts.
-12. "INSTALLATION_INSPECTION": Standard physical build audit (Gates 1-12).`;
+4. "WORK_ORDER_CLOSEOUT": Completed punchdown work.
+5. "INSTALLATION_INSPECTION": Standard physical build audit (Gates 1-12).`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -1641,6 +1868,28 @@ DYNAMIC INTENT CLASSIFICATION RULES:
 async function processMediaBatch(batch) {
   const { items, site, worker, dispatchTarget, fromPhone, senderSource, indoorSite, callerIdentity } = batch;
 
+  // Bifurcate Voice-Only Notes from Visual Inspections
+  const hasVisualMedia = items.some(item => item.type === 'image' || item.type === 'video');
+
+  const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
+  const cumulativeContext = {
+    siteName: site?.fields?.['Site Name'] || 'BPC Court',
+    workflowMode: currentMode,
+    siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
+    openTickets: site?.fields?.['Open Tickets'] || 0,
+    clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
+    lastNote: site?.fields?.['Last Note'] || '',
+    isIndoor: indoorSite
+  };
+
+  if (!hasVisualMedia) {
+    // ROUTE TO VOICE-ONLY DARK MATTER SIPHON
+    console.log(`[Batch Router] Voice-only memo detected (${items.length} item(s)). Routing to Ambient Voice Siphon.`);
+    await triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity);
+    return;
+  }
+
+  // PHYSICAL INSPECTION (Contains Photos / Video)
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
   const storageResults = await Promise.all(uploadPromises);
 
@@ -1652,18 +1901,7 @@ async function processMediaBatch(batch) {
       parsedTimestamps = {};
     }
   }
-
-  const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
-  const cumulativeContext = {
-    siteName: site?.fields?.['Site Name'] || 'BPC Court',
-    workflowMode: currentMode,
-    siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
-    openTickets: site?.fields?.['Open Tickets'] || 0,
-    clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
-    milestoneTimestamps: parsedTimestamps,
-    lastNote: site?.fields?.['Last Note'] || '',
-    isIndoor: indoorSite
-  };
+  cumulativeContext.milestoneTimestamps = parsedTimestamps;
 
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
 
@@ -1698,264 +1936,7 @@ async function processMediaBatch(batch) {
     return;
   }
 
-  // BRANCH A: COMMERCIAL QUOTE & DISCOVERY
-  if (forensicAudit.intent === 'COMMERCIAL_QUOTE' || forensicAudit.commercial_quote_details?.is_commercial_inquiry) {
-    const comm = forensicAudit.commercial_quote_details || {};
-    const directedTo = comm.directed_to || 'Rob';
-    let assignedWorker = await lookupWorkerByName(directedTo);
-    if (!assignedWorker) assignedWorker = worker;
-
-    const leadNotes = `[COMMERCIAL LEAD — Directed to ${directedTo}]\n` +
-      `Scope: ${comm.scope_summary || 'Padel court build / conversion pricing requested.'}\n` +
-      `Type: ${comm.quote_type || 'General Pricing'}`;
-
-    const assignmentPayload = {
-      'Date': new Date().toISOString().split('T')[0],
-      'Assignment Type': 'Sales',
-      'Priority': 'High',
-      'Source': 'Joy Cannon (Client)',
-      'Status': 'Open',
-      'Notes': leadNotes
-    };
-
-    if (assignedWorker?.id) assignmentPayload['Worker'] = [assignedWorker.id];
-    if (site?.id && forensicAudit.target_court_name) assignmentPayload['Sites'] = [site.id];
-
-    const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-    const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
-
-    const commercialVoucher = `💼 *TITAN OS | COMMERCIAL LEAD CAPTURED*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🚀 *Lead Queued (${ticketId})*\n` +
-      `👤 *Directed To:* ${directedTo}\n` +
-      `🏢 *Opportunity:* ${comm.quote_type || 'New Build / Conversion'}\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `📝 *Scope Detected:*\n` +
-      `${comm.scope_summary || 'Pricing requested for tennis conversion / new club build.'}\n\n` +
-      `✅ *Logged to Daily Assignments • Status: Open for Review*`;
-
-    await sendWhatsAppMessage(dispatchTarget, commercialVoucher);
-
-    if (assignedWorker) {
-      notifyAssignedWorker(ticketId, 'Prospective Project / Client Lead', 'Sales Quote', 'High', leadNotes, assignedWorker).catch(() => {});
-    }
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const storageResult = storageResults[i];
-      await airtableWriteWithAutoDrop('Inbound Messages 2', {
-        'Message ID': item.messageId,
-        'Worker Phone Raw': fromPhone,
-        'Message Type': item.type,
-        'Caption Text': `[Commercial Inquiry]: ${comm.scope_summary || item.caption}`,
-        'Media URL': storageResult.signedUrl,
-        'Media Path': storageResult.storagePath,
-        'Raw Payload JSON': JSON.stringify(item.rawMessage)
-      });
-    }
-    return;
-  }
-
-  // BRANCH B: WORK ORDER CLOSEOUT
-  if (forensicAudit.intent === 'WORK_ORDER_CLOSEOUT') {
-    await executeWorkOrderCloseout({
-      site,
-      targetCourtName: forensicAudit.target_court_name,
-      ticketId: forensicAudit.ticket_id,
-      resolutionNotes: forensicAudit.resolution_summary || 'Task completed and verified on site.',
-      worker,
-      dispatchTarget,
-      fromPhone
-    });
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const storageResult = storageResults[i];
-      const transcript = forensicAudit.transcription ? `[Punchdown Voice]: ${forensicAudit.transcription}` : item.caption;
-
-      await airtableWriteWithAutoDrop('Inbound Messages 2', {
-        'Message ID': item.messageId,
-        'Worker Phone Raw': fromPhone,
-        'Message Type': item.type,
-        'Caption Text': transcript,
-        'Media URL': storageResult.signedUrl,
-        'Media Path': storageResult.storagePath,
-        'Raw Payload JSON': JSON.stringify(item.rawMessage)
-      });
-    }
-    return;
-  }
-
-  // BRANCH C: PRE-TOURNAMENT VIP SWEEP
-  if (forensicAudit.intent === 'PRE_TOURNAMENT_AUDIT') {
-    let targetSite = null;
-    if (forensicAudit.target_court_name) targetSite = await lookupSite(null, forensicAudit.target_court_name);
-    if (!targetSite) targetSite = site;
-
-    const assignmentPayload = {
-      'Date': new Date().toISOString().split('T')[0],
-      'Assignment Type': 'Audit / Inspection',
-      'Priority': 'High',
-      'Source': senderSource || 'Joy Cannon (Client)',
-      'Status': 'Open',
-      'Notes': `[VIP SERVICE INTAKE]: Under Dispatch Review for scheduling.\nScope: ${forensicAudit.worker_summary || 'Pre-tournament playability inspection.'}`
-    };
-
-    if (forensicAudit.task_category) assignmentPayload['Task Category'] = forensicAudit.task_category;
-    if (worker?.id) assignmentPayload['Worker'] = [worker.id];
-    if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
-
-    const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-    const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
-    const courtLabel = targetSite?.fields?.['Site Name'] || 'Facility Courts';
-
-    const vipVoucher = `🎾 *BOUNCE PADEL | VIP SERVICE INTAKE*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🎫 *Request Queued (${ticketId})*\n` +
-      `🏟️ *Facility:* ${courtLabel}\n` +
-      `📋 *Status:* Under Dispatch Review\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `📝 *Request Scope:*\n` +
-      `${forensicAudit.worker_summary || 'Pre-tournament playability check and grooming sweep.'}\n\n` +
-      `🤝 *Operations notified. We are reviewing crew capacity and will confirm your service window shortly.*`;
-
-    await sendWhatsAppMessage(dispatchTarget, vipVoucher);
-    return;
-  }
-
-  // BRANCH D: EXPENSE / RECEIPT CAPTURE
-  if (forensicAudit.intent === 'EXPENSE_LOG' || forensicAudit.assignment_type === 'Expense') {
-    const expense = forensicAudit.expense_details || {};
-    let targetSite = null;
-    if (forensicAudit.target_court_name) targetSite = await lookupSite(null, forensicAudit.target_court_name);
-    if (!targetSite) targetSite = site;
-
-    const workerAttribution = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
-    const expNotes = `[EXPENSE RECEIPT] ${expense.vendor || 'Supplier'}: ${expense.total || 'Total on file'}\nItems: ${(expense.items || []).join(', ')}`;
-    const assignmentPayload = {
-      'Date': new Date().toISOString().split('T')[0],
-      'Assignment Type': 'Expense',
-      'Priority': 'Low',
-      'Source': senderSource || 'Dispatch',
-      'Status': 'Complete',
-      'Notes': expNotes
-    };
-
-    if (worker?.id) assignmentPayload['Worker'] = [worker.id];
-    if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
-
-    const validAttachments = storageResults
-      .filter(r => r && r.signedUrl)
-      .map((r, idx) => ({
-        url: r.signedUrl,
-        filename: `Receipt_${(expense.vendor || 'Supplier').replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}_${idx + 1}.jpg`
-      }));
-
-    if (validAttachments.length > 0) {
-      assignmentPayload['Attachment(s)'] = validAttachments;
-    }
-
-    await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-
-    const expVoucher = `🧾 *TITAN OS | EXPENSE RECEIPT*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🏪 *Vendor:* ${expense.vendor || 'Hardware Supplier'}\n` +
-      `💰 *Total:* ${expense.total || 'Logged on file'}\n` +
-      `📍 *Asset:* ${targetSite?.fields?.['Site Name'] || 'General Operations'}\n` +
-      `👤 *Attributed:* ${workerAttribution}\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `📦 *Items:*\n` +
-      `${(expense.items || []).join(', ') || 'Hardware & maintenance supplies'}\n\n` +
-      `✅ *Receipt signed into vault and expense recorded for QuickBooks.*`;
-
-    await sendWhatsAppMessage(dispatchTarget, expVoucher);
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const storageResult = storageResults[i];
-      await airtableWriteWithAutoDrop('Inbound Messages 2', {
-        'Message ID': item.messageId,
-        'Worker Phone Raw': fromPhone,
-        'Message Type': item.type,
-        'Caption Text': `[Expense Receipt]: ${expense.vendor || 'Supplier'} - ${expense.total || ''}`,
-        'Media URL': storageResult.signedUrl,
-        'Media Path': storageResult.storagePath,
-        'Raw Payload JSON': JSON.stringify(item.rawMessage)
-      }).catch(err => console.warn('[Expense Logging] Inbound message record error:', err.message));
-    }
-    return;
-  }
-
-  // BRANCH E: CROSS-SITE VOICE DISPATCH
-  const isCrossSite = forensicAudit.intent === 'DISPATCH_CREATE' ||
-    (forensicAudit.target_court_name && site && !site.fields['Site Name'].toLowerCase().includes(forensicAudit.target_court_name.toLowerCase()));
-
-  if (isCrossSite) {
-    let targetSite = null;
-    if (forensicAudit.target_court_name) targetSite = await lookupSite(null, forensicAudit.target_court_name);
-    if (!targetSite) targetSite = site;
-
-    let assignedWorker = worker;
-    if (forensicAudit.suggested_worker_name) {
-      const namedWorker = await lookupWorkerByName(forensicAudit.suggested_worker_name);
-      if (namedWorker) assignedWorker = namedWorker;
-    }
-
-    const taskNotes = (forensicAudit.action_items || []).join('\n') || forensicAudit.worker_summary;
-    const assignmentPayload = {
-      'Date': new Date().toISOString().split('T')[0],
-      'Assignment Type': forensicAudit.assignment_type || 'Service',
-      'Priority': forensicAudit.priority || 'High',
-      'Source': senderSource || 'Exec Visit (Bob)',
-      'Status': 'Open',
-      'Notes': taskNotes
-    };
-
-    if (forensicAudit.task_category) assignmentPayload['Task Category'] = forensicAudit.task_category;
-    if (assignedWorker?.id) assignmentPayload['Worker'] = [assignedWorker.id];
-    if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
-
-    const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-    const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
-    const courtLabel = targetSite?.fields?.['Site Name'] || forensicAudit.target_court_name || 'Assigned Court';
-
-    const dispatchVoucher = `🧾 *TITAN OS | DISPATCH VOUCHER*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🎫 *Ticket ${ticketId} Created*\n` +
-      `🏟️ *Court:* ${courtLabel}\n` +
-      `⚡ *Priority:* ${assignmentPayload['Priority']}\n` +
-      `👤 *Assigned:* ${assignedWorker?.fields?.['Full Name'] || 'Dispatch Queue'}\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `📝 *Directive:*\n` +
-      `${taskNotes}\n\n` +
-      `✅ *Logged to Daily Assignments • Status: Open*`;
-
-    await sendWhatsAppMessage(dispatchTarget, dispatchVoucher);
-
-    if (assignedWorker) {
-      notifyAssignedWorker(ticketId, courtLabel, assignmentPayload['Task Category'], assignmentPayload['Priority'], taskNotes, assignedWorker).catch(() => {});
-    }
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const storageResult = storageResults[i];
-      const speechTranscript = forensicAudit.transcription ? `[Transcribed Speech]: ${forensicAudit.transcription}` : item.caption;
-
-      await airtableWriteWithAutoDrop('Inbound Messages 2', {
-        'Message ID': item.messageId,
-        'Worker Phone Raw': fromPhone,
-        'Message Type': item.type,
-        'Caption Text': speechTranscript,
-        'Media URL': storageResult.signedUrl,
-        'Media Path': storageResult.storagePath,
-        'Raw Payload JSON': JSON.stringify(item.rawMessage)
-      });
-    }
-
-    return;
-  }
-
-  // BRANCH F: STANDARD ON-SITE AUDIT EXECUTION
+  // STANDARD AUDIT EXECUTION
   let replyText = forensicAudit.whatsapp_status_text;
 
   if (currentMode === 'INSTALLATION' && site && !indoorSite) {
@@ -2172,7 +2153,6 @@ app.post('/webhook', async (req, res) => {
 
       if (selectedId.startsWith('PROMOTE_VAULT_')) {
         const vaultId = selectedId.replace('PROMOTE_VAULT_', '');
-        // Pull ambient item from Supabase and create a real ticket in Daily Assignments
         try {
           const res = await fetch(`${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?id=eq.${vaultId}`, {
             headers: getSupabaseHeaders('application/json')
@@ -2194,7 +2174,6 @@ app.post('/webhook', async (req, res) => {
             const created = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
             const ticketId = created?.fields?.['Assignment ID'] ? `#${created.fields['Assignment ID']}` : 'NEW';
 
-            // Mark as PROMOTED in Supabase
             await fetch(`${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?id=eq.${vaultId}`, {
               method: 'PATCH',
               headers: getSupabaseHeaders('application/json'),
@@ -2317,7 +2296,6 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        // AMBIENT EXHAUST RETRIEVAL COMMAND: /context or /history
         if (intent === 'SITE_CONTEXT') {
           const targetName = args.join(' ') || site?.fields?.['Site Name'];
           if (!targetName) {
@@ -2343,7 +2321,6 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        // FULL-TEXT SEARCH ACROSS AMBIENT VAULT: /search <keyword>
         if (intent === 'SEARCH_VAULT') {
           const query = args.join(' ');
           if (!query) {
@@ -2369,7 +2346,7 @@ app.post('/webhook', async (req, res) => {
 
         if (intent === 'HELP') {
           await dispatchReply(`🤖 *TITAN OS COMMAND MATRIX*\n\n` +
-            `• */gate* — Spring 2027 Readiness Gate Check\n` +
+            `• */g* or */gate* — Spring 2027 Readiness Gate Check\n` +
             `• */context* [Court] — Review ambient field intelligence & notes\n` +
             `• */search* <keyword> — Search all historical dark matter field logs\n` +
             `• */s* — Site Status\n` +
@@ -2378,18 +2355,16 @@ app.post('/webhook', async (req, res) => {
             `• */board* — Compound Court Board\n` +
             `• */fleet* — Continental Fleet Map\n` +
             `• */group <Court Name>* — Bind WhatsApp Channel\n\n` +
-            `💬 Titan listens ambiently: Report pour dates, 50% deposits, delivery logs, or receipts naturally.`);
+            `💬 Voice notes and text are ambiently captured: Log pour dates, 50% deposits, delivery manifests, or receipts naturally.`);
           return;
         }
       }
 
-      // Compound Court Scheduler
       if (isBoundGroupMember || callerIdentity.role === 'Family Member / Player' || callerIdentity.role === 'Compound Member') {
         const handled = await handleCompoundScheduler(rawText, callerIdentity, dispatchTarget, fromPhone, site);
         if (handled) return;
       }
 
-      // VIP Concierge
       if (callerIdentity.role === 'Owner / Principal' || callerIdentity.role === 'Property Manager / Caretaker') {
         const lower = rawText.toLowerCase();
         if (lower.includes('sand') || lower.includes('groom') || lower.includes('clean') ||
@@ -2399,28 +2374,19 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // ------------------------------------------------------------------
-      // 3-TIER AMBIENT INTELLIGENCE PIPELINE (ZERO-AIRTABLE-API SIPHON)
-      // ------------------------------------------------------------------
+      // 3-TIER TEXT EXHAUST SIPHON
       const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || isAmbientChannel || (site && AMBIENT_CHAT_MODES.includes(site.fields['Workflow Mode']));
 
       if (isDirectOrAdmin && rawText.length > 2) {
         try {
-          // Pre-fetch recent ambient dark matter from Supabase for this court to provide context to Gemini
           const recentDarkMatter = site ? await fetchRecentDarkMatter(site.fields['Site Name'], 3) : [];
           const triage = await triageDispatchText(rawText, worker, site, recentDarkMatter);
 
-          // ----------------------------------------------------------------
-          // TIER 1: PURE NOISE (Discarded in RAM, 0 API Calls burned)
-          // ----------------------------------------------------------------
           if (triage.exhaust_tier === 'PURE_NOISE') {
             console.log(`[Noise Filter] Ignored dead banter (0 API calls burned): "${rawText}"`);
             return;
           }
 
-          // ----------------------------------------------------------------
-          // TIER 2: DARK MATTER (Streamed to Supabase, 0 Airtable API Calls)
-          // ----------------------------------------------------------------
           if (triage.exhaust_tier === 'DARK_MATTER') {
             const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
             const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Fleet General';
@@ -2437,8 +2403,6 @@ app.post('/webhook', async (req, res) => {
               gravityScore: triage.gravity_score || 1
             });
 
-            // If it's a high-gravity operational blocker (e.g. GC delays concrete, road flooded),
-            // update Airtable's Last Note so dispatchers see it on the dashboard without creating a junk ticket!
             if (site && (triage.gravity_score >= 4 || triage.urgency === 'HIGH')) {
               await airtableWriteWithAutoDrop('Sites', {
                 'Last Note': `[FIELD NOTE - ${triage.dark_matter_category}]: ${triage.distilled_context}`,
@@ -2446,29 +2410,21 @@ app.post('/webhook', async (req, res) => {
               }, site.id);
 
               if (archivedRecord?.id) {
-                // Send proactive button to WhatsApp allowing 1-tap promotion to an actual Daily Assignment ticket
                 const alertPrompt = `⚠️ *FIELD INTELLIGENCE RECORDED*\n\n` +
                   `*Site:* ${siteLabel}\n` +
                   `*Issue:* ${triage.distilled_context}\n` +
                   `*Category:* ${triage.dark_matter_category} (Urgency: ${triage.urgency})\n\n` +
                   `Archived into Supabase vault. Want to promote this into an active dispatch ticket?`;
 
-                const buttons = [
-                  { id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Promote to Ticket' }
-                ];
+                const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Promote to Ticket' }];
                 await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
               }
             }
 
-            return; // Finished. ZERO Airtable API calls consumed for routine dark matter!
+            return; // 0 Airtable calls
           }
 
-          // ----------------------------------------------------------------
-          // TIER 3: ACTIONABLE STATE CHANGE (Writes to Airtable Command Ledger)
-          // ----------------------------------------------------------------
           if (triage.exhaust_tier === 'ACTIONABLE_STATE_CHANGE') {
-            
-            // 1. 50% DEPOSIT RECEIVED (SPRING 2027 COMMITMENT GATE)
             if (triage.intent === 'DEPOSIT_RECEIVED') {
               const bill = triage.billing_details || {};
               const payer = bill.client_name || triage.matched_site_name || site?.fields['Site Name'] || 'Client';
@@ -2509,7 +2465,6 @@ app.post('/webhook', async (req, res) => {
               return;
             }
 
-            // 2. CONCRETE POUR & CURING UPDATE
             if (triage.intent === 'CONCRETE_POUR_UPDATE') {
               let matchedTargetSite = null;
               if (triage.matched_site_name) matchedTargetSite = await lookupSite(null, triage.matched_site_name);
@@ -2539,7 +2494,6 @@ app.post('/webhook', async (req, res) => {
               }
             }
 
-            // 3. INVOICE REQUEST ROUTE
             if (triage.intent === 'INVOICE_REQUEST') {
               const bill = triage.billing_details || {};
               const clientTarget = bill.client_name || triage.matched_site_name || 'Client';
@@ -2582,90 +2536,6 @@ app.post('/webhook', async (req, res) => {
               return;
             }
 
-            // 4. GENERAL PAYMENT RECEIVED
-            if (triage.intent === 'PAYMENT_RECEIVED') {
-              const bill = triage.billing_details || {};
-              const payer = bill.client_name || triage.matched_site_name || 'Accounts';
-              const amountStr = bill.amount || 'Logged Deposit';
-
-              const assignmentPayload = {
-                'Date': new Date().toISOString().split('T')[0],
-                'Assignment Type': 'Payment Received',
-                'Priority': 'Low',
-                'Source': senderSource || 'Receivables',
-                'Status': 'Complete',
-                'Notes': `[PAYMENT SETTLED]: Received from ${payer}.\nAmount: ${amountStr}\nMethod: ${bill.payment_method || 'Wire/Transfer'}\nMemo: ${bill.memo || triage.notes || rawText}`
-              };
-
-              if (triage.matched_site_name) {
-                const matchedSite = await lookupSite(null, triage.matched_site_name);
-                if (matchedSite) assignmentPayload['Sites'] = [matchedSite.id];
-              } else if (site?.id) {
-                assignmentPayload['Sites'] = [site.id];
-              }
-
-              await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-
-              const paymentVoucher = `💵 *BOUNCE RECEIVABLES | PAYMENT RECORDED*\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `👤 *Payer:* ${payer}\n` +
-                `💰 *Amount:* ${amountStr}\n` +
-                `🏦 *Method:* ${bill.payment_method || 'Electronic Transfer'}\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `✅ *Settlement logged in ledger and applied to account.*`;
-
-              await dispatchReply(paymentVoucher);
-              return;
-            }
-
-            // 5. COMMERCIAL QUOTE
-            if (triage.intent === 'COMMERCIAL_QUOTE') {
-              const comm = triage.commercial_quote_details || {};
-              const directedTo = comm.directed_to || (rawText.toLowerCase().includes('rob') ? 'Rob' : 'Bob');
-              let assignedWorker = await lookupWorkerByName(directedTo);
-              if (!assignedWorker) assignedWorker = worker;
-
-              const leadNotes = `[COMMERCIAL LEAD — Directed to ${directedTo}]\n` +
-                `Scope: ${comm.scope_summary || triage.notes || rawText}\n` +
-                `Type: ${comm.quote_type || 'Build Quote'}`;
-
-              const assignmentPayload = {
-                'Date': new Date().toISOString().split('T')[0],
-                'Assignment Type': 'Sales',
-                'Priority': 'High',
-                'Source': 'Joy Cannon (Client)',
-                'Status': 'Open',
-                'Notes': leadNotes
-              };
-
-              if (assignedWorker?.id) assignmentPayload['Worker'] = [assignedWorker.id];
-              if (triage.matched_site_name) {
-                const matchedSite = await lookupSite(null, triage.matched_site_name);
-                if (matchedSite) assignmentPayload['Sites'] = [matchedSite.id];
-              }
-
-              const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-              const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
-
-              const commercialVoucher = `💼 *TITAN OS | COMMERCIAL LEAD CAPTURED*\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `🚀 *Lead Queued (${ticketId})*\n` +
-                `👤 *Directed To:* ${directedTo}\n` +
-                `🏢 *Opportunity:* ${comm.quote_type || 'New Build / Conversion'}\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `📝 *Scope Detected:*\n` +
-                `${comm.scope_summary || rawText}\n\n` +
-                `✅ *Logged to Daily Assignments • Status: Open for Review*`;
-
-              await dispatchReply(commercialVoucher);
-
-              if (assignedWorker) {
-                notifyAssignedWorker(ticketId, 'Prospective Project / Client Lead', 'Sales Quote', 'High', leadNotes, assignedWorker).catch(() => {});
-              }
-              return;
-            }
-
-            // 6. WORK ORDER CLOSEOUT
             if (triage.intent === 'WORK_ORDER_CLOSEOUT') {
               await executeWorkOrderCloseout({
                 site,
@@ -2678,70 +2548,6 @@ app.post('/webhook', async (req, res) => {
               });
               return;
             }
-
-            // 7. STANDARD DISPATCH / WORK ORDER
-            let targetSite = null;
-            if (triage.matched_site_name) targetSite = await lookupSite(null, triage.matched_site_name);
-            if (!targetSite && site) targetSite = site;
-
-            let assignedWorker = worker;
-            if (triage.suggested_worker_name) {
-              const namedWorker = await lookupWorkerByName(triage.suggested_worker_name);
-              if (namedWorker) assignedWorker = namedWorker;
-            }
-
-            const assignmentPayload = {
-              'Date': new Date().toISOString().split('T')[0],
-              'Assignment Type': triage.assignment_type || 'Service',
-              'Priority': triage.priority || 'Medium',
-              'Source': senderSource || 'Dispatch',
-              'Status': 'Open',
-              'Notes': triage.notes || rawText
-            };
-
-            if (triage.task_category) assignmentPayload['Task Category'] = triage.task_category;
-            if (assignedWorker?.id) assignmentPayload['Worker'] = [assignedWorker.id];
-            if (targetSite?.id) assignmentPayload['Sites'] = [targetSite.id];
-
-            const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-            const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
-            const courtLabel = targetSite?.fields?.['Site Name'] || triage.matched_site_name || 'Assigned Channel / Court';
-
-            let headerEmoji = '🧾';
-            let headerTitle = 'DISPATCH VOUCHER';
-            if (currentMode === 'INVENTORY' || triage.intent === 'INVENTORY_UPDATE') {
-              headerEmoji = '📦';
-              headerTitle = 'INVENTORY & WAREHOUSE AUDIT';
-            } else if (currentMode === 'LOGISTICS' || triage.intent === 'LOGISTICS_DELIVERY') {
-              headerEmoji = '🚚';
-              headerTitle = 'LOGISTICS & FREIGHT MANIFEST';
-            } else if (currentMode === 'PRODUCTION' || triage.intent === 'PRODUCTION_UPDATE') {
-              headerEmoji = '🏭';
-              headerTitle = 'FACTORY PRODUCTION ORDER';
-            } else if (currentMode === 'EXECUTIVE') {
-              headerEmoji = '📌';
-              headerTitle = 'EXECUTIVE DIRECTIVE';
-            }
-
-            const dispatchVoucher = `${headerEmoji} *TITAN OS | ${headerTitle}*\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n` +
-              `🎫 *Ticket ${ticketId} Created*\n` +
-              `🏟️ *Target:* ${courtLabel}\n` +
-              `🔧 *Category:* ${triage.task_category || assignmentPayload['Assignment Type']}\n` +
-              `⚡ *Priority:* ${assignmentPayload['Priority']}\n` +
-              `👤 *Assigned:* ${assignedWorker?.fields?.['Full Name'] || 'Dispatch Queue'}\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n` +
-              `📝 *Directive:*\n` +
-              `${triage.notes || rawText}\n\n` +
-              `✅ *Logged to Daily Assignments • Status: Open*`;
-
-            await dispatchReply(dispatchVoucher);
-
-            if (assignedWorker) {
-              notifyAssignedWorker(ticketId, courtLabel, triage.task_category || assignmentPayload['Assignment Type'], assignmentPayload['Priority'], triage.notes || rawText, assignedWorker).catch(() => {});
-            }
-
-            return;
           }
         } catch (triageErr) {
           console.warn('[Dispatch Triage Exception]:', triageErr.message);
@@ -2751,7 +2557,7 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // MULTIMODAL MEDIA PROCESSING
+    // MULTIMODAL MEDIA BATCHING (PHOTOS, VIDEOS & AUDIO)
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
     const isAudio = message.type === 'audio' || message.type === 'voice';
@@ -3134,8 +2940,8 @@ app.get('/fleet-map', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.9.0',
-    engine: 'Titan OS V4.9.0 (Dark Matter Vault, In-Memory Cache-Aside & Spring 2027 Pipeline)',
+    version: '4.9.1',
+    engine: 'Titan OS V4.9.1 (Voice Siphon, Dark Matter Vault & Typecast Auto-Provisioner)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       sites_cache_age_sec: Math.floor((Date.now() - memoryCache.sitesLastFetched) / 1000),
@@ -3144,7 +2950,8 @@ app.get('/health', (req, res) => {
       coordinates_cached: memoryCache.coordinates.size
     },
     activePipes: [
-      '3-Tier-Exhaust-Siphon',
+      'Voice-Only-Dark-Matter-Siphon',
+      'Typecast-Airtable-AutoProvisioner',
       'Supabase-Dark-Matter-Vault',
       'Zero-Polling-RAM-Cache',
       'Spring-2027-Readiness-Gates',
@@ -3161,10 +2968,10 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V4.9.0 RUNNING ON PORT ${PORT}`);
-  console.log(`🌌 DATA EXHAUST: Supabase Dark Matter Vault & Context Siphon Active`);
-  console.log(`🛡️  API SAFEGUARD: Zero-Polling In-Memory Cache-Aside Enabled`);
-  console.log(`🏗️  SPRING 2027 PIPELINE: Deposit Gate & 7-Day Concrete Lock Active`);
+  console.log(`🚀 TITAN OS V4.9.1 RUNNING ON PORT ${PORT}`);
+  console.log(`🎙️  VOICE SIPHON: Audio-Only Memos Routed to Dark Matter Vault`);
+  console.log(`🛡️  API SAFEGUARD: Zero-Polling RAM Cache & Typecast Enabled`);
+  console.log(`🏗️  SPRING 2027 PIPELINE: Readiness Gates & 2-Court Routing Active`);
   console.log(`====================================================================`);
 
   try {
