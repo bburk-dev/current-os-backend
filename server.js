@@ -1,17 +1,17 @@
 /**
- * TITAN OS V4.9.2 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & VIDEO DELTA ENGINE
+ * TITAN OS V4.9.3 — FORENSIC VISION & CROSS-MODAL INTEGRITY ENGINE
  * 
  * Production Build Features:
- * 1. Zero-Polling In-Memory Cache-Aside Engine (Protects Airtable 100k API ceiling)
- * 2. 3-Tier Data Exhaust Siphon for Text & Voice-Only Memos (Noise dropped in RAM; Dark Matter to Supabase; State changes to Airtable)
- * 3. Typecast Schema Auto-Provisioner (Eliminates 422 errors on dynamic multi-select tags like Gate 0A/0B)
- * 4. Ambient Context Retrieval Engine (/context, /history, /search, and on-demand ticket promotion via /promote)
- * 5. Spring 2027 Pre-Con Mobilization Gates (50% Deposit, 7-Day Concrete Cure Lockout, Muskoka Half-Load Frost Laws)
- * 6. Shortcut Navigation (/g, /gate, /context, /fleet, /board, /status)
- * 7. Concurrent 2-Court Crew Routing (Team Alpha: Dee/Yeikol, Team Beta: Edison/Sub, Logistics: Rob - Orillia Yard, Shop: Michael/David/Edwin)
- * 8. Hardened Staging Gates (0A Container/Glass & 0B Turf Offload Protection)
- * 9. Video Delta Protocol: Pre-Work Intake Baseline & Post-Work Closeout Sweep with Spoken Blocker Extraction
- * 10. Proximity-Aware Smart Dispatcher: Suppresses redundant GPS routing for co-located courts (<0.15 km); delivers Step 1 visual intake cues
+ * 1. Cross-Modal Ground Truth Gate: Rejects video check-ins if padel infrastructure is absent from visual frames.
+ * 2. Spoken Entity Priority Routing: Prioritizes spoken court/ticket mentions over ambient group defaults.
+ * 3. Video Delta Engine: Locks pre-work baseline (with spoken blockers) and post-work completion sweep.
+ * 4. Proximity-Aware Smart Dispatcher: Suppresses redundant GPS routing for co-located courts (<0.15 km).
+ * 5. Zero-Polling In-Memory Cache-Aside Engine (Protects Airtable 100k API ceiling).
+ * 6. 3-Tier Data Exhaust Siphon (Noise dropped in RAM; Dark Matter to Supabase; State changes to Airtable).
+ * 7. Typecast Schema Auto-Provisioner (Eliminates 422 errors on dynamic multi-select tags).
+ * 8. Spring 2027 Pre-Con Mobilization Gates (50% Deposit, 7-Day Concrete Cure Lockout, Muskoka Frost Laws).
+ * 9. Concurrent Crew & Shop Routing (Team Alpha, Team Beta, Logistics, Production).
+ * 10. Hardened Staging Gates (0A Container/Glass & 0B Turf Offload Protection).
  */
 
 process.on('uncaughtException', (err) => {
@@ -346,35 +346,47 @@ function evaluateReadinessGate(siteRecord) {
 }
 
 // ====================================================================
-// 5. INDUSTRIAL FORENSIC, VIDEO DELTA & AMBIENT TRIAGE PROMPTS
+// 5. FORENSIC CROSS-MODAL AUDIT PROMPTS
 // ====================================================================
 
 const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection & Video Delta Engine for Bounce Padel courts.
-You evaluate multimodal media against strict mechanical, commercial, and safety tolerances.
+You are the Titan OS Forensic Inspection & Cross-Modal Ground Truth Engine for Bounce Padel courts.
+You inspect incoming video frames and spoken audio simultaneously to guarantee data integrity.
 
-CORE OPERATING RULES:
-1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected.
-2. VIDEO DELTA & PROOF-OF-WORK PROTOCOL:
-   - When inspecting video:
-     a) Determine video_phase:
-        * "INTAKE_BASELINE": Technician is walking around court showing starting conditions, inspecting net/glass/turf/hardware, narrating issues/defects, or noting missing tools/parts BEFORE working.
-        * "COMPLETION_CLOSEOUT": Technician is showing completed work, swept sand, adjusted net tension, clean glass, or ready-for-play condition.
-        * "GENERAL_AUDIT": Mid-construction progress or general inspection.
-     b) Transcribe spoken audio verbatim into "transcription".
-     c) Detect any spoken blockers or physical impediments (e.g. "missing net crank", "need more sand", "brush is missing", "chipped glass", "cannot tension net"). Output in "blockers_detected": ["string"].
-     d) Extract verified completed tasks into "work_verified": ["string"].
-3. PRE-INSTALLATION HARDENED STAGING GATES:
-   - GATE 0A (Freight & Glass Audit): Inspect container door seals, crate strapping, and glass panel integrity. Check for shattered tempered glass or transit shifting before unbanding.
-   - GATE 0B (Offload & Turf Protection): Inspect offload machinery (verify smooth forklift tines or carpet poles) and ensure turf rolls are unpunctured, elevated, and protected from damp soil.
-4. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
-   - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
-   - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
-5. GATE 12 DEMOTION: Tools, loose hardware, or debris drops Gate 12, placing site in ACTION_REQUIRED.
+CRITICAL CROSS-MODAL GROUND TRUTH RULES:
+1. VISUAL GROUND TRUTH VERIFICATION:
+   - A valid padel court audit REQUIRES visual detection of physical padel court components: toughened glass panels, steel frame columns, electro-welded mesh, silica sand/turf carpet, or net assembly.
+   - If the camera shows a patio, home furniture, desk, vehicle interior, computer screen, or generic outdoor yard with NO padel court infrastructure:
+     * "court_visual_verified": false
+     * "visual_scene_detected": "Concise description of actual scene (e.g., residential patio with table, computer desk, parking lot)"
+     * "cross_modal_status": "DISCREPANCY_REJECTED"
+     * "rejection_reason": "No padel court infrastructure detected in video frames."
+   - If padel court structure IS verified in the camera frames:
+     * "court_visual_verified": true
+     * "visual_scene_detected": "Padel Court Infrastructure Verified"
+     * "cross_modal_status": "VERIFIED"
+     * "rejection_reason": null
+
+2. AUDIO & ENTITY EXTRACTION:
+   - Transcribe verbatim audio into "transcription".
+   - Extract explicitly spoken court name into "spoken_court_name" (e.g., "BPC RCOR Court 1", "Court 1", "RCOR 2").
+   - Extract explicitly spoken ticket ID into "spoken_ticket_id" (e.g., 9, 54, 55).
+   - Extract physical impediments or missing tools into "blockers_detected": ["string"].
+   - Extract completed work into "work_verified": ["string"].
+
+3. VIDEO PHASE CLASSIFICATION:
+   - "INTAKE_BASELINE": Walkaround inspection prior to commencing work.
+   - "COMPLETION_CLOSEOUT": Post-work verification sweep showing ready court.
+   - "GENERAL_AUDIT": Mid-construction progress.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "INSTALLATION_INSPECTION" | "GATE_0A_AUDIT" | "GATE_0B_AUDIT" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED",
+  "court_visual_verified": boolean,
+  "visual_scene_detected": "string",
+  "cross_modal_status": "VERIFIED" | "DISCREPANCY_REJECTED",
+  "rejection_reason": "string or null",
+  "spoken_court_name": "string or null",
+  "spoken_ticket_id": integer or null,
   "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT" | "NONE",
   "target_court_name": "string or null",
   "ticket_id": integer or null,
@@ -398,21 +410,35 @@ OUTPUT SPECIFICATION (JSON ONLY):
 `;
 
 const MAINTENANCE_TRIAGE_PROMPT = `
-You are the Titan OS Maintenance, Video Delta & VIP Field Concierge Engine.
+You are the Titan OS Maintenance & Cross-Modal Ground Truth Engine.
 
-VIDEO DELTA PROTOCOL:
-- "INTAKE_BASELINE": Technician walking the court showing pre-service status, narrating defects, missing tools, net slack, sand drift, or glass scuffs.
-- "COMPLETION_CLOSEOUT": Technician showing finished work, tensioned net, clean glass, brushed turf.
-- Extract any spoken impediments into "blockers_detected": ["string"].
-- Extract completed tasks into "work_verified": ["string"].
+CRITICAL RULES:
+1. VISUAL GROUND TRUTH:
+   - Verify camera frames show actual padel court components (glass, net, turf, mesh).
+   - If camera shows a patio, home, desk, or truck cab:
+     * "court_visual_verified": false
+     * "visual_scene_detected": "Concise description (e.g. residential patio, office desk)"
+     * "cross_modal_status": "DISCREPANCY_REJECTED"
+     * "rejection_reason": "No padel court infrastructure detected in video frames."
+   - If padel court is visible:
+     * "court_visual_verified": true
+     * "visual_scene_detected": "Padel Court Verified"
+     * "cross_modal_status": "VERIFIED"
 
-SEMANTIC DISAMBIGUATION RULES:
-- "Court closing", "closing the court", "winterizing", "season closing", or "shut down for season" MUST BE:
-  - intent: "DISPATCH_CREATE", assignment_type: "Service", task_category: "Season Closing".
+2. SPOKEN ENTITY EXTRACTION:
+   - Extract explicitly spoken court into "spoken_court_name".
+   - Extract explicitly spoken ticket ID into "spoken_ticket_id".
+   - Extract spoken blockers into "blockers_detected": ["string"].
+   - Extract completed work into "work_verified": ["string"].
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
-  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "MAINTENANCE_INSPECTION" | "VIP_CONCIERGE_REQUEST" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED",
+  "court_visual_verified": boolean,
+  "visual_scene_detected": "string",
+  "cross_modal_status": "VERIFIED" | "DISCREPANCY_REJECTED",
+  "rejection_reason": "string or null",
+  "spoken_court_name": "string or null",
+  "spoken_ticket_id": integer or null,
   "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT" | "NONE",
   "target_court_name": "string or null",
   "ticket_id": integer or null,
@@ -435,7 +461,7 @@ OUTPUT SPECIFICATION (JSON ONLY):
 `;
 
 // ====================================================================
-// 6. ZERO-TOKEN COMMAND MATRIX & HUMAN MAPS
+// 6. COMMAND MATRIX & HUMAN MAPS
 // ====================================================================
 const COMMAND_MAP = {
   '/s': 'STATUS',
@@ -767,10 +793,10 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
   const sites = await getCachedSites();
 
   if (siteName) {
-    const cleanSearch = siteName.replace(/['’]s?/gi, '').trim().toLowerCase();
+    const cleanSearch = siteName.replace(/['’]s?/gi, '').replace(/\b(?:bpc|court)\b/gi, '').trim().toLowerCase();
     const match = sites.find(s => {
       const name = String(s.fields['Site Name'] || '').toLowerCase();
-      return name.includes(cleanSearch);
+      return name.includes(cleanSearch) || cleanSearch.includes(name);
     });
     if (match) return match;
   }
@@ -1202,7 +1228,7 @@ Court Asset: ${siteName}
 Extract scheduling intent from: "${text}"
 
 ACTIONS:
-- "BOOK": User wants to reserve court time (e.g., "taking the court tomorrow at 10", "playing doubles Sunday 4pm").
+- "BOOK": User wants to reserve court time.
 - "CANCEL": User wants to release reservation.
 - "QUERY_SCHEDULE": User asks who is playing or for board.
 - "CHATTER": General conversation.
@@ -1432,7 +1458,7 @@ Informal field intelligence, micro-status updates, weather observations, GC conv
 - dark_matter_category: "Site Conditions" | "Logistics" | "Subcontractor/GC" | "Hardware/Supplies" | "Weather" | "Fabrication"
 - distilled_context: High-density 10-15 word factual summary
 - urgency: "LOW" | "MEDIUM" | "HIGH"
-- gravity_score: 1 to 5 (5 being a critical blocker like a delayed GC slab)
+- gravity_score: 1 to 5
 
 TIER 3 - "ACTIONABLE_STATE_CHANGE":
 Milestones, 50% deposit received, concrete pour dates, formal quote leads, work order closeouts, billing requests, receipts.
@@ -1539,25 +1565,16 @@ ${ambientMemory}
 Classify into EXACTLY ONE tier:
 
 TIER 1 - "PURE_NOISE":
-Casual banter, short greeting filler, non-operational speech ("sounds good", "heading out now", "coffee break").
-- is_actionable: false
-- exhaust_tier: "PURE_NOISE"
+Casual banter, short greeting filler, non-operational speech.
+- is_actionable: false, exhaust_tier: "PURE_NOISE"
 
 TIER 2 - "DARK_MATTER":
-Informal field intelligence, trailer staging logs, parts deliveries, weather notes, traffic remarks, sub conversations ("Trailer 1 is staged at Orillia with turf rolls...", "dropped off 2 boxes", "GC says slab is Friday").
-- is_actionable: false
-- exhaust_tier: "DARK_MATTER"
-- intent: "AMBIENT_OBSERVATION"
-- dark_matter_category: "Logistics" | "Site Conditions" | "Subcontractor/GC" | "Hardware/Supplies" | "Weather" | "Fabrication"
-- distilled_context: High-density 10-15 word factual summary
-- urgency: "LOW" | "MEDIUM" | "HIGH"
-- gravity_score: 1 to 5 (5 is a critical blocker)
+Informal field intelligence, trailer staging logs, parts deliveries, weather notes, traffic remarks, sub conversations.
+- is_actionable: false, exhaust_tier: "DARK_MATTER", intent: "AMBIENT_OBSERVATION"
 
 TIER 3 - "ACTIONABLE_STATE_CHANGE":
-Explicit milestone completion ("Gate 2 steel frame is torqued", "Silicone finished"), 50% deposits received, concrete pour dates, formal quote leads, or ticket closeouts.
-- is_actionable: true
-- exhaust_tier: "ACTIONABLE_STATE_CHANGE"
-- intent: "WORK_ORDER_CLOSEOUT" | "DEPOSIT_RECEIVED" | "CONCRETE_POUR_UPDATE" | "COMMERCIAL_QUOTE" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED" | "DISPATCH_CREATE"
+Explicit milestone completion, 50% deposits received, concrete pour dates, formal quote leads, or ticket closeouts.
+- is_actionable: true, exhaust_tier: "ACTIONABLE_STATE_CHANGE"
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
@@ -1801,7 +1818,6 @@ DYNAMIC INTENT CLASSIFICATION RULES:
 async function processMediaBatch(batch) {
   const { items, site, worker, dispatchTarget, fromPhone, senderSource, indoorSite, callerIdentity } = batch;
 
-  // Bifurcate Voice-Only Notes from Visual Inspections
   const hasVisualMedia = items.some(item => item.type === 'image' || item.type === 'video');
   const hasVideo = items.some(item => item.type === 'video');
 
@@ -1822,7 +1838,7 @@ async function processMediaBatch(batch) {
     return;
   }
 
-  // UPLOAD MEDIA ARTIFACTS TO SUPABASE STORAGE
+  // Upload visual artifacts to Supabase Storage
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
   const storageResults = await Promise.all(uploadPromises);
 
@@ -1839,26 +1855,67 @@ async function processMediaBatch(batch) {
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
 
   // ==================================================================
-  // BRANCH: VIDEO DELTA VERIFICATION ENGINE (PRE-WORK VS POST-WORK)
+  // BRANCH: VIDEO DELTA & CROSS-MODAL INTEGRITY GATE
   // ==================================================================
   if (hasVideo) {
     const videoIndex = items.findIndex(item => item.type === 'video');
     const videoStorageUrl = storageResults[videoIndex]?.signedUrl || '';
-    const activeTicket = await findActiveTicketForSite(site?.id);
     const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Technician';
-    const courtLabel = site?.fields?.['Site Name'] || 'Assigned Court';
     const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-    const ticketExistingNotes = activeTicket ? (activeTicket.fields['Notes'] || '') : '';
+    // 1. HARD GATE: CROSS-MODAL GROUND TRUTH VERIFICATION
+    if (forensicAudit.court_visual_verified === false || forensicAudit.cross_modal_status === 'DISCREPANCY_REJECTED') {
+      console.warn(`[Cross-Modal Rejection] Video rejected for ${workerName}: ${forensicAudit.visual_scene_detected}`);
+
+      const rejectionCard = `⛔ *TITAN OS | AUDIT REJECTED (VISUAL MISMATCH)*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ *Ground Truth Verification Failed*\n\n` +
+        `👁️ *Camera Detected:* ${forensicAudit.visual_scene_detected || 'Non-court environment'}\n` +
+        `🎙️ *Spoken Audio:* "${(forensicAudit.transcription || '').slice(0, 90)}..."\n\n` +
+        `❌ *Verdict:* No padel court structure (glass, steel, mesh, or turf) detected in video frames.\n` +
+        `👉 *Action Required:* Stand at the court perimeter and record the physical asset to lock your baseline.`;
+
+      await sendWhatsAppMessage(dispatchTarget, rejectionCard);
+      return; // COMPLETE HALT — 0 Airtable writes, no state corrupted!
+    }
+
+    // 2. RESOLVE TARGETED TICKET (Spoken Entity Priority)
+    let activeTicket = null;
+    let targetedSite = site;
+
+    if (forensicAudit.spoken_ticket_id || forensicAudit.ticket_id) {
+      const explicitId = forensicAudit.spoken_ticket_id || forensicAudit.ticket_id;
+      activeTicket = await findActiveTicketForSite(null, explicitId);
+    }
+
+    if (!activeTicket && forensicAudit.spoken_court_name) {
+      const spokenSite = await lookupSite(null, forensicAudit.spoken_court_name);
+      if (spokenSite) {
+        targetedSite = spokenSite;
+        activeTicket = await findActiveTicketForSite(spokenSite.id);
+      }
+    }
+
+    if (!activeTicket && targetedSite) {
+      activeTicket = await findActiveTicketForSite(targetedSite.id);
+    }
+
+    const courtLabel = targetedSite?.fields?.['Site Name'] || forensicAudit.target_court_name || 'Assigned Court';
+
+    if (!activeTicket) {
+      await sendWhatsAppMessage(dispatchTarget, `⚠️ Visual verified, but no active open work order was found for *${courtLabel}*.`);
+      return;
+    }
+
+    const ticketExistingNotes = activeTicket.fields['Notes'] || '';
     const hasExistingPreWork = Boolean(
-      activeTicket &&
-      (activeTicket.fields['Pre-Work Media'] || ticketExistingNotes.includes('[PRE-WORK BASELINE VIDEO]'))
+      activeTicket.fields['Pre-Work Media'] || ticketExistingNotes.includes('[PRE-WORK BASELINE VIDEO]')
     );
 
     const isIntakeBaseline = (forensicAudit.video_phase === 'INTAKE_BASELINE') ||
       (!hasExistingPreWork && forensicAudit.video_phase !== 'COMPLETION_CLOSEOUT');
 
-    if (activeTicket && isIntakeBaseline) {
+    if (isIntakeBaseline) {
       // PHASE 1: PRE-WORK INTAKE BASELINE LOCKED
       const blockers = forensicAudit.blockers_detected || [];
       const blockerList = blockers.length > 0 ? blockers.map(b => `• ${b}`).join('\n') : 'None reported';
@@ -1871,11 +1928,11 @@ async function processMediaBatch(batch) {
         'Notes': updatedNotes
       }, activeTicket.id);
 
-      if (site) {
+      if (targetedSite) {
         await airtableWriteWithAutoDrop('Sites', {
           'Last Note': `Intake baseline locked for Ticket #${activeTicket.fields['Assignment ID'] || activeTicket.id}: ${blockers.length ? `Blockers: ${blockers.join(', ')}` : 'Nominal'}`,
           'Last Intent': 'INTAKE_BASELINE_LOCKED'
-        }, site.id);
+        }, targetedSite.id);
       }
 
       let baselineCard = `🎥 *TITAN OS | PRE-WORK BASELINE LOCKED*\n` +
@@ -1899,7 +1956,7 @@ async function processMediaBatch(batch) {
       return;
     }
 
-    if (activeTicket && (!isIntakeBaseline || forensicAudit.video_phase === 'COMPLETION_CLOSEOUT')) {
+    if (!isIntakeBaseline || forensicAudit.video_phase === 'COMPLETION_CLOSEOUT') {
       // PHASE 2: POST-WORK COMPLETION CLOSEOUT WITH VIDEO DELTA
       const workDone = (forensicAudit.work_verified && forensicAudit.work_verified.length > 0)
         ? forensicAudit.work_verified.join(', ')
@@ -1914,7 +1971,7 @@ async function processMediaBatch(batch) {
       }, activeTicket.id);
 
       await executeWorkOrderCloseout({
-        site,
+        site: targetedSite,
         targetCourtName: courtLabel,
         ticketId: activeTicket.fields['Assignment ID'],
         resolutionNotes: `Video Delta Verified: ${workDone}`,
@@ -2151,7 +2208,6 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Interactive Button Tap] Received '${selectedTitle}' (${selectedId}) from ${fromPhone}`);
 
-      // PROXIMITY-AWARE SMART DISPATCH APPROVAL
       if (selectedId.startsWith('DISPATCH_APPROVE_')) {
         const parts = selectedId.split('_');
         const nextTicketId = parts[2];
@@ -2169,14 +2225,12 @@ app.post('/webhook', async (req, res) => {
           }
           await airtableWriteWithAutoDrop('Daily Assignments', updateFields, targetTicket.id);
 
-          // Resolve target site details
           const targetSiteId = targetTicket.fields['Sites']?.[0] || targetTicket.fields['Site']?.[0];
           const cachedSites = await getCachedSites();
           const targetSiteRecord = targetSiteId ? cachedSites.find(s => s.id === targetSiteId) : null;
           const targetCourtName = targetSiteRecord?.fields?.['Site Name'] || 'Assigned Court';
           const taskCategory = targetTicket.fields['Task Category'] || targetTicket.fields['Assignment Type'] || 'Service';
 
-          // Proximity calculation: Check if co-located with current site
           let isCoLocated = false;
           let distanceKm = null;
           let targetCoords = null;
@@ -2199,7 +2253,6 @@ app.post('/webhook', async (req, res) => {
           }
 
           if (isCoLocated || distanceKm === 0.0) {
-            // ON-SITE CO-LOCATED INTAKE PROMPT
             const onSiteCard = `🎾 *TITAN OS | ON-SITE DISPATCH ACTIVATED*\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
               `🎫 *Ticket #${nextTicketId} Activated*\n` +
@@ -2214,7 +2267,6 @@ app.post('/webhook', async (req, res) => {
 
             await dispatchReply(onSiteCard);
           } else {
-            // TRANSIT ROUTE PROMPT WITH NAVIGATION LINK
             const navLink = targetCoords
               ? `https://www.google.com/maps/dir/?api=1&destination=${targetCoords.lat},${targetCoords.lon}`
               : 'Address logged in Sites directory';
@@ -3035,8 +3087,8 @@ app.get('/fleet-map', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.9.2',
-    engine: 'Titan OS V4.9.2 (Video Delta Verification & Autonomous Field Orchestrator)',
+    version: '4.9.3',
+    engine: 'Titan OS V4.9.3 (Cross-Modal Ground Truth & Video Delta Engine)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       sites_cache_age_sec: Math.floor((Date.now() - memoryCache.sitesLastFetched) / 1000),
@@ -3045,6 +3097,8 @@ app.get('/health', (req, res) => {
       coordinates_cached: memoryCache.coordinates.size
     },
     activePipes: [
+      'Cross-Modal-Ground-Truth-Gate',
+      'Spoken-Entity-Priority-Routing',
       'Video-Delta-Verification-Engine',
       'Co-Located-Proximity-Dispatcher',
       'Voice-Only-Dark-Matter-Siphon',
@@ -3065,10 +3119,10 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V4.9.2 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V4.9.3 RUNNING ON PORT ${PORT}`);
+  console.log(`🛡️ CROSS-MODAL GATE: Ground Truth Required (Zero False Check-ins)`);
+  console.log(`🎙️ ENTITY ROUTER: Spoken Court & Ticket Priority Routing Active`);
   console.log(`🎥 VIDEO DELTA: Pre-Work Baseline & Post-Work Sweeps Active`);
-  console.log(`📍 PROXIMITY DISPATCH: Smart Suppression (<0.15km) & Visual Cues Active`);
-  console.log(`🛡️ API SAFEGUARD: Zero-Polling RAM Cache & Typecast Enabled`);
   console.log(`====================================================================`);
 
   try {
