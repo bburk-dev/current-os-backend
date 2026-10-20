@@ -1,11 +1,11 @@
 /**
- * TITAN OS V4.9.8 — FORENSIC 12-GATE VISUAL AUDITOR & EXECUTIVE JOY CANNON
+ * TITAN OS V4.9.9 — EXECUTIVE TEXT-ONLY JOY CANNON & FORENSIC 12-GATE ENGINE
  * 
  * Production Build Features:
- * 1. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria
+ * 1. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
+ * 2. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria
  *    even during completely silent or background-noise walkarounds (identifies slab, frame uprights, mesh, glass, turf).
- * 2. In-Progress Stage Tracking: Captures verified completed gates alongside active installation phases (e.g. Gate 4 glass seating).
- * 3. Executive Joy Cannons: Conversational, velocity-focused updates for 55+ estate & club clients (zero technical jargon, zero sales pitch).
+ * 3. In-Progress Stage Tracking: Captures verified completed gates alongside active installation phases (e.g. Gate 4 glass seating).
  * 4. Multimodal Concierge Onboarding: Final handover prompts clients to text, voice note, or send a video for future service.
  * 5. Strict Pipeline Bifurcation: Installation sites strictly mutate Sites state; Daily Assignments tickets remain isolated.
  * 6. Schema Auto-Healer Hardening: Omit computed formula fields ('Completion %') to prevent HTTP 422 write faults.
@@ -939,7 +939,7 @@ async function resolveCallerIdentity(fromPhone) {
 }
 
 // ====================================================================
-// 9. WHATSAPP MESSAGING & REFINED CLIENT JOY CANNON ENGINE
+// 9. WHATSAPP MESSAGING & TEXT-ONLY EXECUTIVE JOY CANNON ENGINE
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -1050,7 +1050,7 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
 }
 
 /**
- * CLIENT JOY CANNON: Pure joy, simple progress milestones & multimodal concierge how-to
+ * CLIENT JOY CANNON: Text-only, zero-friction executive updates without database court names
  */
 async function fireInstallationJoyCannon(siteRecord, highestGate) {
   try {
@@ -1062,32 +1062,27 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
 
     if (highestGate === 1) {
       celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
-        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `Bringing you some joy — work is officially underway and the foundation is set!\n\n` +
+        `Work is officially underway and the foundation is set!\n\n` +
         `_Next step: Raising the frame._`;
     } else if (highestGate === 2 || highestGate === 3) {
       celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
-        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `The steel frame and mesh are installed!\n\n` +
         `The court is really taking shape.\n` +
         `_Next step: Installing the glass._`;
     } else if (highestGate === 4) {
       celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
-        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `Installation is moving in the right direction — the glass is installed!\n\n` +
         `_Next step: Rolling out the turf._`;
     } else if (highestGate >= 7 && highestGate <= 10) {
       celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
-        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `Turf is down and the net is up!\n\n` +
         `_Next step: Sand distribution, brushing, and final details._`;
     } else if (highestGate >= 11) {
       celebrationCard = `🎾 *BOUNCE PADEL | READY TO PLAY*\n` +
-        `*Court:* ${siteName}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `Installation is complete and your court is ready to play! 🥂\n\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1100,7 +1095,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
 
     if (clientGroup) {
       await sendWhatsAppMessage(clientGroup, celebrationCard);
-      console.log(`🎾 [Joy Cannon] Dispatched Gate ${highestGate} to VIP Group ${clientGroup}`);
+      console.log(`🎾 [Joy Cannon] Dispatched Gate ${highestGate} for ${siteName} to VIP Group ${clientGroup}`);
     }
 
     if (Array.isArray(linkedContactIds) && linkedContactIds.length > 0) {
@@ -1110,7 +1105,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
         if (contact && contact.fields['Phone Number']) {
           const cleanPhone = String(contact.fields['Phone Number']).replace(/\D/g, '');
           await sendWhatsAppMessage(cleanPhone, celebrationCard);
-          console.log(`🎾 [Joy Cannon] Dispatched Gate ${highestGate} to ${contact.fields['Contact Name']}`);
+          console.log(`🎾 [Joy Cannon] Dispatched Gate ${highestGate} for ${siteName} to ${contact.fields['Contact Name']}`);
         }
       }
     }
@@ -2689,8 +2684,8 @@ app.post('/webhook', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.9.8',
-    engine: 'Titan OS V4.9.8 (Forensic 12-Gate Visual Auditor & Executive Joy Cannon)',
+    version: '4.9.9',
+    engine: 'Titan OS V4.9.9 (Executive Text-Only Joy Cannon & Forensic 12-Gate Engine)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0
@@ -2700,8 +2695,8 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V4.9.8 RUNNING ON PORT ${PORT}`);
-  console.log(`🎾 EXECUTIVE JOY CANNON: Refined, Non-Soliciting VIP Milestones Active`);
+  console.log(`🚀 TITAN OS V4.9.9 RUNNING ON PORT ${PORT}`);
+  console.log(`🎾 TEXT-ONLY JOY CANNON: Executive Concierge Updates Active (No Court Tag)`);
   console.log(`🏗️ FORENSIC 12-GATE RUBRIC: Visual Detection (Slab, Steel, Mesh, Glass) Active`);
   console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
   console.log(`🌐 BILINGUAL SMART-VERBATIM: Disfluency Removal & Dual EN/ES Active`);
