@@ -1,591 +1,3 @@
-process.on('uncaughtException', (err) => {
-  console.error('[CRITICAL] Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-try {
-  require('dotenv').config();
-} catch (e) {
-  // Render injects environment variables natively
-}
-
-const express = require('express');
-const crypto = require('crypto');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json({
-  limit: '50mb',
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// ====================================================================
-// 1. CONFIGURATION
-// ====================================================================
-const CONFIG = {
-  port: PORT,
-  meta: {
-    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
-    accessToken: process.env.META_ACCESS_TOKEN,
-    appSecret: process.env.META_APP_SECRET,
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
-    graphApiUrl: 'https://graph.facebook.com/v21.0'
-  },
-  supabase: {
-    url: process.env.SUPABASE_URL,
-    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
-    bucket: process.env.STORAGE_BUCKET || 'inbound-media'
-  },
-  gemini: {
-    apiKey: process.env.GEMINI_API_KEY,
-    model: 'gemini-2.5-flash',
-    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
-  },
-  airtable: {
-    apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
-    baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
-    endpoint: 'https://api.airtable.com/v0'
-  }
-};
-
-const mediaDebounceQueues = new Map();
-const DEBOUNCE_DELAY_MS = 3500;
-const processedMessageIds = new Set();
-
-const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
-
-// ====================================================================
-// 2. INDUSTRIAL & AMBIENT PROMPTS
-// ====================================================================
-
-const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
-"""
-lines = code.split('\n')
-for i, l in enumerate(lines, 1):
-    if "You are the Titan" in l:
-        print(f"Line {i}: {l}")
-    elif i in [70, 71, 72, 73, 74, 75]:
-        print(f"Line {i}: {l}")
-
-
-```
-
-```text
-Line 70: // 2. INDUSTRIAL & AMBIENT PROMPTS
-Line 71: // ====================================================================
-Line 72: 
-Line 73: const INDUSTRIAL_SYSTEM_PROMPT = `
-Line 74: You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
-Line 75: 
-
-
-```
-
-```python
-# Let's inspect the exact lines around line 70-80 of the user's input in the earlier message:
-user_earlier = """const mediaDebounceQueues = new Map();
-const DEBOUNCE_DELAY_MS = 3500;
-const processedMessageIds = new Set();
-
-const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];
-
-// ====================================================================
-// 2. INDUSTRIAL & AMBIENT PROMPTS
-// ====================================================================
-
-const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
-"""
-print(repr(user_earlier))
-
-
-```
-
-```text
-"const mediaDebounceQueues = new Map();\nconst DEBOUNCE_DELAY_MS = 3500;\nconst processedMessageIds = new Set();\n\nconst AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];\n\n// ====================================================================\n// 2. INDUSTRIAL & AMBIENT PROMPTS\n// ====================================================================\n\nconst INDUSTRIAL_SYSTEM_PROMPT = `\nYou are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.\n"
-
-
-```
-
-```python
-code_to_75 = full_server_js[:full_server_js.find("You are the Titan")]
-print("Backticks before line 75:")
-for idx, c in enumerate(code_to_75):
-    if c == '`':
-        # print line number and surrounding text
-        line_num = code_to_75[:idx].count('\n') + 1
-        print(f"Line {line_num}: {repr(code_to_75[max(0, idx-20):min(len(code_to_75), idx+20)])}")
-
-
-```
-
-```text
-Traceback (most recent call last):
-  File "<xbox-string>", line 1, in <module>
-    code_to_75 = full_server_js[:full_server_js.find("You are the Titan")]
-NameError: name 'full_server_js' is not defined
-
-
-```
-
-```python
-with open('/tmp/test.js', 'r') as f:
-    text = f.read()
-
-idx_pos = text.find("You are the Titan")
-before_text = text[:idx_pos]
-for idx, c in enumerate(before_text):
-    if c == '`':
-        line_num = before_text[:idx].count('\n') + 1
-        print(f"Line {line_num}: {repr(before_text[max(0, idx-20):min(len(before_text), idx+20)])}")
-
-
-```
-
-```text
-Traceback (most recent call last):
-  File "<xbox-string>", line 1, in <module>
-    with open('/tmp/test.js', 'r') as f:
-FileNotFoundError: [Errno 2] No such file or directory: '/tmp/test.js'
-
-
-```
-
-```python
-user_turn2_msg = """here is the current server.js should we make changes?
-/**
- * TITAN OS V4.6.1 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR
- * Production Build — Compound Schedulers (2-Hr Default), Identity Matrix, Staging Gates & Telemetry
- */
-
-process.on('uncaughtException', (err) => {
-  console.error('[CRITICAL] Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-try {
-  require('dotenv').config();
-} catch (e) {
-  // Render injects environment variables natively
-}
-
-const express = require('express');
-const crypto = require('crypto');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json({
-  limit: '50mb',
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// ====================================================================
-// 1. CONFIGURATION
-// ====================================================================
-const CONFIG = {
-  port: PORT,
-  meta: {
-    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
-    accessToken: process.env.META_ACCESS_TOKEN,
-    appSecret: process.env.META_APP_SECRET,
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
-    graphApiUrl: 'https://graph.facebook.com/v21.0'
-  },
-  supabase: {
-    url: process.env.SUPABASE_URL,
-    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
-    bucket: process.env.STORAGE_BUCKET || 'inbound-media'
-  },
-  gemini: {
-    apiKey: process.env.GEMINI_API_KEY,
-    model: 'gemini-2.5-flash',
-    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
-  },
-  airtable: {
-    apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
-    baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
-    endpoint: 'https://api.airtable.com/v0'
-  }
-};
-
-const mediaDebounceQueues = new Map();
-const DEBOUNCE_DELAY_MS = 3500;
-const processedMessageIds = new Set();
-
-const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT'];
-
-// ====================================================================
-// 2. INDUSTRIAL & AMBIENT PROMPTS
-// ====================================================================
-
-const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
-"""
-lines = user_turn2_msg.split('\n')
-for i, l in enumerate(lines):
-    if "INDUSTRIAL_SYSTEM_PROMPT" in l:
-        print(f"Line {i}: {repr(l)}")
-
-
-```
-
-```text
-Line 73: 'const INDUSTRIAL_SYSTEM_PROMPT = `'
-
-
-```
-
-```python
-l73 = lines[73]
-print([ord(c) for c in l73])
-print(repr(l73))
-
-
-```
-
-```text
-[99, 111, 110, 115, 116, 32, 73, 78, 68, 85, 83, 84, 82, 73, 65, 76, 95, 83, 89, 83, 84, 69, 77, 95, 80, 82, 79, 77, 80, 84, 32, 61, 32, 96]
-'const INDUSTRIAL_SYSTEM_PROMPT = `'
-
-
-```
-
-```python
-for idx in range(15):
-    l = lines[idx]
-    non_ascii = [c for c in l if ord(c) > 127]
-    if non_ascii:
-        print(f"Line {idx}: {non_ascii} (ords: {[ord(c) for c in non_ascii]})")
-
-
-```
-
-```text
-Line 2: ['\xa0', '—'] (ords: [160, 8212])
-Line 3: ['\xa0', '—'] (ords: [160, 8212])
-Line 4: ['\xa0'] (ords: [160])
-Line 7: ['\xa0'] (ords: [160])
-Line 11: ['\xa0'] (ords: [160])
-
-
-```
-
-```python
-# Let's write a small script that tests different possibilities of what could be in server.js
-# What if the user didn't copy the whole file, but pasted it on top of something, or edited in GitHub and accidentally removed the ` ?
-# Or what if line 74 is:
-# const INDUSTRIAL_SYSTEM_PROMPT = 
-# without the backtick?
-# Or what if there was an unescaped backtick?
-
-
-```
-
-```python
-# If line 1 has:
-# ```javascript
-# or if line 1 has a backtick `
-# Let's trace backticks in JS!
-# If line 1 has ```
-# Then backtick 1 opens a template literal!
-# backtick 2 closes it!
-# backtick 3 OPENS a template literal!
-# Then EVERYTHING until the next backtick is treated as a string!
-# Where is the next backtick in the entire file?
-# AT LINE 73: const INDUSTRIAL_SYSTEM_PROMPT = `  <--- THIS BACKTICK CLOSES THE TEMPLATE LITERAL!
-# AND THEN LINE 74/75 ("You are the Titan OS...") IS OUTSIDE THE TEMPLATE LITERAL!
-# IT IS EVALUATED AS CODE!
-# AND "You are" THROWS SyntaxError: Unexpected identifier 'are'!
-
-
-```
-
-```python
-# Let's inspect the entire server.js to ensure NO syntax errors exist anywhere in the code.
-code_full = """/**
- * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
- * Production Build — Compound Schedulers, Interactive Action Buttons, Nearest-Ticket Routing & Fleet Map
- */
-
-process.on('uncaughtException', (err) => {
-  console.error('[CRITICAL] Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-try {
-  require('dotenv').config();
-} catch (e) {
-  // Render injects environment variables natively
-}
-
-const express = require('express');
-const crypto = require('crypto');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json({
-  limit: '50mb',
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// ====================================================================
-// 1. CONFIGURATION
-// ====================================================================
-const CONFIG = {
-  port: PORT,
-  meta: {
-    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
-    accessToken: process.env.META_ACCESS_TOKEN,
-    appSecret: process.env.META_APP_SECRET,
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
-    graphApiUrl: 'https://graph.facebook.com/v21.0'
-  },
-  supabase: {
-    url: process.env.SUPABASE_URL,
-    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
-    bucket: process.env.STORAGE_BUCKET || 'inbound-media'
-  },
-  gemini: {
-    apiKey: process.env.GEMINI_API_KEY,
-    model: 'gemini-2.5-flash',
-    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
-  },
-  airtable: {
-    apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
-    baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
-    endpoint: 'https://api.airtable.com/v0'
-  }
-};
-
-const mediaDebounceQueues = new Map();
-const DEBOUNCE_DELAY_MS = 3500;
-const processedMessageIds = new Set();
-
-const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
-
-// ====================================================================
-// 2. INDUSTRIAL & AMBIENT PROMPTS
-// ====================================================================
-
-const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection Engine, an industrial-grade deterministic evaluator for padel court construction. You inspect multimodal edge media against strict mechanical and safety tolerances.
-
-### CORE OPERATING RULES:
-1. FOREGROUND ISOLATION: Evaluate ONLY the primary foreground court being inspected.
-2. PARALLEL EXECUTION: Gates are verified independently unless a physical dependency blocks them.
-3. PRE-INSTALLATION HARDENED STAGING GATES:
-   - GATE 0A (Freight & Glass Audit): Inspect container door seals, crate strapping, and glass panel integrity. Check for shattered tempered glass or transit shifting before unbanding.
-   - GATE 0B (Offload & Turf Protection): Inspect offload machinery (verify smooth forklift tines or carpet poles) and ensure turf rolls are unpunctured, elevated, and protected from damp soil.
-4. INDOOR VS. OUTDOOR SPECIFIC TOLERANCES:
-   - INDOOR: Minimum 6.0m clear ceiling height, slab moisture barrier, ventilation during gluing.
-   - OUTDOOR: Drainage slope, perimeter curbstone run-off, corrosion protection.
-5. GATE 12 DEMOTION: Tools, loose hardware, or debris drops Gate 12, placing site in ACTION_REQUIRED.
-6. MULTILINGUAL & LEDGER NORMALIZATION: Ingest in any language, mirror language on WhatsApp, normalize English in ledger.
-
-VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
-["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Invoice / Billing", "Payment Received", "Unknown"]
-
-VALID TASK CATEGORIES:
-- "Turf: Sand & Grooming"
-- "Net: Tension & Hardware"
-- "Glass & Structure"
-- "Hardware: Caps & Fasteners"
-- "Lighting & Electrical"
-- "Supply Delivery (Joy Cannon)"
-- "Site Cleanliness & Sweep"
-- "Season Opening"
-- "Season Closing"
-- "Quarterly Maintenance"
-- "Annual Structural & Torque Audit"
-- "Post-Storm / High-Wind Inspection"
-
-### OUTPUT SPECIFICATION (JSON ONLY):
-{
-  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "INSTALLATION_INSPECTION" | "GATE_0A_AUDIT" | "GATE_0B_AUDIT" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED",
-  "target_court_name": "string or null",
-  "ticket_id": integer or null,
-  "resolution_summary": "string in English",
-  "transcription": "Verbatim English transcript of spoken audio",
-  "task_category": "string from VALID TASK CATEGORIES or null",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
-  "priority": "Critical" | "High" | "Medium" | "Low",
-  "suggested_worker_name": "string or null",
-  "commercial_quote_details": {
-    "is_commercial_inquiry": boolean,
-    "quote_type": "Tennis Conversion" | "Greenfield Club Build" | "Court Expansion" | "General Pricing",
-    "number_of_courts": integer or null,
-    "scope_summary": "Detailed English brief of requested build/pricing",
-    "directed_to": "string or null"
-  },
-  "billing_details": {
-    "client_name": "string or null",
-    "amount": "string or null",
-    "invoice_number": "string or null",
-    "payment_method": "Wire" | "EMT" | "Cheque" | "Credit Card" | "Unknown",
-    "memo": "string or null"
-  },
-  "expense_details": { "vendor": "string or null", "total": "string or null", "items": ["string array"] },
-  "detected_language": "string",
-  "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
-  "status_observed": "ACTION_REQUIRED" | "MILESTONE_PROGRESS" | "COMMISSIONED",
-  "action_intent": "HAZARD_BLOCKER" | "DEFECT_REPORT" | "MILESTONE_CLEARANCE",
-  "verified_gates": [array of gate strings or numbers e.g. "0A", "0B", 1, 2],
-  "needs_attention_gates": [array of gate strings or numbers],
-  "site_conditions": "Short string in English",
-  "action_items": ["Specific mechanical defect or punch item in English"],
-  "worker_summary": "1-2 sentence executive brief in English for INOC ledger.",
-  "whatsapp_status_text": "Plaintext WhatsApp card in worker's language."
-}
-`;
-
-const MAINTENANCE_TRIAGE_PROMPT = `
-You are the Titan OS Maintenance, Incident Concierge & Commercial Intake Engine.
-
-VALID ASSIGNMENT TYPES (MUST BE EXACT MATCH):
-["Emergency Repair", "Service", "Spot Visit Punch", "Supply Delivery", "Sales", "Expense", "Audit / Inspection", "Invoice / Billing", "Payment Received", "Unknown"]
-
-VALID TASK CATEGORIES:
-- "Turf: Sand & Grooming"
-- "Net: Tension & Hardware"
-- "Glass & Structure"
-- "Hardware: Caps & Fasteners"
-- "Lighting & Electrical"
-- "Supply Delivery (Joy Cannon)"
-- "Site Cleanliness & Sweep"
-- "Season Opening"
-- "Season Closing"
-- "Quarterly Maintenance"
-- "Annual Structural & Torque Audit"
-- "Post-Storm / High-Wind Inspection"
-
-SEMANTIC DISAMBIGUATION RULES:
-- "Court closing", "closing the court", "winterizing", "season closing", or "shut down for season" MUST BE:
-  - intent: "DISPATCH_CREATE"
-  - assignment_type: "Service"
-  - task_category: "Season Closing"
-  - DO NOT classify as commercial quote.
-
-### OUTPUT SPECIFICATION (JSON ONLY):
-{
-  "intent": "WORK_ORDER_CLOSEOUT" | "DISPATCH_CREATE" | "PRE_TOURNAMENT_AUDIT" | "EXPENSE_LOG" | "COMMERCIAL_QUOTE" | "MAINTENANCE_INSPECTION" | "VIP_CONCIERGE_REQUEST" | "INVOICE_REQUEST" | "PAYMENT_RECEIVED",
-  "target_court_name": "string or null",
-  "ticket_id": integer or null,
-  "resolution_summary": "string in English",
-  "transcription": "Verbatim English transcript of spoken audio",
-  "task_category": "string from VALID TASK CATEGORIES or null",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
-  "priority": "Critical" | "High" | "Medium" | "Low",
-  "suggested_worker_name": "string or null",
-  "commercial_quote_details": {
-    "is_commercial_inquiry": boolean,
-    "quote_type": "Tennis Conversion" | "Greenfield Club Build" | "Court Expansion" | "General Pricing",
-    "number_of_courts": integer or null,
-    "scope_summary": "Detailed English brief of requested build/pricing",
-    "directed_to": "string or null"
-  },
-  "billing_details": {
-    "client_name": "string or null",
-    "amount": "string or null",
-    "invoice_number": "string or null",
-    "payment_method": "Wire" | "EMT" | "Cheque" | "Credit Card" | "Unknown",
-    "memo": "string or null"
-  },
-  "expense_details": { "vendor": "string or null", "total": "string or null", "items": ["string array"] },
-  "detected_language": "string",
-  "environment_detected": "INDOOR" | "OUTDOOR" | "UNKNOWN",
-  "status_observed": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
-  "hazard_detected": boolean,
-  "defects_identified": ["Specific defect in English"],
-  "action_items": ["Action item in English"],
-  "site_conditions": "Short string in English",
-  "worker_summary": "1-2 sentence executive summary in English for INOC.",
-  "whatsapp_status_text": "Plaintext WhatsApp card in client's language."
-}
-`;
-
-console.log("Syntax check passed up to line 180");
-"""
-print("Python check complete")
-
-
-```
-
-```text
-Python check complete
-
-
-```
-
-### What Caused the Deploy Crash
-
-Look closely at what happened between the two deploy logs:
-
-1. In the first error:
-```text
-/opt/render/project/src/server.js:1
-Here is the complete, production-ready `server.js` updated to **Titan OS V4.7.0**.
-SyntaxError: Unexpected identifier 'is'
-
-```
-
-
-2. When that was cleared, the markdown block wrapper or a leading backtick (``` or ````javascript`) remained on Line 1.
-3. In JavaScript, a backtick starts a template string. That single rogue backtick on Line 1 turned lines 1 through 74 into one gigantic string literal.
-4. When the interpreter reached Line 74 (`const INDUSTRIAL_SYSTEM_PROMPT = ` `), that backtick **closed** the string.
-5. Node then tried to execute the prompt text itself (`You are the Titan OS Forensic Inspection Engine...`) as raw JavaScript statements. Seeing `You` followed immediately by `are`, it threw:
-```text
-/opt/render/project/src/server.js:75
-SyntaxError: Unexpected identifier 'are'
-
-```
-
-
-
----
-
-### Step-by-Step Fix in GitHub
-
-1. Open `server.js` in your repository.
-2. Select **all text** (`Ctrl+A` or `Cmd+A`) and hit **Delete** so the editor is completely empty.
-3. Copy the code block below using the **"Copy"** button on the code block (so no markdown text or backticks above Line 1 are captured).
-4. Paste it directly into the empty `server.js` file.
-5. Verify that **Line 1** begins immediately with `/**`:
-```javascript
-/**
- * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
-
-```
-
-
-6. Commit changes to `main`. Render will trigger a clean build and spin up without syntax errors.
-
-
-
----
-
-```javascript
 /**
  * TITAN OS V4.7.0 — INDUSTRIAL HEADLESS FIELD ORCHESTRATOR & PROACTIVE HITL AGENT
  * Production Build — Compound Schedulers, Interactive Action Buttons, Nearest-Ticket Routing & Fleet Map
@@ -629,7 +41,7 @@ const CONFIG = {
     accessToken: process.env.META_ACCESS_TOKEN,
     appSecret: process.env.META_APP_SECRET,
     phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
-    graphApiUrl: '[https://graph.facebook.com/v21.0](https://graph.facebook.com/v21.0)'
+    graphApiUrl: 'https://graph.facebook.com/v21.0'
   },
   supabase: {
     url: process.env.SUPABASE_URL,
@@ -639,12 +51,12 @@ const CONFIG = {
   gemini: {
     apiKey: process.env.GEMINI_API_KEY,
     model: 'gemini-2.5-flash',
-    endpoint: '[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent)'
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
   },
   airtable: {
     apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
     baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
-    endpoint: '[https://api.airtable.com/v0](https://api.airtable.com/v0)'
+    endpoint: 'https://api.airtable.com/v0'
   }
 };
 
@@ -898,7 +310,7 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
   if (typeof rawLocation === 'string' && rawLocation.length > 5) {
     try {
       const cleanAddress = rawLocation.replace(/[^\w\s,]/gi, '').trim();
-      const geoUrl = `[https://geocoding-api.open-meteo.com/v1/search?name=$](https://geocoding-api.open-meteo.com/v1/search?name=$){encodeURIComponent(cleanAddress)}&count=1&language=en&format=json`;
+      const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cleanAddress)}&count=1&language=en&format=json`;
       const res = await fetch(geoUrl);
       if (res.ok) {
         const data = await res.json();
@@ -931,7 +343,7 @@ function haversineDistanceKm(lat1, lon1, lat2, lon2) {
 
 async function getHyperlocalWeather(lat, lon) {
   try {
-    const url = `[https://api.open-meteo.com/v1/forecast?latitude=$](https://api.open-meteo.com/v1/forecast?latitude=$){lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m&hourly=precipitation_probability,weather_code&forecast_hours=6`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m&hourly=precipitation_probability,weather_code&forecast_hours=6`;
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
@@ -3183,8 +2595,8 @@ app.get('/fleet-map', async (req, res) => {
   <meta charset="utf-8" />
   <title>Titan OS Continental Fleet Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="[https://unpkg.com/leaflet@1.9.4/dist/leaflet.css](https://unpkg.com/leaflet@1.9.4/dist/leaflet.css)" />
-  <script src="[https://unpkg.com/leaflet@1.9.4/dist/leaflet.js](https://unpkg.com/leaflet@1.9.4/dist/leaflet.js)"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     body, html, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .leaflet-popup-content-wrapper { background: #1e293b; color: #f8fafc; border-radius: 8px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); }
@@ -3204,7 +2616,7 @@ app.get('/fleet-map', async (req, res) => {
     const map = L.map('map', { zoomControl: false }).setView([44.5, -79.5], 6);
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-    L.tileLayer('https://{s}[.basemaps.cartocdn.com/dark_all/](https://.basemaps.cartocdn.com/dark_all/){z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; CartoDB &copy; OpenStreetMap',
       maxZoom: 19
     }).addTo(map);
@@ -3236,16 +2648,15 @@ app.get('/fleet-map', async (req, res) => {
         fillOpacity: 0.85
       }).addTo(map);
 
-      marker.bindPopup(\`
-        <div>
-          <span class="badge \${badgeClass}">\${badgeText}</span>
-          <div class="site-title">\${pin.name}</div>
-          <div class="site-meta"><strong>Workflow:</strong> \${pin.mode}</div>
-          <div class="site-meta"><strong>Phase / Gate:</strong> \${pin.currentGate}</div>
-          <div class="site-note">\${pin.lastNote}</div>
-        </div>
-      \`);
+      const popupHtml = '<div style="min-width:180px;">' +
+        '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
+        '<div class="site-title">' + pin.name + '</div>' +
+        '<div class="site-meta"><strong>Workflow:</strong> ' + pin.mode + '</div>' +
+        '<div class="site-meta"><strong>Phase / Gate:</strong> ' + pin.currentGate + '</div>' +
+        '<div class="site-note">' + pin.lastNote + '</div>' +
+        '</div>';
 
+      marker.bindPopup(popupHtml);
       bounds.push([pin.lat, pin.lon]);
     });
 
