@@ -1,19 +1,21 @@
 /**
- * TITAN OS V4.9.5 — FRICTIONLESS ZERO-PIN VIDEO DELTA & ERGONOMIC EDGE DISPATCH
+ * TITAN OS V4.9.6 — BILINGUAL EDGE & MULTIMODAL TELEMETRY ORCHESTRATOR
  * 
  * Production Build Features:
  * 1. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
  * 2. Dedicated Media URL Persistence: Direct writes to 'Pre-Work Media' and 'Post-Work Media' in Daily Assignments.
- * 3. "Be The Water" Ingestion: 100% functionality with or without GPS pin drops; physical presence proven by vision.
- * 4. Additive Proximity Pin Cue: Optional 300m pin-drop automatically surfaces open work orders and intake prompts.
- * 5. Phonetic & Spoken Entity Router: Resolves "RCR" -> "RCOR", "Cinnamon" -> "Cynamon", spoken ticket IDs (#15, #9).
- * 6. Two-Phase Video Delta State Machine: Pre-work baseline (spoken blockers vaulted) -> post-work completion sweep.
- * 7. Proximity-Aware Smart Dispatcher: Suppresses redundant GPS navigation links for co-located courts (<0.15 km).
- * 8. Zero-Polling In-Memory Cache-Aside Engine: Protects Airtable 100k API ceiling via 10-minute RAM cache.
- * 9. 3-Tier Data Exhaust Siphon: Noise dropped in RAM; Dark Matter to Supabase; State mutations to Airtable.
- * 10. Self-Healing Schema Auto-Provisioner: Universal AST pruning for 422 error immunity.
- * 11. Spring 2027 Mobilization Gates: 50% Deposit, 7-Day Concrete Cure Lockout, Municipal Frost Law tripwires.
- * 12. Hardened Staging Gates: 0A Container/Glass & 0B Turf Offload verification.
+ * 3. Bilingual Edge Presentation: High-density English/Spanish cards for baseline lock, closeout, and rejections.
+ * 4. Psychrometric & Wind Meteorological Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive guards.
+ * 5. Autonomous Joy Cannon VIP Multicast: Fires playability certificates to compound owners/managers on closeout.
+ * 6. Full INOC Exhaust Vault: Restores granular writes to Inbound Messages 2 & Reports 2 for complete auditability.
+ * 7. "Be The Water" Ingestion: 100% functionality with or without GPS pins; presence proven forensically by camera.
+ * 8. Additive 300m Arrival Nudge: Optional location pin surfaces active work orders and intake directives.
+ * 9. Phonetic & Spoken Entity Router: Resolves "RCR" -> "RCOR", "Cinnamon" -> "Cynamon", spoken ticket IDs (#15, #9).
+ * 10. Proximity-Aware Smart Dispatcher: Suppresses redundant GPS navigation links for co-located courts (<0.15 km).
+ * 11. Zero-Polling In-Memory Cache-Aside Engine: Protects Airtable 100k API ceiling via 10-minute RAM cache.
+ * 12. 3-Tier Data Exhaust Siphon: Noise dropped in RAM; Dark Matter to Supabase; State mutations to Airtable.
+ * 13. Self-Healing Schema Auto-Provisioner: Universal AST pruning for 422 error immunity.
+ * 14. Spring 2027 Mobilization Gates: 50% Deposit, 7-Day Concrete Cure Lockout, Municipal Frost Law tripwires.
  */
 
 process.on('uncaughtException', (err) => {
@@ -347,14 +349,10 @@ function evaluateReadinessGate(siteRecord) {
 // 5. DECOUPLED BLIND VISION CLASSIFIER (ZERO AUDIO LEAKAGE)
 // ====================================================================
 
-/**
- * Pure visual inspection of video frames.
- * Evaluates imagery independently of audio claims to eliminate false check-ins.
- */
 async function inspectBlindVisualGroundTruth(mediaItem) {
   const systemInstruction = `
 You are the Titan OS Ground Truth Vision Gate.
-Your job is to classify the physical environment visible in these video frames.
+Classify the physical environment visible in these video frames with complete neutrality.
 
 STRICT GROUND TRUTH RULES:
 1. PADEL COURT VERIFICATION:
@@ -372,7 +370,7 @@ STRICT GROUND TRUTH RULES:
 OUTPUT JSON ONLY:
 {
   "is_padel_court": boolean,
-  "detected_scene": "Concise factual description of what is actually visible (e.g. 'Residential patio with outdoor table and garden', 'Office workspace with computer monitors', 'Padel court with blue turf and glass walls')",
+  "detected_scene": "Concise factual description in English of what is actually visible",
   "confidence": number
 }
 `;
@@ -388,7 +386,7 @@ OUTPUT JSON ONLY:
               data: mediaItem.buffer.toString('base64')
             }
           },
-          { text: "Examine ONLY the visual frames. Disregard any audio. Is this physically inside or at the apron of a regulation padel court?" }
+          { text: "Examine ONLY visual frames. Disregard any audio. Is this physically inside or at the apron of a regulation padel court?" }
         ]
       }
     ],
@@ -545,7 +543,7 @@ const GATE_NAMES = {
 };
 
 // ====================================================================
-// 7. GEOSPATIAL & WEATHER UTILITIES
+// 7. GEOSPATIAL & METEOROLOGICAL TELEMETRY
 // ====================================================================
 
 function isIndoorSite(site) {
@@ -805,9 +803,6 @@ async function lookupWorkerByName(name) {
   }) || null;
 }
 
-/**
- * Enhanced Site Resolver with Phonetic & Alias Normalization
- */
 async function lookupSite(groupIdOrPhone, siteName = null) {
   const sites = await getCachedSites();
 
@@ -822,14 +817,12 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
       .replace(/\b(?:bpc|court)\b/gi, '')
       .trim();
 
-    // 1. Exact or Substring match
     let match = sites.find(s => {
       const sName = String(s.fields['Site Name'] || '').toLowerCase();
       return sName.includes(normalized) || normalized.includes(sName);
     });
     if (match) return match;
 
-    // 2. Tokenized word overlap (e.g. "cynamon" or "rcor 1")
     const searchTokens = normalized.split(/\s+/).filter(t => t.length > 2);
     if (searchTokens.length > 0) {
       match = sites.find(s => {
@@ -913,7 +906,7 @@ async function resolveCallerIdentity(fromPhone) {
 }
 
 // ====================================================================
-// 9. WHATSAPP MESSAGING
+// 9. WHATSAPP MESSAGING & JOY CANNON ENGINE
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -1023,6 +1016,60 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
   }
 }
 
+async function fireJoyCannonMultiCast(siteId, eventPayload) {
+  try {
+    const sites = await getCachedSites();
+    const site = sites.find(s => s.id === siteId);
+    if (!site) return false;
+
+    const siteName = site.fields['Site Name'] || 'Facility Court';
+    const linkedContactIds = site.fields['Linked Contacts'] || [];
+
+    if (!Array.isArray(linkedContactIds) || linkedContactIds.length === 0) return false;
+
+    const contacts = await getCachedContacts();
+    for (const contactId of linkedContactIds) {
+      const contact = contacts.find(c => c.id === contactId);
+      if (!contact) continue;
+
+      const phone = contact.fields['Phone Number'];
+      const role = contact.fields['Role'];
+      const name = contact.fields['Contact Name'] || 'VIP Member';
+
+      if (!phone) continue;
+      const cleanPhone = String(phone).replace(/\D/g, '');
+
+      let outboundText = '';
+      if (role === 'Property Manager / Caretaker') {
+        outboundText = `🛠️ *BOUNCE OPERATIONS | LOGISTICS ALERT*\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `Attention ${name} — Service update for *${siteName}*:\n\n` +
+          `• *Window:* ${eventPayload.window || 'Completed Service Window'}\n` +
+          `• *Directive / Result:* ${eventPayload.operationalDetails || eventPayload.directive || 'Routine surface grooming & equipment audit verified.'}\n` +
+          `• *Court State:* ${eventPayload.status || '100% Tour-Ready'}\n\n` +
+          `Questions? Reply directly to reach INOC dispatch.`;
+      } else {
+        outboundText = `🎾 *BOUNCE CONCIERGE | PRIVATE RESERVE PASS*\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `Good day ${name},\n\n` +
+          `${eventPayload.executiveSummary || 'Your court has been audited and certified.'}\n\n` +
+          `🏟️ *Court:* ${siteName}\n` +
+          `🟢 *Status:* ${eventPayload.status || '100% Tour-Ready'}\n` +
+          `⚡ *Playability:* ${eventPayload.playabilityScore ? `${eventPayload.playabilityScore}%` : 'Tournament Spec'}\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `*Service completed and verified under your Private Reserve coverage.*`;
+      }
+
+      await sendWhatsAppMessage(cleanPhone, outboundText);
+      console.log(`🎾 [Joy Cannon] Multicast dispatched to ${name} (${role}) for ${siteName}`);
+    }
+    return true;
+  } catch (err) {
+    console.error('[Joy Cannon Broadcast Error]:', err);
+    return false;
+  }
+}
+
 async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, priority, directiveNotes, workerRecord) {
   if (!workerRecord) return false;
 
@@ -1031,23 +1078,23 @@ async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, prior
 
   const cleanPhone = String(workerPhone).replace(/\D/g, '');
   const dispatchCard = `📋 *TITAN OS | WORK ORDER ASSIGNED*\n` +
+    `*(Orden de Trabajo Asignada)*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎫 *Ticket #${ticketNumber} Assigned to You*\n` +
-    `🏟️ *Court:* ${courtName || 'Facility Court'}\n` +
-    `🔧 *Category:* ${taskCategory || 'Service'}\n` +
-    `⚡ *Priority:* ${priority || 'Medium'}\n` +
+    `🎫 *Ticket #${ticketNumber} Assigned / Asignado*\n` +
+    `🏟️ *Court / Cancha:* ${courtName || 'Facility Court'}\n` +
+    `🔧 *Scope / Alcance:* ${taskCategory || 'Service'}\n` +
+    `⚡ *Priority / Prioridad:* ${priority || 'Medium'}\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📝 *Directive:*\n` +
-    `${directiveNotes}\n\n` +
+    `📝 *Directive / Directiva:*\n${directiveNotes}\n\n` +
     `👉 *VIDEO DELTA PROTOCOL:*\n` +
-    `1. *Intake:* Send a 15-sec walkaround video narrating court condition & blockers before starting.\n` +
-    `2. *Closeout:* Send a 10-sec completion sweep when finished to close hands-free.`;
+    `1. *Intake / Entrada:* Send a 15-sec walkaround video narrating blockers before starting / Grabe video de 15s narrando impedimentos antes de empezar.\n` +
+    `2. *Closeout / Cierre:* Send a 10-sec completion sweep when finished to close hands-free / Grabe video de 10s de la cancha lista para cerrar.`;
 
   return await sendWhatsAppMessage(cleanPhone, dispatchCard);
 }
 
 // ====================================================================
-// 10. WORK ORDER CLOSEOUT ENGINE
+// 10. WORK ORDER CLOSEOUT ENGINE WITH JOY CANNON TRIGGER
 // ====================================================================
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
@@ -1150,19 +1197,32 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
   const ticketNum = activeTicket.fields['Assignment ID'] ? `#${activeTicket.fields['Assignment ID']}` : '';
   const courtLabel = targetSite?.fields?.['Site Name'] || 'Assigned Court';
 
-  const voucherReceipt = `🧾 *TITAN OS | CLOSEOUT RECEIPT*\n` +
+  const voucherReceipt = `🧾 *TITAN OS | CLOSEOUT RECEIPT (RECIBO DE CIERRE)*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `✅ *Ticket ${ticketNum} Completed*\n` +
-    `🏟️ *Court:* ${courtLabel}\n` +
-    `👤 *Technician:* ${workerName}\n` +
-    `⏱️ *Verified:* ${timeStr}\n` +
+    `✅ *Ticket ${ticketNum} Completed / Completado*\n` +
+    `🏟️ *Court / Cancha:* ${courtLabel}\n` +
+    `👤 *Technician / Técnico:* ${workerName}\n` +
+    `⏱️ *Verified / Verificado:* ${timeStr}\n` +
     (isVideoDelta ? `🎥 *Video Delta:* Baseline & Completion Sweeps Verified 🟢\n` : '') +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📋 *Work Performed:*\n` +
-    `${resolutionNotes}\n\n` +
-    `🟢 *Asset Condition:* Nominal (Court Open for Play)`;
+    `📋 *Work Performed / Trabajo Realizado:*\n${resolutionNotes}\n\n` +
+    `🟢 *Asset Condition / Estado:* Nominal (Court Open for Play / Cancha Lista para Juego)`;
 
   await sendWhatsAppMessage(dispatchTarget, voucherReceipt);
+
+  // AUTONOMOUS JOY CANNON TRIGGER (VIP / Compound courts)
+  if (targetSite && targetSite.id) {
+    const linkedContacts = targetSite.fields['Linked Contacts'] || [];
+    if (linkedContacts.length > 0) {
+      await fireJoyCannonMultiCast(targetSite.id, {
+        executiveSummary: `Service verified by technician ${workerName}. Your court has been audited and certified 100% Tour-Ready.`,
+        status: '100% Tour-Ready',
+        playabilityScore: 100,
+        operationalDetails: resolutionNotes,
+        window: 'Completed Service Window'
+      });
+    }
+  }
 
   if (targetSite) {
     const coords = await resolveCoordinates(targetSite);
@@ -1174,17 +1234,21 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
         const nextCat = nearest.ticket.fields['Task Category'] || 'Maintenance';
         const nextNotes = nearest.ticket.fields['Notes'] || 'Follow-up service directive';
         const nextTicketId = nearest.ticket.fields['Assignment ID'] || nearest.ticket.id;
+        const nextCoords = await resolveCoordinates(nearest.site);
+        const navUrl = nextCoords ? `https://www.google.com/maps/dir/?api=1&destination=${nextCoords.lat},${nextCoords.lon}` : '';
 
         const routeText = `📍 *TITAN PROACTIVE ROUTE RECOMMENDATION*\n` +
+          `*(Recomendación de Ruta Proactiva)*\n` +
           `━━━━━━━━━━━━━━━━━━━━\n` +
-          `Technician ${workerName} is now clear at *${courtLabel}*.\n\n` +
-          `🎯 *Nearest Open Dispatch:* ${nextCourt} (~${nextDist} km away)\n` +
-          `🔧 *Scope:* ${nextCat}\n` +
-          `📝 *Notes:* ${nextNotes.slice(0, 100)}`;
+          `Technician ${workerName} is clear at *${courtLabel}*.\n\n` +
+          `🎯 *Next Dispatch / Siguiente:* ${nextCourt} (~${nextDist} km)\n` +
+          `🔧 *Scope / Tarea:* ${nextCat}\n` +
+          `📝 *Notes / Notas:* ${nextNotes.slice(0, 90)}\n` +
+          (navUrl ? `🗺️ *Google Maps:* ${navUrl}\n` : '');
 
         const buttons = [
-          { id: `DISPATCH_APPROVE_${nextTicketId}_${worker?.id || 'any'}`, title: `⚡ Dispatch to ${nextCourt.slice(0, 8)}` },
-          { id: `ROUTE_FACTORY_${worker?.id || 'any'}`, title: `🏭 Return to Factory` }
+          { id: `DISPATCH_APPROVE_${nextTicketId}_${worker?.id || 'any'}`, title: `⚡ Dispatch: ${nextCourt.slice(0, 10)}` },
+          { id: `ROUTE_FACTORY_${worker?.id || 'any'}`, title: `🏭 Return to Shop` }
         ];
 
         await sendWhatsAppButtons(dispatchTarget, routeText, buttons);
@@ -1699,11 +1763,12 @@ async function processMediaBatch(batch) {
       console.warn(`[Blind Vision Gate] REJECTED non-court video: "${visualTruth.detected_scene}"`);
 
       const rejectionCard = `⛔ *TITAN OS | AUDIT REJECTED (VISUAL MISMATCH)*\n` +
+        `*(Auditoría Rechazada por Discrepancia Visual)*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `⚠️ *Ground Truth Verification Failed*\n\n` +
-        `👁️ *Camera Detected:* ${visualTruth.detected_scene}\n\n` +
-        `❌ *Verdict:* No padel court structure (glass, steel, mesh, or turf) detected in video frames.\n` +
-        `👉 *Action Required:* Stand at the court perimeter and record the physical asset to lock your baseline.`;
+        `⚠️ *Ground Truth Verification Failed / Verificación Fallida*\n\n` +
+        `👁️ *Camera Detected / Cámara Detectó:*\n${visualTruth.detected_scene || 'Non-court environment'}\n\n` +
+        `❌ *Verdict / Veredicto:*\nNo padel court structure (glass, steel, mesh, or turf) detected in video frames.\n_No se detectó estructura de pádel (cristal, acero, malla o césped) en el video._\n\n` +
+        `👉 *Action Required / Acción Requerida:*\nStand at the court perimeter and film the physical asset to lock baseline.\n_Párese en el perímetro de la cancha y grabe el activo físico para bloquear la línea base._`;
 
       await sendWhatsAppMessage(dispatchTarget, rejectionCard);
       return; // HARD STOP — 0 Airtable writes, zero database corruption!
@@ -1715,34 +1780,53 @@ async function processMediaBatch(batch) {
   // ==================================================================
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
 
+  // RESOLVE TARGETED TICKET (Spoken Entity Priority)
+  let activeTicket = null;
+  let targetedSite = site;
+
+  if (forensicAudit.spoken_ticket_id || forensicAudit.ticket_id) {
+    const explicitId = forensicAudit.spoken_ticket_id || forensicAudit.ticket_id;
+    activeTicket = await findActiveTicketForSite(null, explicitId);
+  }
+
+  if (!activeTicket && forensicAudit.spoken_court_name) {
+    const spokenSite = await lookupSite(null, forensicAudit.spoken_court_name);
+    if (spokenSite) {
+      targetedSite = spokenSite;
+      activeTicket = await findActiveTicketForSite(spokenSite.id);
+    }
+  }
+
+  if (!activeTicket && targetedSite) {
+    activeTicket = await findActiveTicketForSite(targetedSite.id);
+  }
+
+  const courtLabel = targetedSite?.fields?.['Site Name'] || forensicAudit.target_court_name || 'Assigned Court';
+
+  // EVALUATE HYPERLOCAL METEOROLOGICAL TRIPWIRES
+  let weatherNotice = '';
+  if (targetedSite && !indoorSite) {
+    const coords = await resolveCoordinates(targetedSite);
+    if (coords) {
+      const weather = await getHyperlocalWeather(coords.lat, coords.lon);
+      if (weather) {
+        const dewDelta = weather.temp - weather.dewPoint;
+        if (weather.windGusts > 37) {
+          weatherNotice += `\n⛔ *SAFETY NOTICE / ALERTA DE SEGURIDAD:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 4 glass seating suspended / Ráfagas de viento peligrosas. Montaje de cristal suspendido.`;
+        } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
+          weatherNotice += `\n🌧️ *WEATHER NOTICE / ALERTA DE LLUVIA:* Rain/storm detected. Hold outdoor assembly & gluing / Lluvia activa. Suspender pegado y montaje exterior.`;
+        } else if (weather.humidity > 85 || dewDelta <= 2) {
+          weatherNotice += `\n⚠️ *CONDENSATION NOTICE / ALERTA DE HUMEDAD:* High surface moisture risk. Hold Gate 7 turf adhesive / Riesgo de condensación. Suspender adhesivo de césped.`;
+        }
+      }
+    }
+  }
+
   if (hasVideo) {
     const videoIndex = items.findIndex(item => item.type === 'video');
     const videoStorageUrl = storageResults[videoIndex]?.signedUrl || '';
     const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Technician';
     const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-
-    // RESOLVE TARGETED TICKET (Spoken Entity Priority)
-    let activeTicket = null;
-    let targetedSite = site;
-
-    if (forensicAudit.spoken_ticket_id || forensicAudit.ticket_id) {
-      const explicitId = forensicAudit.spoken_ticket_id || forensicAudit.ticket_id;
-      activeTicket = await findActiveTicketForSite(null, explicitId);
-    }
-
-    if (!activeTicket && forensicAudit.spoken_court_name) {
-      const spokenSite = await lookupSite(null, forensicAudit.spoken_court_name);
-      if (spokenSite) {
-        targetedSite = spokenSite;
-        activeTicket = await findActiveTicketForSite(spokenSite.id);
-      }
-    }
-
-    if (!activeTicket && targetedSite) {
-      activeTicket = await findActiveTicketForSite(targetedSite.id);
-    }
-
-    const courtLabel = targetedSite?.fields?.['Site Name'] || forensicAudit.target_court_name || 'Assigned Court';
 
     if (!activeTicket) {
       await sendWhatsAppMessage(dispatchTarget, `⚠️ Visual verified, but no active open work order was found for *${courtLabel}*.`);
@@ -1759,7 +1843,7 @@ async function processMediaBatch(batch) {
 
     if (isIntakeBaseline) {
       const blockers = forensicAudit.blockers_detected || [];
-      const blockerList = blockers.length > 0 ? blockers.map(b => `• ${b}`).join('\n') : 'None reported';
+      const blockerList = blockers.length > 0 ? blockers.map(b => `• ${b}`).join('\n') : 'None reported / Ninguno';
 
       const updatedNotes = `${ticketExistingNotes}\n\n[PRE-WORK BASELINE VIDEO - ${timeStr} by ${workerName}]:\nURL: ${videoStorageUrl}\nSpoken Narration: "${forensicAudit.transcription || 'Court sweep logged.'}"\nBlockers: ${blockers.join(', ') || 'None'}`.trim();
 
@@ -1777,21 +1861,28 @@ async function processMediaBatch(batch) {
       }
 
       let baselineCard = `🎥 *TITAN OS | PRE-WORK BASELINE LOCKED*\n` +
+        `*(Línea Base Previa Bloqueada)*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `🎫 *Ticket #${activeTicket.fields['Assignment ID'] || activeTicket.id} Active*\n` +
-        `🏟️ *Court:* ${courtLabel}\n` +
-        `👤 *Technician:* ${workerName}\n` +
-        `⏱️ *Intake Audit:* ${timeStr}\n` +
+        `🎫 *Ticket #${activeTicket.fields['Assignment ID'] || activeTicket.id} Active / Activo*\n` +
+        `🏟️ *Court / Cancha:* ${courtLabel}\n` +
+        `👤 *Technician / Técnico:* ${workerName}\n` +
+        `⏱️ *Time / Hora:* ${timeStr}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `🎙️ *Spoken Narration:*\n"${forensicAudit.transcription || 'Visual sweep recorded.'}"\n\n`;
+        `🎙️ *Spoken Narration / Audio:*\n"${forensicAudit.transcription || 'Visual sweep recorded / Barrido visual registrado.'}"\n\n`;
 
       if (blockers.length > 0) {
-        baselineCard += `⚠️ *Blockers Detected & Vaulted:*\n${blockerList}\n\n`;
+        baselineCard += `⚠️ *Blockers Detected / Bloqueadores:*\n${blockerList}\n\n`;
       } else {
-        baselineCard += `🟢 *Baseline Condition:* Nominal (No blockers logged)\n\n`;
+        baselineCard += `🟢 *Baseline Condition / Condición:* Nominal (No blockers logged / Sin bloqueadores)\n\n`;
       }
 
-      baselineCard += `👉 *Status: IN PROGRESS.*\nProceed with service. When finished, send a 10-second completion video to auto-verify and close hands-free.`;
+      if (weatherNotice) {
+        baselineCard += `${weatherNotice}\n\n`;
+      }
+
+      baselineCard += `👉 *Status: IN PROGRESS / EN PROGRESO.*\n` +
+        `Proceed with service. When finished, send a 10-second completion video to auto-verify and close hands-free.\n` +
+        `_Realice el trabajo. Al terminar, envíe video de 10s para verificar y cerrar automáticamente._`;
 
       await sendWhatsAppMessage(dispatchTarget, baselineCard);
       return;
@@ -1824,11 +1915,59 @@ async function processMediaBatch(batch) {
     }
   }
 
-  // STANDARD AUDIT / GATE EXECUTION
-  let replyText = forensicAudit.whatsapp_status_text;
+  // STANDARD PHOTO AUDIT & STAGING GATES (0A & 0B)
+  let replyText = forensicAudit.whatsapp_status_text || 'Audit logged.';
+  if (weatherNotice) replyText += `\n\n${weatherNotice}`;
+
   const ok = await sendWhatsAppMessage(dispatchTarget, replyText);
   if (!ok && dispatchTarget !== fromPhone && fromPhone) {
     await sendWhatsAppMessage(fromPhone, replyText);
+  }
+
+  // RESTORE FULL INOC FORENSIC DATA EXHAUST (Inbound Messages 2 & Reports 2)
+  try {
+    const inboundRecordIds = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const storageResult = storageResults[i];
+      const speechTranscript = forensicAudit.transcription ? `[Transcribed Speech]: ${forensicAudit.transcription}` : item.caption;
+
+      const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
+        'Message ID': item.messageId,
+        'Worker Phone Raw': fromPhone,
+        'Message Type': item.type,
+        'Caption Text': speechTranscript,
+        'Media URL': storageResult.signedUrl,
+        'Media Path': storageResult.storagePath,
+        'Raw Payload JSON': JSON.stringify(item.rawMessage)
+      });
+      if (inboundRecord?.id) inboundRecordIds.push(inboundRecord.id);
+    }
+
+    const reportsPayload = {
+      'Inbound Messages 2': inboundRecordIds,
+      'Sites': targetedSite ? [targetedSite.id] : [],
+      'Workflow Mode': cumulativeContext.workflowMode,
+      'Overall Status': forensicAudit.status_observed,
+      'Site Conditions': forensicAudit.site_conditions || 'Clear',
+      'Action Items': (forensicAudit.action_items || []).join('\n'),
+      'Status Observed': forensicAudit.status_observed,
+      'Action Intent': forensicAudit.action_intent || 'MAINTENANCE_LOG',
+      'WhatsApp Reply Text': replyText,
+      'Clean JSON': JSON.stringify(forensicAudit, null, 2)
+    };
+
+    await airtableWriteWithAutoDrop('Reports 2', reportsPayload);
+
+    if (targetedSite) {
+      await airtableWriteWithAutoDrop('Sites', {
+        'Last Intent': forensicAudit.action_intent || 'TRIAGE_LOG',
+        'Last Note': forensicAudit.worker_summary
+      }, targetedSite.id);
+    }
+    console.log(`📊 [INOC Vault] Successfully synced forensic report to Reports 2 & Inbound Messages 2.`);
+  } catch (inocErr) {
+    console.warn('[INOC Vault Exception]:', inocErr.message);
   }
 }
 
@@ -1928,9 +2067,7 @@ app.post('/webhook', async (req, res) => {
 
     const indoorSite = isIndoorSite(site);
 
-    // ================================================================
     // INTERACTIVE BUTTON REPLIES
-    // ================================================================
     if (message.type === 'interactive') {
       const interactive = message.interactive;
       const buttonReply = interactive?.button_reply;
@@ -1985,16 +2122,17 @@ app.post('/webhook', async (req, res) => {
 
           if (isCoLocated || distanceKm === 0.0) {
             const onSiteCard = `🎾 *TITAN OS | ON-SITE DISPATCH ACTIVATED*\n` +
+              `*(Despacho en Sitio Activado)*\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
-              `🎫 *Ticket #${nextTicketId} Activated*\n` +
-              `🏟️ *Court:* ${targetCourtName}\n` +
-              `📍 *Distance:* ~0.0 km (Co-located at current venue)\n` +
-              `🔧 *Scope:* ${taskCategory}\n` +
+              `🎫 *Ticket #${nextTicketId} Activated / Activado*\n` +
+              `🏟️ *Court / Cancha:* ${targetCourtName}\n` +
+              `📍 *Distance / Distancia:* ~0.0 km (Co-located at current venue / En el mismo club)\n` +
+              `🔧 *Scope / Alcance:* ${taskCategory}\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
               `👉 *STEP 1: INTAKE SWEEP (BEFORE TOUCHING TOOLS)*\n` +
-              `Record a 15-second walkaround video of the court.\n` +
-              `Speak out loud any conditions and blockers (e.g. missing crank, frayed strap, sand drift, glass scuffs).\n\n` +
-              `_Titan will lock the baseline video into the vault before work begins._`;
+              `Record a 15-second walkaround video of the court. Speak court conditions & blockers out loud.\n\n` +
+              `👉 *PASO 1: BARRIDO DE ENTRADA (ANTES DE TOCAR HERRAMIENTAS)*\n` +
+              `Grabe un video de 15 segundos alrededor de la cancha. Mencione en voz alta el estado y cualquier impedimento.`;
 
             await dispatchReply(onSiteCard);
           } else {
@@ -2004,14 +2142,15 @@ app.post('/webhook', async (req, res) => {
             const distLabel = distanceKm !== null ? `~${distanceKm.toFixed(1)} km away` : 'En Route';
 
             const transitCard = `🚗 *TITAN OS | TRANSIT DISPATCH ACTIVATED*\n` +
+              `*(Despacho en Tránsito Activado)*\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
-              `🎫 *Ticket #${nextTicketId} Assigned*\n` +
-              `🏟️ *Destination:* ${targetCourtName} (${distLabel})\n` +
-              `🗺️ *Navigation:* ${navLink}\n` +
-              `🔧 *Scope:* ${taskCategory}\n` +
+              `🎫 *Ticket #${nextTicketId} Assigned / Asignado*\n` +
+              `🏟️ *Destination / Destino:* ${targetCourtName} (${distLabel})\n` +
+              `🗺️ *Google Maps:* ${navLink}\n` +
+              `🔧 *Scope / Tarea:* ${taskCategory}\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
-              `👉 *UPON ARRIVAL (STEP 1):*\n` +
-              `Send a 15-second intake walkaround video narrating court condition and any blockers before starting work.`;
+              `👉 *UPON ARRIVAL (STEP 1) / AL LLEGAR (PASO 1):*\n` +
+              `Send a 15-second walkaround video before starting work / Envíe video de 10-15s antes de empezar a trabajar.`;
 
             await dispatchReply(transitCard);
           }
@@ -2059,7 +2198,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (selectedId.startsWith('ROUTE_FACTORY_')) {
-        await dispatchReply(`🏭 *RETURN ROUTE LOGGED*\nTechnician instructed to head back to Orillia Factory for staging.`);
+        await dispatchReply(`🏭 *RETURN ROUTE LOGGED / REGRESO A FÁBRICA*\nTechnician heading back to Orillia Factory for staging / Técnico en camino a la planta de Orillia.`);
         return;
       }
 
@@ -2067,9 +2206,7 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // ================================================================
-    // LOCATION PIN-DROP (ZERO-FRICTION OPTIONAL CHECK-IN NUDGE)
-    // ================================================================
+    // LOCATION PIN-DROP (ADDITIVE 300M ARRIVAL TRIGGER)
     if (message.type === 'location') {
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
@@ -2104,42 +2241,39 @@ app.post('/webhook', async (req, res) => {
 
         const activeTicket = await findActiveTicketForSite(site.id);
 
-        let checkinResponse = `📍 *ON-SITE ARRIVAL VERIFIED*\n` +
+        let checkinResponse = `📍 *ON-SITE ARRIVAL VERIFIED / LLEGADA EN SITIO*\n` +
           `━━━━━━━━━━━━━━━━━━━━\n` +
-          `👤 *Technician:* ${workerName}\n` +
-          `🏟️ *Court:* ${site.fields['Site Name']}\n` +
-          `⏱️ *Time:* ${timestamp} (within ${Math.round(distanceMeters)}m)\n`;
+          `👤 *Technician / Técnico:* ${workerName}\n` +
+          `🏟️ *Court / Cancha:* ${site.fields['Site Name']}\n` +
+          `⏱️ *Time / Hora:* ${timestamp} (~${Math.round(distanceMeters)}m)\n`;
 
         if (activeTicket) {
           const ticketNum = activeTicket.fields['Assignment ID'] ? `#${activeTicket.fields['Assignment ID']}` : '';
           const taskCat = activeTicket.fields['Task Category'] || activeTicket.fields['Assignment Type'] || 'Service';
 
-          // Shift status to In Progress
           await airtableWriteWithAutoDrop('Daily Assignments', { 'Status': 'In Progress' }, activeTicket.id);
 
-          checkinResponse += `🎫 *Active Ticket:* ${ticketNum} (${taskCat})\n` +
+          checkinResponse += `🎫 *Active Ticket / Boleto Activo:* ${ticketNum} (${taskCat})\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
-            `👉 *STEP 1: INTAKE SWEEP*\n` +
-            `Send a 15-second walkaround video before touching tools.\n` +
-            `Speak court condition and any blockers out loud to lock your baseline.`;
+            `👉 *STEP 1: INTAKE SWEEP / PASO 1: ENTRADA*\n` +
+            `Send your 15-second walkaround video before touching tools.\n` +
+            `_Envíe su video de 15 segundos narrando impedimentos antes de empezar a trabajar._`;
         } else {
-          checkinResponse += `\n🟢 No active work orders pending. Shift logged on court twin.`;
+          checkinResponse += `\n🟢 No active work orders pending. Shift logged on court twin / Sin órdenes pendientes.`;
         }
 
         await dispatchReply(checkinResponse);
       } else {
         await dispatchReply(
-          `📍 *LOCATION PIN RECEIVED*\n\n` +
-          `You are currently ${(distanceMeters / 1000).toFixed(1)} km away from *${site.fields['Site Name']}*.\n` +
-          `Check-in requires being within 300m of the court.`
+          `📍 *LOCATION PIN RECEIVED / PIN RECIBIDO*\n\n` +
+          `Distance to court: ${(distanceMeters / 1000).toFixed(1)} km from *${site.fields['Site Name']}*.\n` +
+          `Arrival check-in requires being within 300m / El check-in requiere estar a menos de 300m.`
         );
       }
       return;
     }
 
-    // ================================================================
     // TEXT PROCESSING & AMBIENT SIPHON
-    // ================================================================
     if (message.type === 'text') {
       const rawText = message.text.body.trim();
       const [trigger, ...args] = rawText.split(' ');
@@ -2157,6 +2291,50 @@ app.post('/webhook', async (req, res) => {
           const targetBindingId = groupJid || fromPhone;
           await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': targetBindingId }, targetSite.id);
           await dispatchReply(`✅ *CONNECTED TO ${targetSite.fields['Site Name'].toUpperCase()}*`);
+          return;
+        }
+
+        if (intent === 'LOCATION') {
+          if (!site) {
+            await dispatchReply(`⚠️ Please link a court first with /group <Court Name> to fetch coordinates.`);
+            return;
+          }
+          const coords = await resolveCoordinates(site);
+          if (!coords) {
+            await dispatchReply(`📍 No GPS coordinates locked for *${site.fields['Site Name']}*. Drop a location pin to anchor!`);
+            return;
+          }
+          const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}`;
+          await dispatchReply(`📍 *${site.fields['Site Name'].toUpperCase()} | GPS ANCHOR*\n━━━━━━━━━━━━━━━━━━━━\n• Coordinates: ${coords.lat}, ${coords.lon}\n• Turn-by-Turn: ${navUrl}`);
+          return;
+        }
+
+        if (intent === 'WEATHER') {
+          if (!site) {
+            await dispatchReply(`⚠️ Please link a court first with /group <Court Name> to check telemetry.`);
+            return;
+          }
+          const coords = await resolveCoordinates(site);
+          if (!coords) {
+            await dispatchReply(`📍 Court coordinates not found. Drop a location pin first!`);
+            return;
+          }
+          const weather = await getHyperlocalWeather(coords.lat, coords.lon);
+          if (!weather) {
+            await dispatchReply(`⚠️ Weather service temporarily unavailable.`);
+            return;
+          }
+          const dewDelta = weather.temp - weather.dewPoint;
+          const wReport = `🌤️ *HYPERLOCAL WEATHER | ${site.fields['Site Name'].toUpperCase()}*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `• Temperature: ${weather.temp}°C (Dew Point: ${weather.dewPoint}°C)\n` +
+            `• Wind: ${weather.windSpeed} km/h (Gusts: ${weather.windGusts} km/h)\n` +
+            `• Humidity: ${weather.humidity}% (Delta: ${dewDelta.toFixed(1)}°C)\n` +
+            `• Rain Probability (Next 4h): ${weather.precipProbability4h}%\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            (weather.windGusts > 37 ? `⛔ *WIND WARNING:* Gusts > 20 kts. Glass seating suspended.\n` : `🟢 Wind nominal for glass installation.\n`) +
+            (weather.humidity > 85 || dewDelta <= 2 ? `⚠️ *MOISTURE WARNING:* Turf adhesive hold.\n` : `🟢 Surface dry for turf gluing.`);
+          await dispatchReply(wReport);
           return;
         }
 
@@ -2237,14 +2415,14 @@ app.post('/webhook', async (req, res) => {
         }
 
         if (intent === 'HELP') {
-          await dispatchReply(`🤖 *TITAN OS COMMAND MATRIX*\n\n` +
-            `• */g* or */gate* — Spring 2027 Readiness Gate Check\n` +
-            `• */context* [Court] — Review ambient field intelligence & notes\n` +
-            `• */search* <keyword> — Search historical dark matter field logs\n` +
-            `• */s* — Site Status\n` +
-            `• */w* — Hyperlocal Weather & Wind\n` +
-            `• */map* — GPS Navigation Anchor\n` +
-            `• */board* — Compound Court Board\n` +
+          await dispatchReply(`🤖 *TITAN OS COMMAND MATRIX (COMANDOS)*\n\n` +
+            `• */w* — Hyperlocal Weather & Wind / Clima y Viento\n` +
+            `• */map* — Google Maps Navigation / Navegación GPS\n` +
+            `• */s* — Site Status / Estado de Cancha\n` +
+            `• */g* — Spring 2027 Mobilization Gate Check\n` +
+            `• */context* [Court] — Review ambient field notes\n` +
+            `• */search* <keyword> — Search dark matter field vault\n` +
+            `• */board* — Compound Court Reservations Board\n` +
             `• */fleet* — Continental Fleet Map\n` +
             `• */group <Court Name>* — Bind WhatsApp Channel\n\n` +
             `🎥 Video sweeps automatically lock pre-work baselines & post-work completion deltas hands-free.`);
@@ -2332,9 +2510,7 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // ================================================================
     // MULTIMODAL MEDIA BATCHING (PHOTOS, VIDEOS & AUDIO)
-    // ================================================================
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
     const isAudio = message.type === 'audio' || message.type === 'voice';
@@ -2426,8 +2602,8 @@ app.post('/webhook', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.9.5',
-    engine: 'Titan OS V4.9.5 (Frictionless Zero-Pin Video Delta & Ergonomic Edge Dispatch)',
+    version: '4.9.6',
+    engine: 'Titan OS V4.9.6 (Bilingual Edge & Multimodal Telemetry Hub)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0
@@ -2437,10 +2613,11 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V4.9.5 RUNNING ON PORT ${PORT}`);
-  console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
-  console.log(`🎥 VIDEO DELTA: Pre/Post URL Persistence & Zero-Pin Ingestion Active`);
-  console.log(`🎙️ PHONETIC ROUTER: RCR->RCOR, Cinnamon->Cynamon Priority Active`);
+  console.log(`🚀 TITAN OS V4.9.6 RUNNING ON PORT ${PORT}`);
+  console.log(`🌐 BILINGUAL EDGE: English & Spanish Operations Active`);
+  console.log(`🌦️ METEOROLOGY: Wind Gust & Psychrometric Safety Tripwires Re-engaged`);
+  console.log(`🎾 JOY CANNON: Autonomous VIP Playability Multicast Active`);
+  console.log(`📊 INOC EXHAUST: Granular Reports 2 & Inbound Messages 2 Vaulting Active`);
   console.log(`====================================================================`);
 
   try {
