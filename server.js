@@ -1,32 +1,34 @@
 /**
- * TITAN OS V5.3.2 — RELIABLE JOY CANNON DISPATCH & PHONE SANITIZATION
+ * TITAN OS V5.3.3 — OPEN FOR PLAY READINESS & JOY CANNON ENGINE
  * 
  * Production Build Features:
- * 1. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
+ * 1. Open For Play Readiness Engine: Overrides pre-con checks for commissioned/maintenance courts
+ *    ('OPEN FOR PLAY 🎾') and headquarters/operational nodes ('OPERATIONAL 🏢').
+ * 2. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
  *    missed client celebratory alerts when gates are in-progress or partial.
- * 2. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
+ * 3. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
  *    direct Meta Graph API calls to prevent HTTP 400 (#100) invalid parameter rejections.
- * 3. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
+ * 4. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
  *    turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
  *    wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
- * 4. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 5. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
+ * 5. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 6. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
  *    ("Where is Levinsky?", "Send pin for Don Walker"), weather, readiness, and status lookups.
- * 6. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
+ * 7. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
  *    zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
- * 7. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
+ * 8. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
  *    Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
- * 8. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
+ * 9. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
  *    never trigger false gate skips. Each court row is graded independently.
- * 9. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
- *    as a quality check without blocking gate advancement.
- * 10. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
- * 11. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
- * 12. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
+ * 10. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
+ *     as a quality check without blocking gate advancement.
+ * 11. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
+ * 12. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
+ * 13. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
  *     Airtable's native 'Attachment(s)' field for instant Automation 4 Gmail export.
- * 13. Universal Visual Triage Router: Bifurcates receipts and invoices from court walkarounds.
- * 14. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
- * 15. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
+ * 14. Universal Visual Triage Router: Bifurcates receipts and invoices from court walkarounds.
+ * 15. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
+ * 16. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
  */
 
 process.on('uncaughtException', (err) => {
@@ -305,7 +307,28 @@ async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
 // ====================================================================
 function evaluateReadinessGate(siteRecord) {
   const f = siteRecord.fields || siteRecord;
+  const status = f['Site Status'] || '';
+  const mode = f['Workflow Mode'] || '';
 
+  // 1. Bypass pre-con checks if the court is already built or in maintenance
+  if (status === 'COMPLETE' || mode === 'MAINTENANCE') {
+    return {
+      status: 'OPEN FOR PLAY 🎾',
+      details: 'Court is fully constructed and open for play.',
+      isReady: true
+    };
+  }
+
+  // 2. Bypass for internal headquarters, inventory, or production nodes
+  if (['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY'].includes(mode)) {
+    return {
+      status: 'OPERATIONAL 🏢',
+      details: 'Internal facility / operational node.',
+      isReady: true
+    };
+  }
+
+  // 3. Pre-Construction Mobilization Gate for active/upcoming builds
   const deposit = f['Deposit Status'] || '';
   const hasDeposit = (deposit === '50% Deposit Received' || deposit === 'Paid in Full');
 
@@ -1145,7 +1168,7 @@ async function resolveCallerIdentity(fromPhone) {
       let siteRecord = null;
       if (siteId) {
         const sites = await getCachedSites();
-        siteRecord = sites.find(s => s.id === siteId) || null;
+        siteRecord = sites.find(s => siteId === s.id) || null;
       }
 
       return {
@@ -2449,14 +2472,15 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.3.2',
-    engine: 'Titan OS V5.3.2 (Reliable Joy Cannon Dispatch & Phone Sanitization)'
+    version: '5.3.3',
+    engine: 'Titan OS V5.3.3 (Open For Play Readiness Engine & Joy Cannon Sanitization)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.3.2 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.3.3 RUNNING ON PORT ${PORT}`);
+  console.log(`🎾 OPEN FOR PLAY: Readiness Gate Overrides Active`);
   console.log(`🎉 JOY CANNON: Direct Milestone Advancement & Number Sanitizer Active`);
   console.log(`🌤️ PROACTIVE WEATHER ENGINE: Wind, Cold Glue (<10°C), Moisture & Heat Active`);
   console.log(`📍 GOOGLE GEO ENTERPRISE: Geocoding, Driving, Satellite & Twin Nudging Active`);
