@@ -1,28 +1,30 @@
 /**
- * TITAN OS V5.1.0 — API QUOTA PROTECTOR & FACILITY PANORAMA ENGINE
+ * TITAN OS V5.2.0 — FINANCIAL RECEIPT INGESTION & UNIVERSAL VISUAL TRIAGE ENGINE
  * 
  * Production Build Features:
- * 1. In-Place RAM Cache Mutation: Updates Airtable records in RAM immediately upon write rather than
+ * 1. Universal Visual Triage Router: Differentiates paper receipts, invoices, and packing slips
+ *    from padel court sweeps, preventing non-construction photos from corrupting the Sites ledger.
+ * 2. Automated Expense Ingestion: Extracts vendor, line items, date, grand total, and currency from
+ *    receipt batches, logging structured expense tickets into Daily Assignments.
+ * 3. Google Geo Coordinate Auto-Healer: Sanitizes duplicate minus signs (e.g. '--80.2866') across
+ *    geocoding and routing, auto-persisting clean coordinates back into Airtable.
+ * 4. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for automated
+ *    off-hours court health audits from elevated cage cameras.
+ * 5. In-Place RAM Cache Mutation: Updates Airtable records in RAM immediately upon write rather than
  *    invalidating the cache, eliminating repetitive site and worker read calls across active work shifts.
- * 2. Cached Daily Assignments Engine: Caches open dispatch tickets in memory with a 3-minute TTL,
+ * 6. Cached Daily Assignments Engine: Caches open dispatch tickets in memory with a 3-minute TTL,
  *    eliminating API roundtrips on routine arrival checks and distance routing.
- * 3. Selective Forensic Vault Sync: Retains full Supabase ambient logging while writing to Airtable
+ * 7. Selective Forensic Vault Sync: Retains full Supabase ambient logging while writing to Airtable
  *    'Inbound Messages 2' and 'Reports 2' exclusively when verified milestones advance or critical alerts occur.
- * 4. Multi-Court Facility Wide-Angle Pan: Gemini visually parses 180° sweeps across multi-court pads
- *    (e.g., Fairgrounds Leaside, RCOR) to evaluate each court's gates independently with zero installer speech required.
- * 5. Consolidated Digital Twins: Single venue records track aggregate facility health while storing per-court breakdown (e.g. C1: G4 | C2: G2).
- * 6. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
- * 7. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria
- *    even during completely silent or background-noise walkarounds (identifies slab, frame uprights, mesh, glass, turf).
- * 8. In-Progress Stage Tracking: Captures verified completed gates alongside active installation phases.
- * 9. Multimodal Concierge Onboarding: Final handover prompts clients to text, voice note, or send a video for future service.
- * 10. Strict Pipeline Bifurcation: Installation sites strictly mutate Sites state; Daily Assignments tickets remain isolated.
- * 11. Schema Auto-Healer Hardening: Omit computed formula fields ('Completion %') to prevent HTTP 422 write faults.
- * 12. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um", "will will") while preserving technical terminology.
- * 13. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently on every sweep.
- * 14. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
- * 15. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
- * 16. Google Geo Enterprise Engine: Millimeter geocoding, contractor satellite staging views, twin-court pin nudging, and continental backfill.
+ * 8. Multi-Court Facility Wide-Angle Pan: Gemini visually parses 180° sweeps across multi-court pads
+ *    (e.g., Fairgrounds Leaside, RCOR) to evaluate each court's gates independently.
+ * 9. Consolidated Digital Twins: Single venue records track aggregate facility health while storing
+ *    per-court breakdowns (e.g. C1: G4 | C2: G2).
+ * 10. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
+ * 11. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria.
+ * 12. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um") while preserving technical terminology.
+ * 13. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently.
+ * 14. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds.
  */
 
 process.on('uncaughtException', (err) => {
@@ -60,7 +62,7 @@ const CONFIG = {
   port: PORT,
   meta: {
     verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
-    accessToken: process.env.META_ACCESS_TOKEN,
+    accessToken: process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
     appSecret: process.env.META_APP_SECRET,
     phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
     graphApiUrl: 'https://graph.facebook.com/v21.0'
@@ -83,6 +85,9 @@ const CONFIG = {
   },
   google: {
     apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
+  },
+  gamecam: {
+    webhookSecret: process.env.GAMECAM_WEBHOOK_SECRET || 'bpc_titan_gamecam_secret_2026'
   }
 };
 
@@ -274,7 +279,7 @@ async function streamToDarkMatterVault({
     }
 
     const inserted = await res.json();
-    console.log(`🌌 [Dark Matter Vault] Archived ambient field note #${inserted?.[0]?.id || ''} for ${siteName}`);
+    console.log(`🌌 [Dark Matter Vault] Archived ambient note #${inserted?.[0]?.id || ''} for ${siteName}`);
     return inserted?.[0] || null;
   } catch (err) {
     console.error('[Dark Matter Vault Exception]:', err.message);
@@ -383,7 +388,176 @@ function evaluateReadinessGate(siteRecord) {
 }
 
 // ====================================================================
-// 5. DECOUPLED BLIND VISION CLASSIFIER (ZERO AUDIO LEAKAGE)
+// 5. UNIVERSAL VISUAL TRIAGE ENGINE (RECEIPTS VS COURT SWEEPS)
+// ====================================================================
+
+const VISUAL_TRIAGE_PROMPT = `
+You are the Titan OS Universal Visual Triage Engine for Bounce Padel.
+Analyze the provided image(s) or video frames to classify the primary operational subject.
+
+CATEGORIES:
+1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, gas station, fuel, hardware store, Fastenal, restaurants/meals, lumber, supplies, equipment rental, parking), store invoices, register slips.
+2. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, lighting, net, concrete pad, or sports facility walkaround.
+3. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading.
+4. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, screenshots with no work context.
+
+IF FINANCIAL_RECEIPT:
+Examine every receipt visible across the images and extract:
+- "receipts": Array of objects:
+  [
+    {
+      "vendor": "Merchant/Store name (e.g. Home Depot, Shell, Tim Hortons, Fastenal)",
+      "date": "YYYY-MM-DD or null",
+      "total_amount": Number (e.g. 54.32),
+      "currency": "CAD" | "USD",
+      "category": "Materials & Hardware" | "Fuel & Travel" | "Equipment & Tools" | "Meals & Subsistence" | "General Expense",
+      "items_summary": "1-sentence concise description of purchased items",
+      "invoice_number": "string or null"
+    }
+  ],
+- "grand_total": Total sum of all receipt amounts as a number,
+- "primary_currency": "CAD" | "USD",
+- "summary": "1-sentence executive summary of purchases"
+
+OUTPUT FORMAT (JSON ONLY):
+{
+  "media_category": "FINANCIAL_RECEIPT" | "COURT_FACILITY" | "FREIGHT_LOGISTICS" | "IRRELEVANT_NOISE",
+  "confidence": number,
+  "grand_total": number or null,
+  "primary_currency": "CAD" | "USD" | null,
+  "summary": "string or null",
+  "receipts": []
+}
+`;
+
+async function classifyVisualMediaIntent(items) {
+  const contentParts = [{ text: "Determine the primary subject of these images. If receipts, extract all financial data." }];
+
+  for (const item of items) {
+    contentParts.push({
+      inline_data: {
+        mime_type: item.mimeType,
+        data: item.buffer.toString('base64')
+      }
+    });
+  }
+
+  const payload = {
+    system_instruction: { parts: [{ text: VISUAL_TRIAGE_PROMPT }] },
+    contents: [{ parts: contentParts }],
+    generationConfig: {
+      temperature: 0.0,
+      responseMimeType: 'application/json',
+      thinkingConfig: { thinkingBudget: 0 }
+    }
+  };
+
+  try {
+    const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) throw new Error(`Visual triage failed (${res.status}): ${await res.text()}`);
+
+    const result = await res.json();
+    const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) return { media_category: 'COURT_FACILITY', confidence: 0.5 };
+
+    return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+  } catch (err) {
+    console.error('[Visual Triage Exception]:', err.message);
+    return { media_category: 'COURT_FACILITY', confidence: 0.5 };
+  }
+}
+
+async function handleFinancialReceiptBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity }) {
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
+  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const receipts = visualTriage.receipts || [];
+  const grandTotal = visualTriage.grand_total ? visualTriage.grand_total.toFixed(2) : '0.00';
+  const currency = visualTriage.primary_currency || 'CAD';
+  const summaryText = visualTriage.summary || 'Job-site expense receipts submitted via WhatsApp.';
+
+  // Build Structured Notes for Daily Assignments Ledger
+  let formattedNotes = `[EXPENSE RECEIPT INGESTION - ${workerName} at ${timeStr}]\n` +
+    `Total: $${grandTotal} ${currency}\n` +
+    `Summary: ${summaryText}\n\n` +
+    `RECEIPTS BREAKDOWN:\n`;
+
+  if (receipts.length > 0) {
+    receipts.forEach((r, idx) => {
+      formattedNotes += `${idx + 1}. ${r.vendor || 'Merchant'} — $${r.total_amount ? r.total_amount.toFixed(2) : '0.00'} (${r.category || 'General'})\n` +
+        `   Items: ${r.items_summary || 'Supplies'}\n` +
+        (r.date ? `   Date: ${r.date}\n` : '');
+    });
+  } else {
+    formattedNotes += `Single Expense Batch — Total: $${grandTotal} ${currency}\n`;
+  }
+
+  formattedNotes += `\nRECEIPT MEDIA URLS:\n` + storageResults.map(s => `• ${s.signedUrl}`).join('\n');
+
+  // Create Assignment Ticket in Daily Assignments
+  const assignmentPayload = {
+    'Date': todayStr,
+    'Assignment Type': 'Expense',
+    'Task Category': 'Expense',
+    'Priority': 'Low',
+    'Source': 'WhatsApp Receipt Intake',
+    'Status': 'Open',
+    'Notes': formattedNotes
+  };
+
+  if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+  if (site?.id) assignmentPayload['Sites'] = [site.id];
+
+  const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+  const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'EXP';
+
+  // Ambient archive into Supabase Dark Matter Vault
+  await streamToDarkMatterVault({
+    siteId: site?.id || null,
+    siteName: site?.fields?.['Site Name'] || 'Fleet Operations',
+    senderPhone: fromPhone,
+    senderName: workerName,
+    rawText: formattedNotes,
+    category: 'Finance / Receipts',
+    distilledContext: `Expense $${grandTotal} ${currency} (${receipts.map(r => r.vendor).filter(Boolean).join(', ') || 'Receipts'}) submitted by ${workerName}`,
+    urgency: 'LOW',
+    gravityScore: 2,
+    actionableFollowup: `Ticket ${ticketId}`
+  });
+
+  // Executive WhatsApp Confirmation Card
+  let receiptCard = `🧾 *TITAN OS | EXPENSE RECEIPT LOGGED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `👤 *Submitted By:* ${workerName}\n` +
+    `💰 *Total Amount:* $${grandTotal} ${currency}\n` +
+    `🧾 *Receipt Count:* ${items.length} photo(s)\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *Merchant Breakdown:*\n`;
+
+  if (receipts.length > 0) {
+    receipts.forEach(r => {
+      receiptCard += `• *${r.vendor || 'Store'}:* $${r.total_amount ? r.total_amount.toFixed(2) : '0.00'} (${r.category || 'Supplies'})\n`;
+    });
+  } else {
+    receiptCard += `• Store Receipt: $${grandTotal} ${currency}\n`;
+  }
+
+  receiptCard += `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎫 *Ticket:* ${ticketId} (Pending Accounting / QB Review)\n` +
+    `📁 *Vault:* Archived securely in Supabase Storage.`;
+
+  await sendWhatsAppMessage(dispatchTarget, receiptCard);
+}
+
+// ====================================================================
+// 6. DECOUPLED BLIND VISION CLASSIFIER (ZERO AUDIO LEAKAGE)
 // ====================================================================
 
 async function inspectBlindVisualGroundTruth(mediaItem) {
@@ -459,7 +633,7 @@ OUTPUT JSON ONLY:
 }
 
 // ====================================================================
-// 6. MULTIMODAL SPOKEN & TASK TRIAGE PROMPTS (FORENSIC GATE RUBRIC)
+// 7. MULTIMODAL SPOKEN & TASK TRIAGE PROMPTS (FORENSIC GATE RUBRIC)
 // ====================================================================
 
 const INDUSTRIAL_SYSTEM_PROMPT = `
@@ -627,7 +801,7 @@ const GATE_NAMES = {
 };
 
 // ====================================================================
-// 7. GEOSPATIAL & METEOROLOGICAL TELEMETRY (GOOGLE GEO POWERED)
+// 8. GEOSPATIAL & METEOROLOGICAL TELEMETRY (GOOGLE GEO POWERED)
 // ====================================================================
 
 function isIndoorSite(site) {
@@ -640,12 +814,13 @@ function isIndoorSite(site) {
 }
 
 /**
- * Direct Google Geocoding API Engine
+ * Direct Google Geocoding API Engine with Coordinate Sanitization
  */
 async function geocodeAddressWithGoogle(addressString) {
   if (!CONFIG.google.apiKey || !addressString) return null;
   try {
-    const cleanAddress = addressString.replace(/[^\w\s,#.-]/gi, '').trim();
+    // Sanitize duplicate minus signs (e.g. "--80.2866" -> "-80.2866")
+    const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
     const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${CONFIG.google.apiKey}`;
     const res = await fetch(url);
     if (!res.ok) return null;
@@ -659,7 +834,7 @@ async function geocodeAddressWithGoogle(addressString) {
         formattedAddress: data.results[0].formatted_address
       };
     } else {
-      console.warn(`[Google Geo] Geocode zero results for "${addressString}": ${data.status}`);
+      console.warn(`[Google Geo] Geocode zero results for "${cleanAddress}": ${data.status}`);
       return null;
     }
   } catch (err) {
@@ -668,9 +843,6 @@ async function geocodeAddressWithGoogle(addressString) {
   }
 }
 
-/**
- * Generates turn-by-turn driving and high-res satellite links for outdoor staging
- */
 function getGoogleMapsLinks(lat, lon) {
   return {
     directions: `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`,
@@ -690,13 +862,27 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     siteId = rawLocationOrSite.id || autoPersistSiteId;
   }
 
+  // Sanitize double dashes or typos in coordinate strings
+  if (typeof rawLocation === 'string') {
+    const sanitized = rawLocation.replace(/-{2,}/g, '-').trim();
+    if (sanitized !== rawLocation && siteId) {
+      console.log(`[Google Geo] Auto-healed corrupted coordinate for site ${siteId}: "${rawLocation}" -> "${sanitized}"`);
+      rawLocation = sanitized;
+      airtableWriteWithAutoDrop('Sites', { 'Site location': sanitized }, siteId).catch(err => {
+        console.warn('[Google Geo] Auto-heal patch to Sites skipped:', err.message);
+      });
+    } else {
+      rawLocation = sanitized;
+    }
+  }
+
   if (typeof rawLocation === 'string' && memoryCache.coordinates.has(rawLocation)) {
     return memoryCache.coordinates.get(rawLocation);
   }
 
   // 1. Direct regex match on raw "lat, lon"
   if (typeof rawLocation === 'string') {
-    const directMatch = rawLocation.trim().match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+    const directMatch = rawLocation.trim().match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
     if (directMatch) {
       const coords = { lat: parseFloat(directMatch[1]), lon: parseFloat(directMatch[2]) };
       memoryCache.coordinates.set(rawLocation, coords);
@@ -726,7 +912,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
       const coords = { lat: googleResult.lat, lon: googleResult.lon };
       memoryCache.coordinates.set(rawLocation, coords);
 
-      // Auto-persist clean lat/lon back into Airtable Sites table without clearing cache
       if (siteId && !rawLocation.includes(',')) {
         const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
         airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(err => {
@@ -735,25 +920,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
       }
 
       return coords;
-    }
-  }
-
-  // 4. Fallback to Open-Meteo
-  if (typeof rawLocation === 'string' && rawLocation.length > 5) {
-    try {
-      const cleanAddress = rawLocation.replace(/[^\w\s,]/gi, '').trim();
-      const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cleanAddress)}&count=1&language=en&format=json`;
-      const res = await fetch(geoUrl);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.results && data.results.length > 0) {
-          const coords = { lat: data.results[0].latitude, lon: data.results[0].longitude };
-          memoryCache.coordinates.set(rawLocation, coords);
-          return coords;
-        }
-      }
-    } catch (err) {
-      console.warn('[Geocoding Engine] Fallback address lookup failed:', err.message);
     }
   }
 
@@ -850,7 +1016,6 @@ async function uploadToSupabase(fileBuffer, mimeType) {
 
 /**
  * Enhanced Auto-Healer with In-Place RAM Cache Mutation
- * Eliminates aggressive cache invalidation, mutating memoryCache directly to avoid API burns.
  */
 async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
   const cleanFields = { ...fields };
@@ -859,7 +1024,6 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
     if (Array.isArray(val) && val.length === 0) {
       delete cleanFields[key];
     }
-    // Hardening: Never send computed Completion % to avoid 422 errors
     if (key === 'Completion %') {
       delete cleanFields[key];
     }
@@ -884,7 +1048,6 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
     const savedRecord = await res.json();
     const lowerTable = table.toLowerCase();
 
-    // In-Place RAM Cache Mutation: Keep local memory 100% synced without refetching from Airtable
     if (lowerTable.includes('site') && memoryCache.sites) {
       if (recordId) {
         const item = memoryCache.sites.find(s => s.id === recordId);
@@ -937,7 +1100,7 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
 }
 
 // ====================================================================
-// 8. IDENTITY & SITE MATRIX RESOLUTION WITH PHONETIC ALIASING
+// 9. IDENTITY & SITE MATRIX RESOLUTION
 // ====================================================================
 
 async function lookupContact(phoneRaw) {
@@ -1084,7 +1247,7 @@ async function resolveCallerIdentity(fromPhone) {
 }
 
 // ====================================================================
-// 9. WHATSAPP MESSAGING & TEXT-ONLY EXECUTIVE JOY CANNON ENGINE
+// 10. WHATSAPP MESSAGING & JOY CANNON ENGINE
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -1141,7 +1304,11 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
 
   if (!res.ok) {
     const errData = await res.text();
-    console.error(`WhatsApp dispatch failed to ${toTarget} (${res.status}): ${errData}`);
+    if (res.status === 401) {
+      console.error(`[Meta Auth Fault (401)] WhatsApp Token expired or invalid. Update META_ACCESS_TOKEN in Render env vars!`);
+    } else {
+      console.error(`WhatsApp dispatch failed to ${toTarget} (${res.status}): ${errData}`);
+    }
     return false;
   }
   return true;
@@ -1194,9 +1361,6 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
   }
 }
 
-/**
- * CLIENT JOY CANNON: Text-only, zero-friction executive updates without database court names
- */
 async function fireInstallationJoyCannon(siteRecord, highestGate) {
   try {
     const siteName = siteRecord.fields['Site Name'] || 'Facility Court';
@@ -1260,7 +1424,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
 }
 
 // ====================================================================
-// 10. WORK ORDER CLOSEOUT ENGINE
+// 11. WORK ORDER CLOSEOUT ENGINE
 // ====================================================================
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
@@ -1401,7 +1565,7 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
 }
 
 // ====================================================================
-// 11. HEADLESS COMPOUND SCHEDULER & VIP CONCIERGE
+// 12. COMPOUND SCHEDULER & VIP CONCIERGE
 // ====================================================================
 
 async function handleCompoundScheduler(text, identity, dispatchTarget, fromPhone, boundSite = null) {
@@ -1614,7 +1778,7 @@ async function handleVIPConcierge(text, identity, dispatchTarget, fromPhone) {
 }
 
 // ====================================================================
-// 12. 3-TIER TEXT EXHAUST SIPHON
+// 13. 3-TIER TEXT EXHAUST SIPHON
 // ====================================================================
 
 async function triageDispatchText(text, workerRecord, currentSite = null, recentAmbientSnippets = []) {
@@ -1684,10 +1848,6 @@ Output JSON only:
 
   return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
 }
-
-// ====================================================================
-// 13. DEDICATED VOICE-ONLY SIPHON & MULTIMODAL BATCH PROCESSOR
-// ====================================================================
 
 async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity) {
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
@@ -1897,12 +2057,45 @@ async function processMediaBatch(batch) {
     return;
   }
 
-  // Upload visual artifacts to Supabase Storage
+  // Upload visual artifacts to Supabase Storage first
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
   const storageResults = await Promise.all(uploadPromises);
 
   // ==================================================================
-  // DECOUPLED STAGE 1: BLIND VISUAL GROUND TRUTH GATE
+  // STAGE 0: UNIVERSAL VISUAL TRIAGE (RECEIPTS VS COURT SWEEPS)
+  // ==================================================================
+  if (!hasVideo) {
+    const visualTriage = await classifyVisualMediaIntent(items);
+    console.log('[Visual Triage Classification]:', {
+      category: visualTriage.media_category,
+      total: visualTriage.grand_total,
+      receipts: visualTriage.receipts?.length || 0
+    });
+
+    if (visualTriage.media_category === 'FINANCIAL_RECEIPT') {
+      console.log(`[Batch Router] Financial receipt(s) detected. Routing to Expense Ingestion Engine.`);
+      await handleFinancialReceiptBatch({
+        items,
+        storageResults,
+        visualTriage,
+        worker,
+        site,
+        dispatchTarget,
+        fromPhone,
+        callerIdentity
+      });
+      return; // HARD STOP — Prevents polluting Sites table or triggering 0% Gate 0!
+    }
+
+    if (visualTriage.media_category === 'IRRELEVANT_NOISE') {
+      console.warn(`[Visual Triage] Media classified as non-operational noise.`);
+      await sendWhatsAppMessage(dispatchTarget, `ℹ️ *TITAN OS | MEDIA ARCHIVED*\nPhoto received and saved to Supabase vault, but no padel court milestone or expense receipt was detected.`);
+      return; // HARD STOP
+    }
+  }
+
+  // ==================================================================
+  // STAGE 1: BLIND VISUAL GROUND TRUTH GATE (VIDEO SWEEPS)
   // ==================================================================
   if (hasVideo) {
     const videoItem = items.find(item => item.type === 'video');
@@ -1920,7 +2113,7 @@ async function processMediaBatch(batch) {
         `👉 *Action Required / Acción Requerida:*\nStand at the court perimeter and film the physical asset to lock baseline.\n_Párese en el perímetro de la cancha y grabe el activo físico para bloquear la línea base._`;
 
       await sendWhatsAppMessage(dispatchTarget, rejectionCard);
-      return; // HARD STOP — 0 database corruption!
+      return; // HARD STOP
     }
   }
 
@@ -1940,7 +2133,6 @@ async function processMediaBatch(batch) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Technician';
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-  // Resolve Explicit Ticket via RAM-Cached Assignments
   let activeTicket = null;
   const explicitTicketId = forensicAudit.spoken_ticket_id || forensicAudit.ticket_id;
 
@@ -1971,7 +2163,6 @@ async function processMediaBatch(batch) {
 
   // ==================================================================
   // PIPELINE A: INSTALLATION MILESTONE ENGINE (GATES 1 - 12)
-  // Multi-Court Facility Panorama Aware
   // ==================================================================
   if (siteMode === 'INSTALLATION' && !explicitTicketId) {
     console.log(`[Installation Engine] Processing construction sweep for ${courtLabel}`);
@@ -1980,7 +2171,6 @@ async function processMediaBatch(batch) {
     const detectedCount = forensicAudit.courts_detected_count || 1;
     const isMultiCourt = siteCapacity > 1 || detectedCount > 1;
 
-    // Highest milestone reached across the venue
     const highestGate = forensicAudit.highest_facility_gate ||
       (forensicAudit.verified_gates?.length ? Math.max(...forensicAudit.verified_gates) : 0);
     const lowestGate = forensicAudit.lowest_facility_gate || highestGate;
@@ -1991,9 +2181,7 @@ async function processMediaBatch(batch) {
     const gateLabel = GATE_NAMES[highestGate] ? `${highestGate}. ${GATE_NAMES[highestGate]}` : `Gate ${highestGate}`;
 
     const cleanEn = forensicAudit.transcript_en || forensicAudit.facility_summary || 'Construction sweep recorded.';
-    const cleanEs = forensicAudit.transcript_es || 'Barrido de construcción registrado.';
 
-    // Format Multi-Court Breakdown for Digital Twin & WhatsApp
     let breakdownText = '';
     let compactGateStatus = inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel;
 
@@ -2020,7 +2208,6 @@ async function processMediaBatch(batch) {
         'Last Intent': 'MILESTONE_PROGRESS'
       };
 
-      // If all courts reach Gate 12, transition venue to active maintenance
       if (lowestGate >= 12 && highestGate >= 12) {
         updatePayload['Workflow Mode'] = 'MAINTENANCE';
         updatePayload['Site Status'] = 'ACTIVE';
@@ -2048,8 +2235,7 @@ async function processMediaBatch(batch) {
 
     await sendWhatsAppMessage(dispatchTarget, installCard);
 
-    // ADJUSTMENT 3: Consolidate Vault Logging
-    // Only write to Inbound Messages 2 and Reports 2 when an actual milestone advances or a critical alert occurs
+    // Consolidate Vault Logging: write only on milestone advance or critical alerts
     const hasMeaningfulMilestone = newlyVerifiedGates.length > 0 || highestGate === 12;
     const hasBlockerOrAlert = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
                               forensicAudit.status_observed === 'ACTION_REQUIRED';
@@ -2084,7 +2270,7 @@ async function processMediaBatch(batch) {
         console.warn('[INOC Vault Sync Warning]:', e.message);
       }
     } else {
-      console.log(`[INOC Vault] Routine check with no milestone advancement; archived to Supabase Dark Matter (Airtable API write saved).`);
+      console.log(`[INOC Vault] Routine check with no milestone advancement; archived to Supabase Dark Matter.`);
     }
 
     return;
@@ -2092,7 +2278,6 @@ async function processMediaBatch(batch) {
 
   // ==================================================================
   // PIPELINE B: MAINTENANCE VIDEO DELTA (PRE-WORK -> POST-WORK)
-  // Executes on MAINTENANCE mode courts OR when explicit ticket ID is spoken
   // ==================================================================
   if (hasVideo) {
     const videoIndex = items.findIndex(item => item.type === 'video');
@@ -2188,7 +2373,6 @@ async function processMediaBatch(batch) {
     }
   }
 
-  // Standard photo execution fallback
   let replyText = forensicAudit.whatsapp_status_text || 'Audit logged.';
   if (weatherNotice) replyText += `\n\n${weatherNotice}`;
   await sendWhatsAppMessage(dispatchTarget, replyText);
@@ -2561,8 +2745,8 @@ app.post('/webhook', async (req, res) => {
             `• Humidity: ${weather.humidity}% (Delta: ${dewDelta.toFixed(1)}°C)\n` +
             `• Rain Probability (Next 4h): ${weather.precipProbability4h}%\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
-            (weather.windGusts > 37 ? `⛔ *WIND WARNING:* Gusts > 20 kts. Glass seating suspended.\n` : `🟢 Wind nominal for glass installation.\n`) +
-            (weather.humidity > 85 || dewDelta <= 2 ? `⚠️ *MOISTURE WARNING:* Turf adhesive hold.\n` : `🟢 Surface dry for turf gluing.`);
+            `• Wind: ${weather.windGusts > 37 ? '⛔ Wind gusts > 20 kts. Glass seating suspended.' : '🟢 Wind nominal for glass.'}\n` +
+            `• Moisture: ${weather.humidity > 85 || dewDelta <= 2 ? '⚠️ High moisture. Turf adhesive hold.' : '🟢 Surface dry for turf gluing.'}`;
           await dispatchReply(wReport);
           return;
         }
@@ -2654,6 +2838,7 @@ app.post('/webhook', async (req, res) => {
             `• */board* — Compound Court Reservations Board\n` +
             `• */fleet* — Continental Fleet Map\n` +
             `• */group <Court Name>* — Bind WhatsApp Channel\n\n` +
+            `🧾 Photos of receipts automatically log expense tickets into Daily Assignments.\n` +
             `🎥 Video sweeps automatically lock pre-work baselines & post-work completion deltas hands-free.`);
           return;
         }
@@ -2751,7 +2936,7 @@ app.post('/webhook', async (req, res) => {
     const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
     const caption = mediaObj.caption || (isAudio ? '[Spoken Voice Memo]' : '');
 
-    const reactionEmoji = isAudio ? '🎧' : (isVideo ? '🎥' : '📸');
+    const reactionEmoji = isAudio ? '🎧' : (isVideo ? '🎥' : '🧾');
     sendWhatsAppReaction(dispatchTarget, messageId, reactionEmoji).catch(() => {});
 
     const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
@@ -2760,8 +2945,12 @@ app.post('/webhook', async (req, res) => {
     const metaMediaData = await metaMediaRes.json().catch(() => ({}));
 
     if (!metaMediaRes.ok || !metaMediaData?.url) {
-      console.error(`[Meta Graph Error] Could not resolve mediaId ${mediaId}:`, metaMediaData);
-      await dispatchReply(`⚠️ Unable to download media from WhatsApp. Please try sending again.`);
+      if (metaMediaRes.status === 401 || metaMediaData?.error?.code === 190) {
+        console.error(`[Meta Auth Error] WhatsApp Token expired or invalid (Code 190). Update META_ACCESS_TOKEN in Render environment variables!`);
+      } else {
+        console.error(`[Meta Graph Error] Could not resolve mediaId ${mediaId}:`, metaMediaData);
+      }
+      await dispatchReply(`⚠️ WhatsApp connection error. Please verify the system token.`);
       return;
     }
 
@@ -2825,12 +3014,116 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ====================================================================
-// 15. HEALTH & RUNTIME
+// 15. GAMECAM OFF-HOURS 4K COURT HEALTH WEBHOOK GATEWAY
 // ====================================================================
 
-/**
- * Administrative Route: One-tap fleet geocoding & multi-court pin-nudging
- */
+app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
+  const apiKey = req.headers['x-gamecam-secret'];
+  if (apiKey !== CONFIG.gamecam.webhookSecret) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid GameCam secret key' });
+  }
+
+  const { venue_name, court_number, image_url, captured_at, telemetry } = req.body;
+
+  if (!venue_name || !image_url) {
+    return res.status(400).json({ error: 'Missing venue_name or image_url payload parameter' });
+  }
+
+  // Immediate 200 OK acknowledgment so camera edge daemon does not hang
+  res.status(200).json({ status: 'received', venue: venue_name, court: court_number || 1 });
+
+  setImmediate(async () => {
+    try {
+      console.log(`[GameCam Webhook] Ingested snapshot for ${venue_name} - Court ${court_number || 1}`);
+
+      const matchedSite = await lookupSite(null, venue_name);
+      const siteLabel = matchedSite?.fields?.['Site Name'] || venue_name;
+
+      const healthPrompt = `
+You are the Titan OS Court Preservation & Maintenance Auditor.
+Analyze this 4K snapshot from the elevated court camera for physical condition.
+
+EVALUATE:
+1. Silica Sand Distribution: Is infill uniform, or depleted at baseline/'T' boxes?
+2. Turf Pile Wear: Is synthetic turf backing exposed? Compaction score (1-100).
+3. Overhead LED Luminaires: Are any floodlights burned out or dark?
+4. Tempered Glass: Smudges, cracks, or loose gaskets visible?
+
+OUTPUT FORMAT (JSON ONLY):
+{
+  "court_health_score": number (1-100),
+  "condition": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
+  "sand_infill_uniformity_pct": number,
+  "turf_wear_severity": "LOW" | "MODERATE" | "SEVERE",
+  "led_fixtures_status": "ALL_LIT" | "PARTIAL_OUTAGE" | "OFFLINE",
+  "defects_detected": ["string in English"],
+  "recommended_action": "string in English",
+  "estimated_remediation_hours": number
+}
+`;
+
+      const payload = {
+        system_instruction: { parts: [{ text: healthPrompt }] },
+        contents: [
+          {
+            parts: [
+              { text: `Evaluate asset health for ${siteLabel} - Court ${court_number || 1}. Image URL: ${image_url}` }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.0,
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingBudget: 0 }
+        }
+      };
+
+      const gRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!gRes.ok) throw new Error(`Gemini health scan failed: ${await gRes.text()}`);
+
+      const gData = await gRes.json();
+      const audit = JSON.parse(gData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+
+      console.log(`[GameCam Audit Result] ${siteLabel} - Court ${court_number}: Score ${audit.court_health_score}/100 (${audit.condition})`);
+
+      if (matchedSite) {
+        const updateFields = {
+          'Last Note': `[GAMECAM 4K AUDIT - Court ${court_number || 1}]: Score ${audit.court_health_score}/100 | ${audit.condition} | ${audit.recommended_action || 'Nominal'}`,
+          'Last Intent': 'FACILITY_HEALTH_AUDIT'
+        };
+        await airtableWriteWithAutoDrop('Sites', updateFields, matchedSite.id);
+
+        if (audit.condition === 'ACTION_REQUIRED' || audit.condition === 'HAZARD_OUT_OF_SERVICE') {
+          const gmPhone = matchedSite.fields['Client Phone'] || matchedSite.fields['WhatsApp Group ID'];
+          if (gmPhone) {
+            const alertCard = `🎾 *TITAN OS × GAMECAM | COURT HEALTH ALERT*\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `🏟️ *Venue:* ${siteLabel} — Court ${court_number || 1}\n` +
+              `📊 *Status:* ${audit.condition} 🟡 (Score: ${audit.court_health_score}/100)\n\n` +
+              `👁️ *Visual Diagnostic:*\n` +
+              (audit.defects_detected || []).map(d => `• ${d}`).join('\n') + `\n\n` +
+              `💡 *Recommended Action:*\n${audit.recommended_action || 'Schedule grooming.'}\n\n` +
+              `👉 Tap to dispatch service van or notify district team.`;
+
+            await sendWhatsAppMessage(gmPhone, alertCard);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[GameCam Processing Error]:', err.message);
+    }
+  });
+});
+
+// ====================================================================
+// 16. HEALTH & RUNTIME
+// ====================================================================
+
 app.get('/api/admin/backfill-geo', async (req, res) => {
   try {
     console.log('🌍 [Google Geo] Starting continental fleet backfill & pin-nudging sweep...');
@@ -2840,7 +3133,7 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 
     for (const record of records) {
       const siteName = record.fields['Site Name'] || 'Unnamed Site';
-      const rawLocation = (record.fields['Site location'] || '').trim();
+      let rawLocation = (record.fields['Site location'] || '').replace(/-{2,}/g, '-').trim();
 
       if (!rawLocation || rawLocation === '+') continue;
 
@@ -2861,13 +3154,11 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 
       if (!lat || !lon) continue;
 
-      // De-duplicate stacked pins (e.g. Court 1 vs Court 2 at same club)
       const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
       const seenCount = coordTracker.get(coordKey) || 0;
       coordTracker.set(coordKey, seenCount + 1);
 
       if (seenCount > 0) {
-        // Nudge longitude by ~15m per court so pins render side-by-side
         lon = lon + (seenCount * 0.00015);
       }
 
@@ -2877,7 +3168,7 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
         await airtableWriteWithAutoDrop('Sites', { 'Site location': formatted }, record.id);
         updatedCount++;
         console.log(`📍 [Google Geo] Updated ${siteName} -> ${formatted}`);
-        await new Promise(r => setTimeout(r, 150)); // Respect Airtable API rate limit
+        await new Promise(r => setTimeout(r, 150));
       }
     }
 
@@ -2896,8 +3187,8 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.1.0',
-    engine: 'Titan OS V5.1.0 (API Quota Protector & Facility Panorama Engine)',
+    version: '5.2.0',
+    engine: 'Titan OS V5.2.0 (Financial Receipt Ingestion & Universal Visual Triage Engine)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0,
@@ -2908,13 +3199,12 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.1.0 RUNNING ON PORT ${PORT}`);
-  console.log(`🛡️ API QUOTA PROTECTOR: In-Place Cache Mutation & Cached Assignments Active`);
-  console.log(`🎾 TEXT-ONLY JOY CANNON: Executive Concierge Updates Active (No Court Tag)`);
-  console.log(`🏗️ FACILITY PANORAMA GATE: Multi-Court 180° Visual Inspection Active`);
-  console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
-  console.log(`🌐 BILINGUAL SMART-VERBATIM: Disfluency Removal & Dual EN/ES Active`);
-  console.log(`🛰️ GOOGLE GEO ENGINE: High-Res Satellite Staging & Millimeter Pin Nudging Active`);
+  console.log(`🚀 TITAN OS V5.2.0 RUNNING ON PORT ${PORT}`);
+  console.log(`🧾 EXPENSE INGESTION ENGINE: Receipts & Invoices Auto-Routed to Assignments`);
+  console.log(`🛡️ VISUAL TRIAGE ROUTER: Multimodal Bifurcation (Receipts vs Court Sweeps) Active`);
+  console.log(`🛰️ GOOGLE GEO ENGINE: Millimeter Geocoding & Coordinate Auto-Heal Active`);
+  console.log(`🎾 GAMECAM WEBHOOK GATEWAY: /api/webhooks/gamecam/snapshot Active`);
+  console.log(`🛡️ API QUOTA PROTECTOR: In-Place Cache Mutation & Assignment Pooling Active`);
   console.log(`====================================================================`);
 
   try {
