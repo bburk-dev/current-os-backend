@@ -1,28 +1,32 @@
 /**
- * TITAN OS V5.3.1 — PROACTIVE WEATHER TRIPWIRES & GOOGLE GEO ENGINE
+ * TITAN OS V5.3.2 — RELIABLE JOY CANNON DISPATCH & PHONE SANITIZATION
  * 
  * Production Build Features:
- * 1. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
+ * 1. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
+ *    missed client celebratory alerts when gates are in-progress or partial.
+ * 2. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
+ *    direct Meta Graph API calls to prevent HTTP 400 (#100) invalid parameter rejections.
+ * 3. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
  *    turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
  *    wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
- * 2. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 3. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
+ * 4. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 5. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
  *    ("Where is Levinsky?", "Send pin for Don Walker"), weather, readiness, and status lookups.
- * 4. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
+ * 6. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
  *    zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
- * 5. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
+ * 7. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
  *    Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
- * 6. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
+ * 8. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
  *    never trigger false gate skips. Each court row is graded independently.
- * 7. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
+ * 9. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
  *    as a quality check without blocking gate advancement.
- * 8. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
- * 9. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
- * 10. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
+ * 10. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
+ * 11. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
+ * 12. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
  *     Airtable's native 'Attachment(s)' field for instant Automation 4 Gmail export.
- * 11. Universal Visual Triage Router: Bifurcates receipts and invoices from court walkarounds.
- * 12. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
- * 13. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
+ * 13. Universal Visual Triage Router: Bifurcates receipts and invoices from court walkarounds.
+ * 14. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
+ * 15. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
  */
 
 process.on('uncaughtException', (err) => {
@@ -1182,10 +1186,11 @@ async function resolveCallerIdentity(fromPhone) {
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
   if (!toTarget || !messageId) return false;
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
+  const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
 
   const payload = {
     messaging_product: 'whatsapp',
-    to: toTarget,
+    to: cleanDestination,
     type: 'reaction',
     reaction: { message_id: messageId, emoji: emoji }
   };
@@ -1211,10 +1216,12 @@ async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
 async function sendWhatsAppMessage(toTarget, messageBody) {
   if (!toTarget) return false;
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
+  // Auto-strip '+' and non-digit formatting for individual recipient numbers
+  const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
 
   const payload = {
     messaging_product: 'whatsapp',
-    to: toTarget,
+    to: cleanDestination,
     type: 'text',
     text: { body: messageBody }
   };
@@ -1233,7 +1240,7 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
 
   if (!res.ok) {
     const errData = await res.text();
-    console.error(`WhatsApp dispatch failed to ${toTarget} (${res.status}): ${errData}`);
+    console.error(`WhatsApp dispatch failed to ${cleanDestination} (${res.status}): ${errData}`);
     return false;
   }
   return true;
@@ -1242,6 +1249,7 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
 async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
   if (!toTarget || !buttons || buttons.length === 0) return false;
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
+  const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
 
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
     type: 'reply',
@@ -1253,7 +1261,7 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
 
   const payload = {
     messaging_product: 'whatsapp',
-    to: toTarget,
+    to: cleanDestination,
     type: 'interactive',
     interactive: {
       type: 'button',
@@ -1277,12 +1285,12 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
 
     if (!res.ok) {
       const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
-      return await sendWhatsAppMessage(toTarget, fallbackText);
+      return await sendWhatsAppMessage(cleanDestination, fallbackText);
     }
     return true;
   } catch (err) {
     const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
-    return await sendWhatsAppMessage(toTarget, fallbackText);
+    return await sendWhatsAppMessage(cleanDestination, fallbackText);
   }
 }
 
@@ -1324,7 +1332,10 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
 
     if (!celebrationCard) return;
 
-    if (clientGroup) await sendWhatsAppMessage(clientGroup, celebrationCard);
+    if (clientGroup) {
+      console.log(`🎾 [Joy Cannon] Dispatching Gate ${highestGate} to Client WhatsApp: ${clientGroup}`);
+      await sendWhatsAppMessage(clientGroup, celebrationCard);
+    }
 
     if (Array.isArray(linkedContactIds) && linkedContactIds.length > 0) {
       const contacts = await getCachedContacts();
@@ -1856,10 +1867,16 @@ async function processMediaBatch(batch) {
     const compactGateStatus = inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel;
 
     const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
+    const isNewMilestone = highestGate > 0 && !previouslyCleared.includes(`Gate ${highestGate}`);
+
     const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
       const num = parseInt(String(g).replace(/\D/g, ''));
       return isNaN(num) ? String(g) : `Gate ${num}`;
-    }).filter(g => !previouslyCleared.includes(g));
+    });
+
+    if (highestGate > 0) {
+      newlyVerifiedGates.push(`Gate ${highestGate}`);
+    }
 
     let siliconeStatusText = '';
     if (forensicAudit.silicone_applied === true) {
@@ -1885,7 +1902,9 @@ async function processMediaBatch(batch) {
 
       await airtableWriteWithAutoDrop('Sites', updatePayload, targetedSite.id);
 
-      if (highestGate > 0 && newlyVerifiedGates.length > 0) {
+      // Fire Joy Cannon once whenever a new milestone is reached
+      if (isNewMilestone) {
+        console.log(`🎾 [Joy Cannon Triggered] Firing Gate ${highestGate} for ${courtLabel}`);
         await fireInstallationJoyCannon(targetedSite, highestGate);
       }
     }
@@ -2430,14 +2449,15 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.3.1',
-    engine: 'Titan OS V5.3.1 (Proactive Weather Tripwires & Google Geo Engine)'
+    version: '5.3.2',
+    engine: 'Titan OS V5.3.2 (Reliable Joy Cannon Dispatch & Phone Sanitization)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.3.1 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.3.2 RUNNING ON PORT ${PORT}`);
+  console.log(`🎉 JOY CANNON: Direct Milestone Advancement & Number Sanitizer Active`);
   console.log(`🌤️ PROACTIVE WEATHER ENGINE: Wind, Cold Glue (<10°C), Moisture & Heat Active`);
   console.log(`📍 GOOGLE GEO ENTERPRISE: Geocoding, Driving, Satellite & Twin Nudging Active`);
   console.log(`🗣️ SPOKEN LOOKUPS: Voice & Text Location/Weather/Gate Routing Active`);
