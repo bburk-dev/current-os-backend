@@ -1,32 +1,28 @@
 /**
- * TITAN OS V5.2.1 — DIRECT QUICKBOOKS ATTACHMENT PIPELINE & EXPENSE SYNC
+ * TITAN OS V5.3.1 — PROACTIVE WEATHER TRIPWIRES & GOOGLE GEO ENGINE
  * 
  * Production Build Features:
- * 1. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
- *    Airtable's native 'Attachment(s)' field so Automation 4 triggers instant Gmail dispatch to QuickBooks.
- * 2. Universal Visual Triage Router: Differentiates paper receipts, invoices, and packing slips
- *    from padel court sweeps, preventing non-construction photos from corrupting the Sites ledger.
- * 3. Automated Expense Ingestion: Extracts vendor, line items, date, grand total, and currency from
- *    receipt batches, logging structured expense tickets into Daily Assignments.
- * 4. Google Geo Coordinate Auto-Healer: Sanitizes duplicate minus signs (e.g. '--80.2866') across
- *    geocoding and routing, auto-persisting clean coordinates back into Airtable.
- * 5. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for automated
- *    off-hours court health audits from elevated cage cameras.
- * 6. In-Place RAM Cache Mutation: Updates Airtable records in RAM immediately upon write rather than
- *    invalidating the cache, eliminating repetitive site and worker read calls across active work shifts.
- * 7. Cached Daily Assignments Engine: Caches open dispatch tickets in memory with a 3-minute TTL,
- *    eliminating API roundtrips on routine arrival checks and distance routing.
- * 8. Selective Forensic Vault Sync: Retains full Supabase ambient logging while writing to Airtable
- *    'Inbound Messages 2' and 'Reports 2' exclusively when verified milestones advance or critical alerts occur.
- * 9. Multi-Court Facility Wide-Angle Pan: Gemini visually parses 180° sweeps across multi-court pads
- *    (e.g., Fairgrounds Leaside, RCOR) to evaluate each court's gates independently.
- * 10. Consolidated Digital Twins: Single venue records track aggregate facility health while storing
- *    per-court breakdowns (e.g. C1: G4 | C2: G2).
- * 11. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
- * 12. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria.
- * 13. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um") while preserving technical terminology.
- * 14. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently.
- * 15. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds.
+ * 1. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
+ *    turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
+ *    wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
+ * 2. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 3. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
+ *    ("Where is Levinsky?", "Send pin for Don Walker"), weather, readiness, and status lookups.
+ * 4. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
+ *    zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
+ * 5. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
+ *    Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
+ * 6. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
+ *    never trigger false gate skips. Each court row is graded independently.
+ * 7. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
+ *    as a quality check without blocking gate advancement.
+ * 8. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
+ * 9. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
+ * 10. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
+ *     Airtable's native 'Attachment(s)' field for instant Automation 4 Gmail export.
+ * 11. Universal Visual Triage Router: Bifurcates receipts and invoices from court walkarounds.
+ * 12. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
+ * 13. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
  */
 
 process.on('uncaughtException', (err) => {
@@ -98,7 +94,7 @@ const DEBOUNCE_DELAY_MS = 3500;
 const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
 
 // ====================================================================
-// 2. IN-MEMORY CACHE-ASIDE ENGINE (AIRTABLE API BURN PROTECTOR)
+// 2. IN-MEMORY CACHE-ASIDE ENGINE
 // ====================================================================
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
@@ -215,11 +211,11 @@ function invalidateAirtableCache(entity = 'all') {
   if (entity === 'all' || entity === 'workers') memoryCache.workersLastFetched = 0;
   if (entity === 'all' || entity === 'contacts') memoryCache.contactsLastFetched = 0;
   if (entity === 'all' || entity === 'assignments') memoryCache.assignmentsLastFetched = 0;
-  console.log(`[Cache Engine] Explicit cache invalidation scope: ${entity}`);
+  console.log(`[Cache Engine] Cache invalidated: ${entity}`);
 }
 
 // ====================================================================
-// 3. SUPABASE AMBIENT DATA EXHAUST VAULT (DARK MATTER ENGINE)
+// 3. SUPABASE FORENSIC LOGGING VAULT
 // ====================================================================
 
 function getSupabaseHeaders(contentType = 'application/json') {
@@ -244,10 +240,7 @@ async function streamToDarkMatterVault({
   gravityScore = 1,
   actionableFollowup = null
 }) {
-  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) {
-    console.warn('[Dark Matter Vault] Supabase credentials not configured, skipping ambient archive.');
-    return null;
-  }
+  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return null;
 
   const payload = {
     site_id: siteId || null,
@@ -275,23 +268,16 @@ async function streamToDarkMatterVault({
       body: JSON.stringify(payload)
     });
 
-    if (!res.ok) {
-      console.warn(`[Dark Matter Vault] Supabase write failed (${res.status}): ${await res.text()}`);
-      return null;
-    }
-
+    if (!res.ok) return null;
     const inserted = await res.json();
-    console.log(`🌌 [Dark Matter Vault] Archived ambient note #${inserted?.[0]?.id || ''} for ${siteName}`);
     return inserted?.[0] || null;
   } catch (err) {
-    console.error('[Dark Matter Vault Exception]:', err.message);
     return null;
   }
 }
 
 async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
   if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return [];
-
   try {
     const filter = siteNameOrId.startsWith('rec')
       ? `site_id=eq.${siteNameOrId}`
@@ -306,26 +292,6 @@ async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
     if (!res.ok) return [];
     return await res.json();
   } catch (err) {
-    console.warn('[Dark Matter Fetch Warning]:', err.message);
-    return [];
-  }
-}
-
-async function searchDarkMatterVault(keyword, limit = 6) {
-  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return [];
-
-  try {
-    const encoded = encodeURIComponent(keyword.trim());
-    const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?or=(raw_text.ilike.*${encoded}*,distilled_context.ilike.*${encoded}*,site_name.ilike.*${encoded}*)&order=created_at.desc&limit=${limit}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: getSupabaseHeaders('application/json')
-    });
-
-    if (!res.ok) return [];
-    return await res.json();
-  } catch (err) {
-    console.warn('[Dark Matter Search Warning]:', err.message);
     return [];
   }
 }
@@ -398,8 +364,8 @@ You are the Titan OS Universal Visual Triage Engine for Bounce Padel.
 Analyze the provided image(s) or video frames to classify the primary operational subject.
 
 CATEGORIES:
-1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, gas station, fuel, hardware store, Fastenal, restaurants/meals, lumber, supplies, equipment rental, parking), store invoices, register slips.
-2. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, lighting, net, concrete pad, or sports facility walkaround.
+1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, gas station, fuel, hardware store, Fastenal, restaurants/meals, lumber, supplies, equipment rental, parking), invoices, register slips.
+2. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, frame, net, concrete pad, or sports facility walkaround.
 3. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading.
 4. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, screenshots with no work context.
 
@@ -462,7 +428,7 @@ async function classifyVisualMediaIntent(items) {
       body: JSON.stringify(payload)
     });
 
-    if (!res.ok) throw new Error(`Visual triage failed (${res.status}): ${await res.text()}`);
+    if (!res.ok) return { media_category: 'COURT_FACILITY', confidence: 0.5 };
 
     const result = await res.json();
     const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -470,7 +436,6 @@ async function classifyVisualMediaIntent(items) {
 
     return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
   } catch (err) {
-    console.error('[Visual Triage Exception]:', err.message);
     return { media_category: 'COURT_FACILITY', confidence: 0.5 };
   }
 }
@@ -485,7 +450,6 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
   const currency = visualTriage.primary_currency || 'CAD';
   const summaryText = visualTriage.summary || 'Job-site expense receipts submitted via WhatsApp.';
 
-  // Build Structured Notes for Daily Assignments Ledger
   let formattedNotes = `[EXPENSE RECEIPT INGESTION - ${workerName} at ${timeStr}]\n` +
     `Total: $${grandTotal} ${currency}\n` +
     `Summary: ${summaryText}\n\n` +
@@ -503,10 +467,8 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
 
   formattedNotes += `\nRECEIPT MEDIA URLS:\n` + storageResults.map(s => `• ${s.signedUrl}`).join('\n');
 
-  // Format array of attachment objects for Airtable
   const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
 
-  // Create Assignment Ticket in Daily Assignments with Attachment(s) populated for QuickBooks Automation
   const assignmentPayload = {
     'Date': todayStr,
     'Assignment Type': 'Expense',
@@ -524,7 +486,6 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
   const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
   const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'EXP';
 
-  // Ambient archive into Supabase Dark Matter Vault
   await streamToDarkMatterVault({
     siteId: site?.id || null,
     siteName: site?.fields?.['Site Name'] || 'Fleet Operations',
@@ -538,7 +499,6 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
     actionableFollowup: `Ticket ${ticketId}`
   });
 
-  // Executive WhatsApp Confirmation Card
   let receiptCard = `🧾 *TITAN OS | EXPENSE RECEIPT LOGGED*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `👤 *Submitted By:* ${workerName}\n` +
@@ -556,14 +516,13 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
   }
 
   receiptCard += `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎫 *Ticket:* ${ticketId} (Dispatched to QuickBooks)\n` +
-    `📁 *Vault:* Archived securely in Supabase Storage.`;
+    `🎫 *Ticket:* ${ticketId} (Dispatched to QuickBooks)`;
 
   await sendWhatsAppMessage(dispatchTarget, receiptCard);
 }
 
 // ====================================================================
-// 6. DECOUPLED BLIND VISION CLASSIFIER (ZERO AUDIO LEAKAGE)
+// 6. DECOUPLED BLIND VISION CLASSIFIER (COLOR AGNOSTIC)
 // ====================================================================
 
 async function inspectBlindVisualGroundTruth(mediaItem) {
@@ -574,10 +533,10 @@ Classify the physical environment visible in these video frames with complete ne
 STRICT GROUND TRUTH RULES:
 1. PADEL COURT VERIFICATION:
    - A valid padel court MUST show clear structural padel elements:
-     * Regulation synthetic turf (blue, green, or terracotta with white lines)
-     * 10mm to 12mm tempered structural glass panels mounted to steel columns
-     * Electro-welded structural wire mesh cages
-     * Regulation net posts and center strap
+     * Synthetic turf carpet (TURF MAY BE ANY COLOR: blue, green, terracotta, black, red, etc.) with inlaid white lines
+     * Structural tempered glass panels mounted to steel posts/columns
+     * Electro-welded wire mesh panels
+     * Structural posts or net posts
    - If the video shows:
      * Residential patio, backyard, deck, lawn furniture, BBQ, or house siding
      * Office desk, computer screens, indoor living room, drywall, or kitchen
@@ -603,7 +562,7 @@ OUTPUT JSON ONLY:
               data: mediaItem.buffer.toString('base64')
             }
           },
-          { text: "Examine ONLY visual frames. Disregard any audio. Is this physically inside or at the apron of a regulation padel court?" }
+          { text: "Examine ONLY visual frames. Disregard any audio. Is this physically inside or at the apron of a padel court?" }
         ]
       }
     ],
@@ -622,65 +581,57 @@ OUTPUT JSON ONLY:
       body: JSON.stringify(payload)
     });
 
-    if (!res.ok) {
-      console.warn('[Blind Vision Gate] API check failed, falling back:', await res.text());
-      return { is_padel_court: true, detected_scene: 'Bypassed on API error' };
-    }
+    if (!res.ok) return { is_padel_court: true, detected_scene: 'Bypassed on API error' };
 
     const data = await res.json();
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
     const parsed = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-    console.log('[Blind Vision Gate Verdict]:', parsed);
     return parsed;
   } catch (err) {
-    console.error('[Blind Vision Gate Exception]:', err.message);
     return { is_padel_court: true, detected_scene: 'Bypassed on parse error' };
   }
 }
 
 // ====================================================================
-// 7. MULTIMODAL SPOKEN & TASK TRIAGE PROMPTS (FORENSIC GATE RUBRIC)
+// 7. SIMPLIFIED 8-GATE FORENSIC RUBRIC & VERNACULAR
 // ====================================================================
 
+const GATE_NAMES = {
+  1: 'Foundation & Slab',
+  2: 'Steel Frame',
+  3: 'Mesh Panels',
+  4: 'Glass Installed',
+  5: 'Turf Laid',
+  6: 'Sand Infill',
+  7: 'Net & Posts',
+  8: 'Clean & Handover'
+};
+const TOTAL_GATES = 8;
+
 const INDUSTRIAL_SYSTEM_PROMPT = `
-You are the Titan OS Forensic Inspection & Construction Gate Engine for Bounce Padel.
+You are the Titan OS Forensic Inspection Engine for Bounce Padel.
 
-PADEL COURT 12-GATE PHYSICAL CONSTRUCTION RUBRIC:
-When inspecting video frames, you MUST visually identify completed physical stages:
-- Gate 1: "Foundation & Anchor Slab" (Cured concrete pad, slab anchor channels, perimeter base plates)
-- Gate 2: "Steel Frame Assembly" (Vertical structural steel columns, corner posts, and perimeter frame beams fully bolted upright)
-- Gate 3: "Structural Mesh Panels" (Electro-welded wire mesh fencing panels mounted and bolted to the steel columns)
-- Gate 4: "Toughened Glass Seating" (10mm/12mm tempered glass panels seated into frame channels and gasketed)
-- Gate 5: "Light Masts & LED Luminaires" (Overhead light poles and LED fixtures mounted to cage frame)
-- Gate 6: "Underlayment Membrane" (Base geotextile shock pad laid out over concrete)
-- Gate 7: "Turf Seaming & Gluing" (Synthetic turf carpet rolled out, cut, and seamed with adhesive)
-- Gate 8: "Regulation Line Cutting" (White boundary service lines inlaid into turf)
-- Gate 9: "Silica Sand Distribution" (Kiln-dried silica sand spread across turf surface)
-- Gate 10: "Sand Brushing & Infill Depth" (Sand mechanically brushed into turf fibers)
-- Gate 11: "Net Posts & Calibration" (Center net installed, tensioned to 88cm center height)
-- Gate 12: "Site Cleanliness & Handover" (Debris/tools removed, glass cleaned, ready for play)
+SINGLE-COURT EVALUATION MANDATE:
+Evaluate strictly the single primary court in the foreground being inspected.
+DO NOT evaluate background courts or adjacent courts. Disregard courts seen in the distance.
 
-MULTI-COURT FACILITY WIDE-ANGLE PAN DIRECTIVE:
-Technicians will stand at the apron or center between courts and slowly pan across the entire facility.
-1. Identify the number of distinct padel court cages/pads visible ("courts_detected_count").
-2. Evaluate each visible court independently (from left to right, near to far, or by visible visual markers).
-3. For each court, detect its completed gates and active stage.
-4. "facility_breakdown": Array of objects:
-   [
-     { "court_label": "Court 1", "highest_gate": 4, "stage_description": "Glass seated, turf staging" },
-     { "court_label": "Court 2", "highest_gate": 2, "stage_description": "Columns upright, mesh unbolted" }
-   ]
-5. "highest_facility_gate": Integer (the furthest gate reached by any court at the site).
-6. "lowest_facility_gate": Integer (the baseline gate reached across all courts).
-7. "facility_summary": A 1-2 sentence executive summary of visible progress across all courts.
+PADEL COURT 8-GATE PHYSICAL CONSTRUCTION RUBRIC:
+When inspecting video frames, visually identify completed physical stages:
+- Gate 1: "Foundation & Slab" (Cured concrete pad or existing leveled slab, anchor base plates)
+- Gate 2: "Steel Frame" (Vertical steel posts, corner posts, and perimeter frame beams bolted upright)
+- Gate 3: "Mesh Panels" (Wire mesh fencing panels bolted to steel posts)
+- Gate 4: "Glass Installed" (Tempered glass panels mounted and secured in frame channels)
+- Gate 5: "Turf Laid" (Synthetic turf rolled out, seamed, glued, and white regulation boundary lines cut in. Turf can be ANY color)
+- Gate 6: "Sand Infill" (Silica sand distributed and brushed evenly across turf carpet fibers)
+- Gate 7: "Net & Posts" (Center net posts mounted, regulation net installed and tensioned)
+- Gate 8: "Clean & Handover" (Construction tools and debris cleared, court ready for tournament play)
 
-VISUAL INSPECTION MANDATES:
-1. "verified_gates": Array of integers (e.g., [1, 2, 3]) for gates that are 100% complete across the court or leading court.
-2. "in_progress_gate": Single integer representing the stage currently being installed.
-3. SMART VERBATIM: Purge all speech hesitations and filler words ("uh", "ah", "um", "like", stutters). Disregard ambient background construction noise.
-4. DUAL-TRACK BILINGUAL OUTPUT:
-   - "transcript_en": Clean English transcript or visual engineering narrative.
-   - "transcript_es": Clean Spanish transcript or visual engineering narrative.
+SILICONE INSPECTION CHECK (QUALITY AUDIT ONLY — NOT A BLOCKING GATE):
+- Check if perimeter glass silicone sealant has been applied along the glass panel joints.
+- Report "silicone_applied": true | false.
+- DO NOT hold or block gate progress if silicone is missing, as some partner courts do not use silicone.
+
+SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
@@ -689,26 +640,16 @@ OUTPUT SPECIFICATION (JSON ONLY):
   "spoken_court_name": "string or null",
   "spoken_ticket_id": integer or null,
   "video_phase": "INSTALLATION_SWEEP" | "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT",
-  "courts_detected_count": integer,
   "verified_gates": [1, 2, 3],
   "in_progress_gate": 4,
-  "highest_facility_gate": 4,
-  "lowest_facility_gate": 2,
-  "facility_breakdown": [
-    { "court_label": "Court 1", "highest_gate": 4, "stage_description": "Glass seated" },
-    { "court_label": "Court 2", "highest_gate": 2, "stage_description": "Columns bolted upright" }
-  ],
-  "facility_summary": "Court 1 glass is fully mounted; Court 2 steel structure is upright and awaiting mesh.",
-  "blockers_detected": ["Specific impediment or missing item in English"],
-  "work_verified": ["Foundation slab complete", "Structural steel frame erected"],
-  "task_category": "string or null",
-  "priority": "Critical" | "High" | "Medium" | "Low",
-  "suggested_worker_name": "string or null",
+  "highest_gate": 4,
+  "silicone_applied": boolean | null,
+  "blockers_detected": ["Specific impediment or missing hardware in English"],
+  "work_verified": ["Specific verified stage completed in English"],
   "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
-  "action_intent": "MILESTONE_CLEARANCE",
   "site_conditions": "Short string in English",
-  "action_items": ["Specific mechanical punch item in English"],
-  "worker_summary": "1-2 sentence executive brief in English for INOC ledger.",
+  "action_items": ["Action item in English"],
+  "summary": "1-2 sentence concise executive summary of visible court progress",
   "whatsapp_status_text": "Plaintext WhatsApp card"
 }
 `;
@@ -717,7 +658,7 @@ const MAINTENANCE_TRIAGE_PROMPT = `
 You are the Titan OS Maintenance & VIP Field Concierge Engine.
 
 CRITICAL DIRECTIVE:
-1. "SMART VERBATIM": Purge all speech hesitations and filler words ("uh", "ah", "um", "like", stutters).
+1. "SMART VERBATIM": Purge speech hesitations ("uh", "ah", "um").
 2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
 
 OUTPUT SPECIFICATION (JSON ONLY):
@@ -731,7 +672,7 @@ OUTPUT SPECIFICATION (JSON ONLY):
   "blockers_detected": ["Specific impediment in English"],
   "work_verified": ["Specific verified completed task in English"],
   "task_category": "string or null",
-  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Invoice / Billing" | "Payment Received" | "Unknown",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
   "status_observed": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
@@ -739,7 +680,7 @@ OUTPUT SPECIFICATION (JSON ONLY):
   "defects_identified": ["Specific defect in English"],
   "action_items": ["Action item in English"],
   "site_conditions": "Short string in English",
-  "worker_summary": "1-2 sentence executive summary in English for INOC.",
+  "worker_summary": "1-2 sentence executive summary in English",
   "whatsapp_status_text": "Plaintext WhatsApp card"
 }
 `;
@@ -752,16 +693,11 @@ const COMMAND_MAP = {
   '/w': 'WEATHER',
   '/weather': 'WEATHER',
   '/clima': 'WEATHER',
-  '/nearby': 'NEARBY_SWEEP',
-  '/route': 'NEARBY_SWEEP',
   '/m': 'MODE_MAINTENANCE',
   '/maint': 'MODE_MAINTENANCE',
   '/maintenance': 'MODE_MAINTENANCE',
   '/i': 'MODE_INSTALLATION',
   '/install': 'MODE_INSTALLATION',
-  '/spot': 'MODE_SPOT_CHECK',
-  '/sc': 'MODE_SPOT_CHECK',
-  '/spotcheck': 'MODE_SPOT_CHECK',
   '/l': 'LINK_SITE',
   '/link': 'LINK_SITE',
   '/group': 'LINK_SITE',
@@ -771,39 +707,17 @@ const COMMAND_MAP = {
   '/gps': 'LOCATION',
   '/board': 'COURT_BOARD',
   '/schedule': 'COURT_BOARD',
-  '/mapview': 'FLEET_MAP_LINK',
   '/fleet': 'FLEET_MAP_LINK',
   '/g': 'READINESS_GATE_CHECK',
   '/gate': 'READINESS_GATE_CHECK',
   '/r': 'READINESS_GATE_CHECK',
   '/readiness': 'READINESS_GATE_CHECK',
   '/context': 'SITE_CONTEXT',
-  '/history': 'SITE_CONTEXT',
   '/search': 'SEARCH_VAULT',
-  '/find': 'SEARCH_VAULT',
-  '/promote': 'PROMOTE_DARK_MATTER',
-  '/delta': 'VIDEO_DELTA_INFO',
   '/?': 'HELP',
   '/h': 'HELP',
   '/help': 'HELP',
   '/ayuda': 'HELP'
-};
-
-const GATE_NAMES = {
-  '0A': 'Freight & Glass Integrity (Container Audit)',
-  '0B': 'Offload & Turf Protection',
-  1: 'Foundation & Anchor Slab',
-  2: 'Steel Frame Assembly',
-  3: 'Structural Mesh Panels',
-  4: 'Toughened Glass Seating',
-  5: 'Light Masts & LED Luminaires',
-  6: 'Underlayment Membrane',
-  7: 'Turf Seaming & Gluing',
-  8: 'Regulation Line Cutting',
-  9: 'Silica Sand Distribution',
-  10: 'Sand Brushing & Infill Depth',
-  11: 'Net Posts & Calibration',
-  12: 'Site Cleanliness & Handover'
 };
 
 // ====================================================================
@@ -838,12 +752,9 @@ async function geocodeAddressWithGoogle(addressString) {
         lon: loc.lng,
         formattedAddress: data.results[0].formatted_address
       };
-    } else {
-      console.warn(`[Google Geo] Geocode zero results for "${cleanAddress}": ${data.status}`);
-      return null;
     }
+    return null;
   } catch (err) {
-    console.error('[Google Geo Engine Exception]:', err.message);
     return null;
   }
 }
@@ -867,15 +778,11 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     siteId = rawLocationOrSite.id || autoPersistSiteId;
   }
 
-  // Sanitize double dashes or typos in coordinate strings
   if (typeof rawLocation === 'string') {
     const sanitized = rawLocation.replace(/-{2,}/g, '-').trim();
     if (sanitized !== rawLocation && siteId) {
-      console.log(`[Google Geo] Auto-healed corrupted coordinate for site ${siteId}: "${rawLocation}" -> "${sanitized}"`);
       rawLocation = sanitized;
-      airtableWriteWithAutoDrop('Sites', { 'Site location': sanitized }, siteId).catch(err => {
-        console.warn('[Google Geo] Auto-heal patch to Sites skipped:', err.message);
-      });
+      airtableWriteWithAutoDrop('Sites', { 'Site location': sanitized }, siteId).catch(() => {});
     } else {
       rawLocation = sanitized;
     }
@@ -885,7 +792,7 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     return memoryCache.coordinates.get(rawLocation);
   }
 
-  // 1. Direct regex match on raw "lat, lon"
+  // 1. Direct Regex Match on "lat, lon"
   if (typeof rawLocation === 'string') {
     const directMatch = rawLocation.trim().match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
     if (directMatch) {
@@ -895,7 +802,7 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     }
   }
 
-  // 2. Decode native Airtable Map Cache
+  // 2. Decode Airtable Native Map Cache
   if (cache && typeof cache === 'string') {
     try {
       const decoded = Buffer.from(cache, 'base64').toString('utf8');
@@ -919,9 +826,7 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
 
       if (siteId && !rawLocation.includes(',')) {
         const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
-        airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(err => {
-          console.warn('[Google Geo] Auto-persist to Sites skipped:', err.message);
-        });
+        airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
       }
 
       return coords;
@@ -969,9 +874,71 @@ async function getHyperlocalWeather(lat, lon) {
       precipProbability4h: maxPrecipProb
     };
   } catch (err) {
-    console.warn('[Weather Engine] Telemetry fetch failed:', err.message);
     return null;
   }
+}
+
+/**
+ * Dedicated Proactive Weather Tripwire Engine
+ * Evaluates physical construction constraints (wind, cold temp, condensation, wet turf, heat).
+ */
+function evaluateWeatherTripwires(weather, targetGate = null) {
+  if (!weather) return { holds: [], warnings: [], nominal: true, summaryText: '' };
+
+  const holds = [];
+  const warnings = [];
+  const dewDelta = weather.temp - weather.dewPoint;
+
+  // 1. HIGH WIND GUST TRIPWIRE (>20 kts / 37 km/h) -> Glass Seating Hold
+  if (weather.windGusts > 37) {
+    holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h / >20 kts):* Crane & suction cup glass installation prohibited. High panel sail hazard.`);
+  } else if (weather.windGusts > 28) {
+    warnings.push(`💨 *WIND WARNING (${weather.windGusts} km/h):* Approach glass seating with caution; verify post anchoring.`);
+  }
+
+  // 2. TURF ADHESIVE COLD LOCKOUT (<10°C / 50°F) -> Chemical Cure Failure
+  if (weather.temp < 5) {
+    holds.push(`❄️ *COLD LOCKOUT (${weather.temp}°C):* Total freeze lockout on polyurethane turf adhesive. Chemical bonding fails below 5°C.`);
+  } else if (weather.temp < 10) {
+    holds.push(`⚠️ *TURF GLUE CURE HOLD (${weather.temp}°C / <50°F):* Adhesive curing requires >=10°C. Do not glue turf seams until ambient temp rises.`);
+  }
+
+  // 3. CONDENSATION & MOISTURE TRIPWIRE (Humidity > 85% or Dew Delta <= 2.5°C)
+  if (weather.humidity > 85 || dewDelta <= 2.5) {
+    holds.push(`💧 *CONDENSATION HOLD:* Dew delta is ${dewDelta.toFixed(1)}°C (Humidity: ${weather.humidity}%). Pad/carpet surface moisture will ruin adhesive bond.`);
+  }
+
+  // 4. PRECIPITATION / RAIN TRIPWIRE (Active Rain or >40% chance in 4h)
+  if (weather.isRainingOrStorm || weather.precip > 0) {
+    holds.push(`🌧️ *RAIN HOLD:* Active rain/storm detected. Hold all outdoor gluing, glass, and mesh.`);
+  } else if (weather.precipProbability4h > 40) {
+    warnings.push(`🌦️ *RAIN PROBABILITY (${weather.precipProbability4h}% in 4h):* Keep blue tarps staged over open turf rolls and seaming tape.`);
+  }
+
+  // 5. WET SAND INFILL LOCKOUT (Clumps silica sand)
+  if (weather.isRainingOrStorm || weather.precip > 0 || weather.humidity > 90) {
+    holds.push(`⏳ *SAND INFILL HOLD:* Wet conditions detected. Silica sand must strictly be applied to dry turf to prevent pile clumping.`);
+  }
+
+  // 6. EXTREME HEAT FLASH-CURE ALERT (>35°C / 95°F)
+  if (weather.temp > 35) {
+    warnings.push(`☀️ *HIGH HEAT ALERT (${weather.temp}°C):* Adhesive pot-life drops to <5 minutes. Mandatory crew shade and hydration rest cycles.`);
+  }
+
+  const isNominal = holds.length === 0;
+  let summaryText = '';
+
+  if (holds.length > 0) {
+    summaryText += `\n` + holds.join('\n');
+  }
+  if (warnings.length > 0) {
+    summaryText += `\n` + warnings.join('\n');
+  }
+  if (isNominal) {
+    summaryText += `\n🟢 *Conditions Nominal:* Wind (${weather.windSpeed} km/h), Temp (${weather.temp}°C), and moisture are clear for work.`;
+  }
+
+  return { holds, warnings, nominal: isNominal, summaryText };
 }
 
 async function uploadToSupabase(fileBuffer, mimeType) {
@@ -993,10 +960,7 @@ async function uploadToSupabase(fileBuffer, mimeType) {
     body: fileBuffer
   });
 
-  if (!uploadRes.ok) {
-    const errText = await uploadRes.text();
-    throw new Error(`Supabase upload failed (${uploadRes.status}): ${errText}`);
-  }
+  if (!uploadRes.ok) throw new Error(`Upload failed (${uploadRes.status})`);
 
   const signUrl = `${CONFIG.supabase.url}/storage/v1/object/sign/${CONFIG.supabase.bucket}/${storagePath}`;
   const signRes = await fetch(signUrl, {
@@ -1005,10 +969,7 @@ async function uploadToSupabase(fileBuffer, mimeType) {
     body: JSON.stringify({ expiresIn: 60 * 60 * 24 * 7 })
   });
 
-  if (!signRes.ok) {
-    const errText = await signRes.text();
-    throw new Error(`Supabase signing failed (${signRes.status}): ${errText}`);
-  }
+  if (!signRes.ok) throw new Error(`Signing failed (${signRes.status})`);
 
   const signData = await signRes.json();
   const rawSignedPath = signData.signedURL || signData.signedUrl || '';
@@ -1019,19 +980,12 @@ async function uploadToSupabase(fileBuffer, mimeType) {
   return { storagePath, signedUrl: fullSignedUrl };
 }
 
-/**
- * Enhanced Auto-Healer with In-Place RAM Cache Mutation
- */
 async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
   const cleanFields = { ...fields };
 
   for (const [key, val] of Object.entries(cleanFields)) {
-    if (Array.isArray(val) && val.length === 0) {
-      delete cleanFields[key];
-    }
-    if (key === 'Completion %') {
-      delete cleanFields[key];
-    }
+    if (Array.isArray(val) && val.length === 0) delete cleanFields[key];
+    if (key === 'Completion %') delete cleanFields[key];
   }
 
   const url = recordId
@@ -1085,18 +1039,12 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
   }
 
   const errBody = await res.json().catch(() => ({}));
-
   if (res.status === 422 && attempt <= 5) {
     const errorMsg = errBody?.error?.message || '';
-    console.warn(`[Auto-Healer] 422 on ${table} (Attempt ${attempt}): ${errorMsg}`);
-
     const match = errorMsg.match(/(?:Unknown field name|Unknown field|Field|Column)\s*:?\s*["\\]+([^"\\]+)["\\]+/i) ||
                   errorMsg.match(/field\s*["\\]+([^"\\]+)["\\]+/i);
-
     if (match && match[1]) {
-      const badField = match[1];
-      console.warn(`[Auto-Healer] Pruning incompatible field: "${badField}"`);
-      delete cleanFields[badField];
+      delete cleanFields[match[1]];
       return await airtableWriteWithAutoDrop(table, cleanFields, recordId, attempt + 1);
     }
   }
@@ -1112,7 +1060,6 @@ async function lookupContact(phoneRaw) {
   if (!phoneRaw) return null;
   const cleanDigits = phoneRaw.replace(/\D/g, '');
   const contacts = await getCachedContacts();
-
   return contacts.find(c => {
     const p = (c.fields['Phone Number'] || '').replace(/\D/g, '');
     return p === cleanDigits || p.endsWith(cleanDigits) || (cleanDigits.length >= 10 && cleanDigits.endsWith(p));
@@ -1123,7 +1070,6 @@ async function lookupWorker(phoneRaw) {
   if (!phoneRaw) return null;
   const cleanDigits = phoneRaw.replace(/\D/g, '');
   const workers = await getCachedWorkers();
-
   return workers.find(w => {
     const isActive = w.fields['Active'] === true || w.fields['Active'] === 1;
     if (!isActive) return false;
@@ -1131,19 +1077,6 @@ async function lookupWorker(phoneRaw) {
     const wNum = String(w.fields['WhatsApp Number'] || '').replace(/\D/g, '');
     return (pE164 && (pE164 === cleanDigits || cleanDigits.endsWith(pE164))) ||
            (wNum && (wNum === cleanDigits || cleanDigits.endsWith(wNum)));
-  }) || null;
-}
-
-async function lookupWorkerByName(name) {
-  if (!name) return null;
-  const cleanName = name.trim().toLowerCase();
-  const workers = await getCachedWorkers();
-
-  return workers.find(w => {
-    const isActive = w.fields['Active'] === true || w.fields['Active'] === 1;
-    if (!isActive) return false;
-    const fullName = String(w.fields['Full Name'] || w.fields['Worker Name'] || '').toLowerCase();
-    return fullName.includes(cleanName);
   }) || null;
 }
 
@@ -1158,6 +1091,8 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
       .replace(/\bcinnamon\b/gi, 'cynamon')
       .replace(/\bdon walker\b/gi, 'don walker')
       .replace(/\bnorth padel\b/gi, 'north padel')
+      .replace(/\blevinsky\b/gi, 'levinsky')
+      .replace(/\blewinsky\b/gi, 'lewinsky')
       .replace(/\b(?:bpc|court)\b/gi, '')
       .trim();
 
@@ -1197,9 +1132,7 @@ async function getAllActiveSitesList() {
 }
 
 async function resolveCallerIdentity(fromPhone) {
-  if (!fromPhone) {
-    return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: '' };
-  }
+  if (!fromPhone) return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: '' };
 
   try {
     const contact = await lookupContact(fromPhone);
@@ -1223,9 +1156,7 @@ async function resolveCallerIdentity(fromPhone) {
         facilityTier: siteRecord?.fields?.['Facility Tier'] || 'Standard Residential'
       };
     }
-  } catch (err) {
-    console.warn('[Identity Engine] Contacts check failed:', err.message);
-  }
+  } catch (err) {}
 
   try {
     const worker = await lookupWorker(fromPhone);
@@ -1239,16 +1170,9 @@ async function resolveCallerIdentity(fromPhone) {
         workerRecord: worker
       };
     }
-  } catch (err) {
-    console.warn('[Identity Engine] Worker check failed:', err.message);
-  }
+  } catch (err) {}
 
-  return {
-    type: 'UNKNOWN',
-    name: 'External Caller',
-    role: 'Unknown',
-    phone: fromPhone
-  };
+  return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: fromPhone };
 }
 
 // ====================================================================
@@ -1309,11 +1233,7 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
 
   if (!res.ok) {
     const errData = await res.text();
-    if (res.status === 401) {
-      console.error(`[Meta Auth Fault (401)] WhatsApp Token expired or invalid. Update META_ACCESS_TOKEN in Render env vars!`);
-    } else {
-      console.error(`WhatsApp dispatch failed to ${toTarget} (${res.status}): ${errData}`);
-    }
+    console.error(`WhatsApp dispatch failed to ${toTarget} (${res.status}): ${errData}`);
     return false;
   }
   return true;
@@ -1368,49 +1288,43 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
 
 async function fireInstallationJoyCannon(siteRecord, highestGate) {
   try {
-    const siteName = siteRecord.fields['Site Name'] || 'Facility Court';
     const clientGroup = siteRecord.fields['Client WhatsApp Group ID'];
     const linkedContactIds = siteRecord.fields['Linked Contacts'] || [];
 
     let celebrationCard = null;
 
     if (highestGate === 1) {
-      celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
+      celebrationCard = `🎾 *BOUNCE PADEL | PROGRESS UPDATE*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `Work is officially underway and the foundation is set!\n\n` +
-        `_Next step: Raising the frame._`;
+        `Work is officially underway and the foundation slab is set!\n\n` +
+        `_Next step: Raising the frame posts._`;
     } else if (highestGate === 2 || highestGate === 3) {
-      celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
+      celebrationCard = `🎾 *BOUNCE PADEL | PROGRESS UPDATE*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `The steel frame and mesh are installed!\n\n` +
-        `The court is really taking shape.\n` +
-        `_Next step: Installing the glass._`;
+        `The frame posts and mesh panels are installed!\n\n` +
+        `_Next step: Installing the glass panels._`;
     } else if (highestGate === 4) {
-      celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
+      celebrationCard = `🎾 *BOUNCE PADEL | PROGRESS UPDATE*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `Installation is moving in the right direction — the glass is installed!\n\n` +
-        `_Next step: Rolling out the turf._`;
-    } else if (highestGate >= 7 && highestGate <= 10) {
-      celebrationCard = `🎾 *BOUNCE PADEL | JOY UPDATE*\n` +
+        `Installation is moving forward — the glass is installed!\n\n` +
+        `_Next step: Rolling out and gluing the turf._`;
+    } else if (highestGate === 5) {
+      celebrationCard = `🎾 *BOUNCE PADEL | PROGRESS UPDATE*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `Turf is down and the net is up!\n\n` +
-        `_Next step: Sand distribution, brushing, and final details._`;
-    } else if (highestGate >= 11) {
+        `Turf is laid and regulation white lines are cut!\n\n` +
+        `_Next step: Sand infill and net setup._`;
+    } else if (highestGate >= 8) {
       celebrationCard = `🎾 *BOUNCE PADEL | READY TO PLAY*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `Installation is complete and your court is ready to play! 🥂\n\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `📌 *Keep this chat handy:*\n` +
-        `Pin this group to the top of your WhatsApp (_swipe right on this chat and tap "Pin"_).\n\n` +
-        `Whenever you need court grooming or have a question down the road, simply send a text, voice note, or show us with a video right here. Our team is always on standby to keep your court in tournament shape.`;
+        `Whenever you need court maintenance or supplies, just text or voice note right here. Our team is always on standby.`;
     }
 
     if (!celebrationCard) return;
 
-    if (clientGroup) {
-      await sendWhatsAppMessage(clientGroup, celebrationCard);
-      console.log(`🎾 [Joy Cannon] Dispatched Gate ${highestGate} for ${siteName} to VIP Group ${clientGroup}`);
-    }
+    if (clientGroup) await sendWhatsAppMessage(clientGroup, celebrationCard);
 
     if (Array.isArray(linkedContactIds) && linkedContactIds.length > 0) {
       const contacts = await getCachedContacts();
@@ -1419,12 +1333,11 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
         if (contact && contact.fields['Phone Number']) {
           const cleanPhone = String(contact.fields['Phone Number']).replace(/\D/g, '');
           await sendWhatsAppMessage(cleanPhone, celebrationCard);
-          console.log(`🎾 [Joy Cannon] Dispatched Gate ${highestGate} for ${siteName} to ${contact.fields['Contact Name']}`);
         }
       }
     }
   } catch (err) {
-    console.error('[Installation Joy Cannon Error]:', err.message);
+    console.error('[Joy Cannon Error]:', err.message);
   }
 }
 
@@ -1453,39 +1366,6 @@ async function findActiveTicketForSite(siteId, ticketId = null) {
   }
 
   return null;
-}
-
-async function findNearestOpenAssignment(currentLat, currentLon, excludeSiteId = null) {
-  try {
-    const openTickets = await getCachedOpenAssignments();
-    if (openTickets.length === 0) return null;
-
-    const cachedSites = await getCachedSites();
-    let nearest = null;
-    let minDistanceKm = Infinity;
-
-    for (const ticket of openTickets) {
-      const siteId = ticket.fields['Sites']?.[0] || ticket.fields['Site']?.[0];
-      if (!siteId || siteId === excludeSiteId) continue;
-
-      const siteRecord = cachedSites.find(s => s.id === siteId);
-      if (!siteRecord) continue;
-
-      const coords = await resolveCoordinates(siteRecord);
-      if (!coords) continue;
-
-      const dist = haversineDistanceKm(currentLat, currentLon, coords.lat, coords.lon);
-      if (dist < minDistanceKm) {
-        minDistanceKm = dist;
-        nearest = { ticket, site: siteRecord, distanceKm: dist };
-      }
-    }
-
-    return nearest;
-  } catch (err) {
-    console.warn('[Proactive Dispatch Engine] Distance calculation failed:', err.message);
-    return null;
-  }
 }
 
 async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resolutionNotes, worker, dispatchTarget, fromPhone, isVideoDelta = false }) {
@@ -1521,386 +1401,188 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
   const ticketNum = activeTicket.fields['Assignment ID'] ? `#${activeTicket.fields['Assignment ID']}` : '';
   const courtLabel = targetSite?.fields?.['Site Name'] || 'Assigned Court';
 
-  const voucherReceipt = `🧾 *TITAN OS | CLOSEOUT RECEIPT (RECIBO DE CIERRE)*\n` +
+  const voucherReceipt = `🧾 *TITAN OS | WORK ORDER CLOSED*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `✅ *Ticket ${ticketNum} Completed / Completado*\n` +
-    `🏟️ *Court / Cancha:* ${courtLabel}\n` +
-    `👤 *Technician / Técnico:* ${workerName}\n` +
-    `⏱️ *Verified / Verificado:* ${timeStr}\n` +
-    (isVideoDelta ? `🎥 *Video Delta:* Baseline & Completion Sweeps Verified 🟢\n` : '') +
+    `✅ *Ticket ${ticketNum} Complete*\n` +
+    `🏟️ *Court:* ${courtLabel}\n` +
+    `👤 *Technician:* ${workerName}\n` +
+    `⏱️ *Verified:* ${timeStr}\n` +
+    (isVideoDelta ? `🎥 *Video Sweep:* Pre/Post Verified 🟢\n` : '') +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📋 *Work Performed / Trabajo Realizado:*\n${resolutionNotes}\n\n` +
-    `🟢 *Asset Condition / Estado:* Nominal (Court Open for Play / Cancha Lista para Juego)`;
+    `📋 *Work Done:*\n${resolutionNotes}\n\n` +
+    `🟢 *Status:* Court Open for Play`;
 
   await sendWhatsAppMessage(dispatchTarget, voucherReceipt);
-
-  if (targetSite) {
-    const coords = await resolveCoordinates(targetSite);
-    if (coords) {
-      const nearest = await findNearestOpenAssignment(coords.lat, coords.lon, targetSite.id);
-      if (nearest) {
-        const nextCourt = nearest.site.fields['Site Name'] || 'Next Assigned Asset';
-        const nextDist = nearest.distanceKm.toFixed(1);
-        const nextCat = nearest.ticket.fields['Task Category'] || 'Maintenance';
-        const nextNotes = nearest.ticket.fields['Notes'] || 'Follow-up service directive';
-        const nextTicketId = nearest.ticket.fields['Assignment ID'] || nearest.ticket.id;
-        const nextCoords = await resolveCoordinates(nearest.site);
-        const navUrl = nextCoords ? `https://www.google.com/maps/dir/?api=1&destination=${nextCoords.lat},${nextCoords.lon}` : '';
-
-        const routeText = `📍 *TITAN PROACTIVE ROUTE RECOMMENDATION*\n` +
-          `*(Recomendación de Ruta Proactiva)*\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `Technician ${workerName} is clear at *${courtLabel}*.\n\n` +
-          `🎯 *Next Dispatch / Siguiente:* ${nextCourt} (~${nextDist} km)\n` +
-          `🔧 *Scope / Tarea:* ${nextCat}\n` +
-          `📝 *Notes / Notas:* ${nextNotes.slice(0, 90)}\n` +
-          (navUrl ? `🗺️ *Google Maps:* ${navUrl}\n` : '');
-
-        const buttons = [
-          { id: `DISPATCH_APPROVE_${nextTicketId}_${worker?.id || 'any'}`, title: `⚡ Dispatch: ${nextCourt.slice(0, 10)}` },
-          { id: `ROUTE_FACTORY_${worker?.id || 'any'}`, title: `🏭 Return to Shop` }
-        ];
-
-        await sendWhatsAppButtons(dispatchTarget, routeText, buttons);
-      }
-    }
-  }
-
   return true;
 }
 
 // ====================================================================
-// 12. COMPOUND SCHEDULER & VIP CONCIERGE
+// 12. NATURAL SPOKEN QUERY HANDLERS (LOCATION, WEATHER, STATUS, GATES)
 // ====================================================================
 
-async function handleCompoundScheduler(text, identity, dispatchTarget, fromPhone, boundSite = null) {
-  const targetSite = identity.siteRecord || boundSite;
-  const targetSiteId = targetSite?.id || identity.siteId;
-  const siteName = targetSite?.fields?.['Site Name'] || identity.siteName || 'Private Compound Court';
-  const nowIso = new Date().toISOString();
+async function handleSpokenLocationQuery(queriedName, fallbackSite, dispatchTarget) {
+  let targetSite = null;
+  if (queriedName) targetSite = await lookupSite(null, queriedName);
+  if (!targetSite) targetSite = fallbackSite;
 
-  const prompt = `
-You are the Titan OS Compound Court Scheduler.
-Current Time: ${nowIso}
-Sender: ${identity.name || 'Compound Member'}
-Court Asset: ${siteName}
-
-Extract scheduling intent from: "${text}"
-
-ACTIONS:
-- "BOOK": User wants to reserve court time.
-- "CANCEL": User wants to release reservation.
-- "QUERY_SCHEDULE": User asks who is playing or for board.
-- "CHATTER": General conversation.
-
-CRITICAL DURATION RULE: STRICT 2-HOUR DEFAULT BOOKING BLOCK.
-
-Output JSON only:
-{
-  "action": "BOOK" | "CANCEL" | "QUERY_SCHEDULE" | "CHATTER",
-  "startTimeIso": "ISO 8601 string or null",
-  "endTimeIso": "ISO 8601 string or null",
-  "partyName": "string or null",
-  "confidence": number
-}
-`;
-
-  try {
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.0,
-        responseMimeType: 'application/json',
-        thinkingConfig: { thinkingBudget: 0 }
-      }
-    };
-
-    const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!res.ok) return false;
-    const data = await res.json();
-    const rawParsed = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawParsed) return false;
-
-    const intent = JSON.parse(rawParsed);
-    if (intent.action === 'CHATTER') return false;
-
-    if (intent.action === 'QUERY_SCHEDULE') {
-      const todayStr = new Date().toISOString().split('T')[0];
-      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?sort%5B0%5D%5Bfield%5D=Start%20Time&sort%5B0%5D%5Bdirection%5D=asc&maxRecords=50`;
-
-      const qRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-      const qData = qRes.ok ? await qRes.json() : { records: [] };
-      const records = (qData.records || []).filter(r => {
-        const isConfirmed = r.fields['Status'] === 'Confirmed';
-        const startTime = r.fields['Start Time'];
-        return isConfirmed && startTime && startTime >= `${todayStr}T00:00:00.000Z`;
-      });
-
-      let boardText = `🎾 *${siteName.toUpperCase()} | COURT BOARD*\n━━━━━━━━━━━━━━━━━━━━\n`;
-      if (records.length === 0) {
-        boardText += `🟢 *Court is wide open today!*\nSimply type your requested time here to lock it in (2-hour blocks standard).`;
-      } else {
-        records.forEach(r => {
-          const s = new Date(r.fields['Start Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const e = new Date(r.fields['End Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const by = r.fields['Booked By'] || 'Family Member';
-          boardText += `• ${s} – ${e}: *${by}*\n`;
-        });
-        boardText += `━━━━━━━━━━━━━━━━━━━━\n🟢 All other windows are open for play.`;
-      }
-      await sendWhatsAppMessage(dispatchTarget, boardText);
-      return true;
-    }
-
-    if (intent.action === 'CANCEL') {
-      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?sort%5B0%5D%5Bfield%5D=Start%20Time&sort%5B0%5D%5Bdirection%5D=asc&maxRecords=20`;
-      const qRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-      const qData = qRes.ok ? await qRes.json() : { records: [] };
-
-      const myReservation = (qData.records || []).find(r => {
-        const isConfirmed = r.fields['Status'] === 'Confirmed';
-        const sTime = r.fields['Start Time'];
-        const bookedBy = (r.fields['Booked By'] || '').toLowerCase();
-        const searchName = (identity.name || intent.partyName || '').toLowerCase();
-        return isConfirmed && sTime && sTime >= nowIso && (searchName ? bookedBy.includes(searchName) : true);
-      });
-
-      if (myReservation) {
-        await airtableWriteWithAutoDrop('Reservations', { 'Status': 'Cancelled' }, myReservation.id);
-        await sendWhatsAppMessage(dispatchTarget, `🟢 *COURT RELEASED*\n\nYour 2-hour reserved block has been released back to the family pool. The court is now open!`);
-      } else {
-        await sendWhatsAppMessage(dispatchTarget, `ℹ️ No upcoming reservations found under your name to cancel.`);
-      }
-      return true;
-    }
-
-    if (intent.action === 'BOOK') {
-      if (!intent.startTimeIso) {
-        await sendWhatsAppMessage(dispatchTarget, `Could you specify the time you'd like to play? (e.g. "Tomorrow at 10 AM")`);
-        return true;
-      }
-
-      const pStart = new Date(intent.startTimeIso);
-      const pEnd = intent.endTimeIso ? new Date(intent.endTimeIso) : new Date(pStart.getTime() + 2 * 60 * 60 * 1000);
-
-      const reservationsUrl = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Reservations?maxRecords=100`;
-      const cRes = await fetch(reservationsUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-      const cData = cRes.ok ? await cRes.json() : { records: [] };
-
-      const conflict = (cData.records || []).find(r => {
-        if (r.fields['Status'] !== 'Confirmed') return false;
-        const rStart = new Date(r.fields['Start Time']);
-        const rEnd = new Date(r.fields['End Time']);
-        return rStart < pEnd && rEnd > pStart;
-      });
-
-      if (conflict) {
-        const holder = conflict.fields['Booked By'] || 'Another family member';
-        const sTime = new Date(conflict.fields['Start Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const eTime = new Date(conflict.fields['End Time']).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-        const conflictMsg = `⚠️ *SCHEDULE OVERLAP*\n\n` +
-          `*${holder}* already has the court reserved from *${sTime} to ${eTime}*.\n\n` +
-          `🟢 The court is open right after at *${eTime}*. Want me to book a 2-hour window starting at ${eTime} for you?`;
-
-        await sendWhatsAppMessage(dispatchTarget, conflictMsg);
-        return true;
-      }
-
-      const bookedByName = intent.partyName ||
-        (identity.name !== 'External Caller' && identity.name !== 'VIP Member' ? identity.name : `Family Member (+${fromPhone.slice(-4)})`);
-
-      const resPayload = {
-        'Booked By': bookedByName,
-        'Start Time': pStart.toISOString(),
-        'End Time': pEnd.toISOString(),
-        'Status': 'Confirmed',
-        'Notes': `Booked via ambient WhatsApp NLP. Raw text: "${text}"`
-      };
-      if (targetSiteId) resPayload['Site'] = [targetSiteId];
-
-      await airtableWriteWithAutoDrop('Reservations', resPayload);
-
-      const sFormatted = pStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const eFormatted = pEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const dateFormatted = pStart.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-
-      const confirmationCard = `🎾 *${siteName.toUpperCase()} | RESERVATION LOCKED*\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `👤 *Player / Party:* ${bookedByName}\n` +
-        `📅 *Date:* ${dateFormatted}\n` +
-        `⏱️ *Time:* ${sFormatted} – ${eFormatted} (2-Hour Block)\n` +
-        `🟢 *Status:* Confirmed\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `*Have a great match! Court board updated.*`;
-
-      await sendWhatsAppMessage(dispatchTarget, confirmationCard);
-      return true;
-    }
-  } catch (err) {
-    console.error('[Compound Scheduler Error]:', err.message);
+  if (!targetSite) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not find court "${queriedName}". Check spelling in Airtable.`);
+    return;
   }
-  return false;
+
+  const siteName = targetSite.fields['Site Name'];
+  const coords = await resolveCoordinates(targetSite);
+
+  if (!coords) {
+    await sendWhatsAppMessage(dispatchTarget, `📍 No coordinates found for *${siteName}*. Drop a pin or enter address in Sites.`);
+    return;
+  }
+
+  const links = getGoogleMapsLinks(coords.lat, coords.lon);
+  const locationCard = `📍 *${siteName.toUpperCase()} | PIN & DIRECTIONS*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `• *Coordinates:* ${coords.lat}, ${coords.lon}\n\n` +
+    `🗺️ *Google Maps Driving:*\n${links.directions}\n\n` +
+    `🛰️ *Satellite Staging View (Yard & Trees):*\n${links.satellite}`;
+
+  await sendWhatsAppMessage(dispatchTarget, locationCard);
 }
 
-async function handleVIPConcierge(text, identity, dispatchTarget, fromPhone) {
-  const siteId = identity.siteId;
-  const siteName = identity.siteName || 'Private Reserve Court';
+async function handleSpokenWeatherQuery(queriedName, fallbackSite, dispatchTarget) {
+  let targetSite = null;
+  if (queriedName) targetSite = await lookupSite(null, queriedName);
+  if (!targetSite) targetSite = fallbackSite;
 
-  const assignmentPayload = {
-    'Date': new Date().toISOString().split('T')[0],
-    'Assignment Type': 'Service',
-    'Priority': 'High',
-    'Source': 'Joy Cannon (Client)',
-    'Status': 'Open',
-    'Notes': `[VIP CONCIERGE — ${identity.name} (${identity.role})]\nDirective: "${text}"`
-  };
+  if (!targetSite) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Specify which court: e.g. "What's the weather at Levinsky?"`);
+    return;
+  }
 
-  if (siteId) assignmentPayload['Sites'] = [siteId];
+  const siteName = targetSite.fields['Site Name'];
+  const coords = await resolveCoordinates(targetSite);
+  if (!coords) {
+    await sendWhatsAppMessage(dispatchTarget, `📍 No coordinates locked for *${siteName}* to check weather.`);
+    return;
+  }
 
-  const bobWorker = await lookupWorkerByName('Bob');
-  if (bobWorker) assignmentPayload['Worker'] = [bobWorker.id];
+  const weather = await getHyperlocalWeather(coords.lat, coords.lon);
+  if (!weather) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Weather telemetry temporarily unavailable for ${siteName}.`);
+    return;
+  }
 
-  const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-  const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
+  const tripwires = evaluateWeatherTripwires(weather);
+  const dewDelta = weather.temp - weather.dewPoint;
 
-  const voucherText = `💼 *BOUNCE CONCIERGE | REQUEST CONFIRMED*\n` +
+  const weatherCard = `🌤️ *WEATHER & SITE TRIPWIRES | ${siteName.toUpperCase()}*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `Hello ${identity.name} — we've received your directive for *${siteName}*:\n\n` +
-    `> "${text}"\n\n` +
-    `🎫 *Ticket:* ${ticketId}\n` +
-    `⚡ *Priority:* High (VIP Private Reserve)\n` +
+    `• Temperature: ${weather.temp}°C (Dew Point: ${weather.dewPoint}°C)\n` +
+    `• Wind Speed: ${weather.windSpeed} km/h (Gusts: ${weather.windGusts} km/h)\n` +
+    `• Relative Humidity: ${weather.humidity}% (Delta: ${dewDelta.toFixed(1)}°C)\n` +
+    `• Rain Chance (Next 4h): ${weather.precipProbability4h}%\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `Our district service van has been notified. Handled seamlessly under your seasonal coverage.`;
+    `📋 *Active Tripwire Status:*${tripwires.summaryText}`;
 
-  await sendWhatsAppMessage(dispatchTarget, voucherText);
-  return true;
+  await sendWhatsAppMessage(dispatchTarget, weatherCard);
+}
+
+async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget) {
+  let targetSite = null;
+  if (queriedName) targetSite = await lookupSite(null, queriedName);
+  if (!targetSite) targetSite = fallbackSite;
+
+  if (!targetSite) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Court not found. Check spelling in Airtable.`);
+    return;
+  }
+
+  const siteName = targetSite.fields['Site Name'];
+  const currentGate = targetSite.fields['Current Gate'] || 'No Gate Set';
+  const workflowMode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
+  const lastNote = targetSite.fields['Last Note'] || 'No notes logged';
+
+  const statusCard = `🏟️ *${siteName.toUpperCase()} | STATUS*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `• Mode: ${workflowMode}\n` +
+    `• Current Gate: ${currentGate}\n` +
+    `• Last Update: ${lastNote.slice(0, 150)}`;
+
+  await sendWhatsAppMessage(dispatchTarget, statusCard);
+}
+
+async function handleSpokenReadinessQuery(queriedName, fallbackSite, dispatchTarget) {
+  let targetSite = null;
+  if (queriedName) targetSite = await lookupSite(null, queriedName);
+  if (!targetSite) targetSite = fallbackSite;
+
+  if (!targetSite) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Court not found to check readiness.`);
+    return;
+  }
+
+  const gate = evaluateReadinessGate(targetSite);
+  const report = `🏗️ *${targetSite.fields['Site Name'].toUpperCase()} | MOBILIZATION CHECK*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🚦 *Status:* ${gate.status}\n` +
+    `📋 *Details:* ${gate.details}\n` +
+    `👉 *Crew:* ${targetSite.fields['Assigned Crew'] || 'Unassigned'}`;
+
+  await sendWhatsAppMessage(dispatchTarget, report);
 }
 
 // ====================================================================
-// 13. 3-TIER TEXT EXHAUST SIPHON
+// 13. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
 
-async function triageDispatchText(text, workerRecord, currentSite = null, recentAmbientSnippets = []) {
-  const activeSites = await getAllActiveSitesList();
-  const siteListStr = activeSites.join(', ') || 'BPC RCOR Court 1, BPC RCOR Court 2, BPC Don Walker, BPC North Padel Club';
-  const siteWorkflowMode = currentSite?.fields?.['Workflow Mode'] || 'INSTALLATION';
+const INTENT_CLASSIFICATION_PROMPT = `
+You are the Titan OS Ambient Intelligence Scribe & Operational Dispatcher for Bounce Padel.
+Classify incoming spoken audio transcripts or text messages.
 
-  const ambientMemory = recentAmbientSnippets.length > 0
-    ? `\nRECENT AMBIENT FIELD MEMORY FOR THIS SITE:\n${recentAmbientSnippets.map(n => `- [${n.category}]: ${n.distilled_context}`).join('\n')}\n`
-    : '';
+ROUTING INTENTS:
+1. "LOCATION_QUERY": User is asking for the location, directions, pin, map, or address of a court (e.g. "Can you send the location for Levinsky?", "Where is Don Walker?", "Send me the pin for RCOR").
+2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions (e.g. "What's the weather at Levinsky?", "Is it too windy for glass?").
+3. "STATUS_QUERY": User is asking about progress, gates, or status of a court (e.g. "What's the status of Mary's court?", "What gate are we on?").
+4. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received (e.g. "Is Levinsky ready to mobilize?").
+5. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
+6. "ACTIONABLE_STATE_CHANGE": Milestones reached, deposit received, concrete pour dates set.
+7. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes).
+8. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 
-  const prompt = `
-You are the Titan OS Ambient Intelligence Scribe, Operational Dispatch & Data Exhaust Siphon for Bounce Padel.
-Current Operational Context: [Site Mode: ${siteWorkflowMode}]
-Active Padel Court Registry: [${siteListStr}]
-Field Personnel: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem", "Michael", "David", "Edwin"]
-${ambientMemory}
-3-TIER EXHAUST CLASSIFICATION DIRECTIVE:
-Classify the incoming text into EXACTLY ONE of three tiers:
+Extract "queried_court_name": string or null (e.g. "Levinsky", "Don Walker", "Mary", "RCOR").
 
-TIER 1 - "PURE_NOISE": Casual banter, emojis, greeting filler ("ok", "lol", "👍", "coffee time").
-TIER 2 - "DARK_MATTER": Informal field intelligence, weather notes, equipment comments ("traffic on 400", "dropped off screws at Orillia", "GC Paul says slab is Friday").
-TIER 3 - "ACTIONABLE_STATE_CHANGE": Milestones, 50% deposit received, concrete pour dates, quote leads, closeouts, invoices.
-
-Input Text: "${text}"
-
-Output JSON only:
+OUTPUT FORMAT (JSON ONLY):
 {
-  "exhaust_tier": "PURE_NOISE" | "DARK_MATTER" | "ACTIONABLE_STATE_CHANGE",
-  "is_actionable": boolean,
-  "intent": string,
-  "dark_matter_category": string | null,
-  "distilled_context": string | null,
-  "urgency": "LOW" | "MEDIUM" | "HIGH" | null,
-  "gravity_score": integer | null,
-  "matched_site_name": "string or null",
-  "ticket_id": integer or null,
-  "resolution_summary": "string in English",
-  "billing_details": { "client_name": "string or null", "amount": "string or null", "invoice_number": "string or null", "memo": "string or null" },
-  "deposit_status": "50% Deposit Received" | "Paid in Full" | null,
-  "pour_date": "YYYY-MM-DD or null",
-  "notes": "string in English"
-}
-`;
-
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.0,
-      responseMimeType: 'application/json',
-      thinkingConfig: { thinkingBudget: 0 }
-    }
-  };
-
-  const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-
-  if (!res.ok) throw new Error(`Gemini dispatch triage failed (${res.status}): ${await res.text()}`);
-
-  const result = await res.json();
-  const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) return null;
-
-  return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-}
-
-async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity) {
-  const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
-  await Promise.all(uploadPromises);
-
-  const activeSites = await getAllActiveSitesList();
-  const siteListStr = activeSites.join(', ') || 'BPC RCOR Court 1, BPC RCOR Court 2, BPC Don Walker, BPC North Padel Club';
-
-  const audioPrompt = `
-You are the Titan OS Spoken Voice Triage Engine for Bounce Padel.
-Transcribe spoken audio with "Smart Verbatim" (purge all "uh", "ah", "um", stutters, and verbal fillers).
-Generate both clean fluent English (transcript_en) and clean Spanish (transcript_es).
-
-Active Padel Court Registry: [${siteListStr}]
-Field Personnel: ["Dee", "Yeikol", "Edison", "Rob", "Bob", "Adem", "Michael", "David", "Edwin"]
-
-TIER 1 - "PURE_NOISE": Casual banter, filler speech.
-TIER 2 - "DARK_MATTER": Informal intelligence, staging notes, parts comments, weather notes.
-TIER 3 - "ACTIONABLE_STATE_CHANGE": Milestones, deposits received, concrete pour dates, closeouts.
-
-OUTPUT SPECIFICATION (JSON ONLY):
-{
-  "transcript_en": "Verbatim English transcript without filler words",
-  "transcript_es": "Transcripción limpia en español sin muletillas",
-  "exhaust_tier": "PURE_NOISE" | "DARK_MATTER" | "ACTIONABLE_STATE_CHANGE",
-  "is_actionable": boolean,
-  "intent": string,
-  "dark_matter_category": string | null,
-  "distilled_context": string | null,
-  "urgency": "LOW" | "MEDIUM" | "HIGH" | null,
-  "gravity_score": integer | null,
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE",
+  "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
   "resolution_summary": "string in English or null",
-  "pour_date": "YYYY-MM-DD or null",
-  "deposit_status": "50% Deposit Received" | "Paid in Full" | null,
-  "notes": "string in English"
+  "dark_matter_category": "Logistics" | "Site Conditions" | "Hardware" | null,
+  "distilled_context": "string or null",
+  "urgency": "LOW" | "MEDIUM" | "HIGH" | null,
+  "gravity_score": integer | null,
+  "transcript_en": "Clean English transcript",
+  "transcript_es": "Clean Spanish transcript"
 }
 `;
 
-  const contentParts = [{ text: audioPrompt }];
-  for (const item of items) {
-    contentParts.push({
-      inline_data: {
-        mime_type: item.mimeType,
-        data: item.buffer.toString('base64')
-      }
-    });
+async function triageSpokenOrTextNLP(rawInput, isAudio = false, audioItems = []) {
+  const activeSites = await getAllActiveSitesList();
+  const siteListStr = activeSites.join(', ');
+
+  const prompt = `${INTENT_CLASSIFICATION_PROMPT}\nActive Registry: [${siteListStr}]\nInput: "${typeof rawInput === 'string' ? rawInput : 'Spoken Voice Memo'}"`;
+
+  const contentParts = [{ text: prompt }];
+
+  if (isAudio && audioItems.length > 0) {
+    for (const item of audioItems) {
+      contentParts.push({
+        inline_data: {
+          mime_type: item.mimeType,
+          data: item.buffer.toString('base64')
+        }
+      });
+    }
   }
 
   const payload = {
@@ -1912,33 +1594,75 @@ OUTPUT SPECIFICATION (JSON ONLY):
     }
   };
 
-  const gRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+  const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
 
-  if (!gRes.ok) throw new Error(`Gemini voice triage failed (${gRes.status}): ${await gRes.text()}`);
+  if (!res.ok) throw new Error(`Gemini NLP failed (${res.status}): ${await res.text()}`);
 
-  const gData = await gRes.json();
-  const rawText = gData.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) return;
+  const data = await res.json();
+  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) return null;
 
-  const triage = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-  console.log('[Voice Memo Siphon]:', { transcript_en: triage.transcript_en, tier: triage.exhaust_tier });
+  return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+}
 
-  if (triage.exhaust_tier === 'PURE_NOISE') return;
+async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity) {
+  const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
+  await Promise.all(uploadPromises);
 
-  if (triage.exhaust_tier === 'DARK_MATTER') {
+  const triage = await triageSpokenOrTextNLP(null, true, items);
+  if (!triage) return;
+
+  console.log('[Voice Intent]:', { intent: triage.intent, querySite: triage.queried_court_name });
+
+  if (triage.intent === 'PURE_NOISE') return;
+
+  if (triage.intent === 'LOCATION_QUERY') {
+    await handleSpokenLocationQuery(triage.queried_court_name, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'WEATHER_QUERY') {
+    await handleSpokenWeatherQuery(triage.queried_court_name, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'STATUS_QUERY') {
+    await handleSpokenStatusQuery(triage.queried_court_name, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'READINESS_QUERY') {
+    await handleSpokenReadinessQuery(triage.queried_court_name, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'WORK_ORDER_CLOSEOUT') {
+    await executeWorkOrderCloseout({
+      site,
+      targetCourtName: triage.queried_court_name || triage.matched_site_name,
+      ticketId: triage.ticket_id,
+      resolutionNotes: triage.resolution_summary || triage.transcript_en || 'Spoken closeout verified on site.',
+      worker,
+      dispatchTarget,
+      fromPhone
+    });
+    return;
+  }
+
+  if (triage.intent === 'DARK_MATTER') {
     const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
-    const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Fleet General';
+    const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Fleet Operations';
 
     const archivedRecord = await streamToDarkMatterVault({
       siteId: site?.id || null,
       siteName: siteLabel,
       senderPhone: fromPhone,
       senderName: senderName,
-      rawText: triage.transcript_en || triage.transcription,
+      rawText: triage.transcript_en,
       category: triage.dark_matter_category || 'Logistics',
       distilledContext: triage.distilled_context || triage.transcript_en,
       urgency: triage.urgency || 'LOW',
@@ -1947,36 +1671,19 @@ OUTPUT SPECIFICATION (JSON ONLY):
 
     if (site && (triage.gravity_score >= 4 || triage.urgency === 'HIGH')) {
       await airtableWriteWithAutoDrop('Sites', {
-        'Last Note': `[VOICE ALERT - ${triage.dark_matter_category}]: ${triage.distilled_context}`,
+        'Last Note': `[VOICE NOTE - ${triage.dark_matter_category}]: ${triage.distilled_context}`,
         'Last Intent': 'AMBIENT_ALERT'
       }, site.id);
 
       if (archivedRecord?.id) {
-        const alertPrompt = `⚠️ *FIELD INTELLIGENCE RECORDED (VOICE)*\n\n` +
+        const alertPrompt = `⚠️ *FIELD NOTE RECORDED*\n\n` +
           `*Site:* ${siteLabel}\n` +
-          `*Observation:* "${triage.distilled_context}"\n` +
-          `*Category:* ${triage.dark_matter_category} (Urgency: ${triage.urgency})\n\n` +
-          `Archived into Supabase vault. Want to promote this into an active dispatch ticket?`;
+          `*Observation:* "${triage.distilled_context}"\n\n` +
+          `Want to convert this into an open dispatch ticket?`;
 
-        const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Promote to Ticket' }];
+        const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Create Ticket' }];
         await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
       }
-    }
-    return;
-  }
-
-  if (triage.exhaust_tier === 'ACTIONABLE_STATE_CHANGE') {
-    if (triage.intent === 'WORK_ORDER_CLOSEOUT') {
-      await executeWorkOrderCloseout({
-        site,
-        targetCourtName: triage.matched_site_name,
-        ticketId: triage.ticket_id,
-        resolutionNotes: triage.resolution_summary || triage.transcript_en || 'Spoken closeout verified on site.',
-        worker,
-        dispatchTarget,
-        fromPhone
-      });
-      return;
     }
   }
 }
@@ -1988,15 +1695,13 @@ async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
   const siteListStr = activeSites.join(', ');
 
   const auditContextText = `AUDIT CONTEXT:
-Active Padel Court Registry: [${siteListStr}]
-Current Bound Asset: ${cumulativeContext.siteName || 'Unbound Court'}
-Total Physical Courts at Facility: ${cumulativeContext.totalCourts || 1}
+Active Registry: [${siteListStr}]
+Current Target Court: ${cumulativeContext.siteName || 'Unbound Court'}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
-Evaluate video frames against the 12-Gate Physical Construction Rubric.
-If this is a multi-court venue, assess the 180° apron sweep across all visible courts.
-Extract courts_detected_count, facility_breakdown, highest_facility_gate, lowest_facility_gate, verified_gates, in_progress_gate, facility_summary, Smart Verbatim transcript_en, and transcript_es.`;
+Evaluate ONLY the foreground court. Grade against 8-Gate physical rubric.
+Check silicone status on Gate 4 without treating it as a blocker.`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -2043,12 +1748,10 @@ async function processMediaBatch(batch) {
   const hasVideo = items.some(item => item.type === 'video');
 
   const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
-  const totalFacilityCourts = parseInt(site?.fields?.['Total Courts'] || site?.fields?.['Venue Court Count']) || 1;
 
   const cumulativeContext = {
-    siteName: site?.fields?.['Site Name'] || 'BPC Court',
+    siteName: site?.fields?.['Site Name'] || 'Padel Court',
     workflowMode: currentMode,
-    totalCourts: totalFacilityCourts,
     siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
     openTickets: site?.fields?.['Open Tickets'] || 0,
     clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
@@ -2057,28 +1760,17 @@ async function processMediaBatch(batch) {
   };
 
   if (!hasVisualMedia) {
-    console.log(`[Batch Router] Voice-only memo detected (${items.length} item(s)). Routing to Ambient Voice Siphon.`);
     await triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity);
     return;
   }
 
-  // Upload visual artifacts to Supabase Storage first
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
   const storageResults = await Promise.all(uploadPromises);
 
-  // ==================================================================
-  // STAGE 0: UNIVERSAL VISUAL TRIAGE (RECEIPTS VS COURT SWEEPS)
-  // ==================================================================
+  // STAGE 0: RECEIPT TRIAGE
   if (!hasVideo) {
     const visualTriage = await classifyVisualMediaIntent(items);
-    console.log('[Visual Triage Classification]:', {
-      category: visualTriage.media_category,
-      total: visualTriage.grand_total,
-      receipts: visualTriage.receipts?.length || 0
-    });
-
     if (visualTriage.media_category === 'FINANCIAL_RECEIPT') {
-      console.log(`[Batch Router] Financial receipt(s) detected. Routing to Expense Ingestion Engine.`);
       await handleFinancialReceiptBatch({
         items,
         storageResults,
@@ -2089,42 +1781,33 @@ async function processMediaBatch(batch) {
         fromPhone,
         callerIdentity
       });
-      return; // HARD STOP — Prevents polluting Sites table or triggering 0% Gate 0!
+      return;
     }
 
     if (visualTriage.media_category === 'IRRELEVANT_NOISE') {
-      console.warn(`[Visual Triage] Media classified as non-operational noise.`);
-      await sendWhatsAppMessage(dispatchTarget, `ℹ️ *TITAN OS | MEDIA ARCHIVED*\nPhoto received and saved to Supabase vault, but no padel court milestone or expense receipt was detected.`);
-      return; // HARD STOP
+      await sendWhatsAppMessage(dispatchTarget, `ℹ️ *TITAN OS | PHOTO LOGGED*\nPhoto saved, but no padel court milestone or receipt detected.`);
+      return;
     }
   }
 
-  // ==================================================================
-  // STAGE 1: BLIND VISUAL GROUND TRUTH GATE (VIDEO SWEEPS)
-  // ==================================================================
+  // STAGE 1: BLIND VISION GATE
   if (hasVideo) {
     const videoItem = items.find(item => item.type === 'video');
     const visualTruth = await inspectBlindVisualGroundTruth(videoItem);
 
     if (visualTruth.is_padel_court === false) {
-      console.warn(`[Blind Vision Gate] REJECTED non-court video: "${visualTruth.detected_scene}"`);
-
-      const rejectionCard = `⛔ *TITAN OS | AUDIT REJECTED (VISUAL MISMATCH)*\n` +
-        `*(Auditoría Rechazada por Discrepancia Visual)*\n` +
+      const rejectionCard = `⛔ *TITAN OS | SWEEP REJECTED*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `⚠️ *Ground Truth Verification Failed / Verificación Fallida*\n\n` +
-        `👁️ *Camera Detected / Cámara Detectó:*\n${visualTruth.detected_scene || 'Non-court environment'}\n\n` +
-        `❌ *Verdict / Veredicto:*\nNo padel court structure detected in video frames.\n_No se detectó estructura de pádel en el video._\n\n` +
-        `👉 *Action Required / Acción Requerida:*\nStand at the court perimeter and film the physical asset to lock baseline.\n_Párese en el perímetro de la cancha y grabe el activo físico para bloquear la línea base._`;
+        `⚠️ *Camera Detected:*\n${visualTruth.detected_scene || 'Non-court environment'}\n\n` +
+        `❌ *Verdict:*\nNo padel court structure detected in video frames.\n\n` +
+        `👉 *Action:* Stand inside or at the court perimeter and film the physical structure.`;
 
       await sendWhatsAppMessage(dispatchTarget, rejectionCard);
-      return; // HARD STOP
+      return;
     }
   }
 
-  // ==================================================================
-  // STAGE 2: MULTIMODAL INGESTION & MODE-AWARE ROUTING
-  // ==================================================================
+  // STAGE 2: MULTIMODAL INGESTION
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
 
   let targetedSite = site;
@@ -2134,8 +1817,8 @@ async function processMediaBatch(batch) {
   }
 
   const siteMode = targetedSite?.fields?.['Workflow Mode'] || cumulativeContext.workflowMode || 'INSTALLATION';
-  const courtLabel = targetedSite?.fields?.['Site Name'] || forensicAudit.target_court_name || 'Assigned Court';
-  const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Technician';
+  const courtLabel = targetedSite?.fields?.['Site Name'] || 'Assigned Court';
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Installer';
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
   let activeTicket = null;
@@ -2147,55 +1830,30 @@ async function processMediaBatch(batch) {
     activeTicket = await findActiveTicketForSite(targetedSite.id);
   }
 
-  // Weather Tripwires
-  let weatherNotice = '';
+  // Proactive Weather Scan
+  let weatherTripwires = { summaryText: '' };
   if (targetedSite && !indoorSite) {
     const coords = await resolveCoordinates(targetedSite);
     if (coords) {
       const weather = await getHyperlocalWeather(coords.lat, coords.lon);
       if (weather) {
-        const dewDelta = weather.temp - weather.dewPoint;
-        if (weather.windGusts > 37) {
-          weatherNotice += `\n⛔ *SAFETY NOTICE / ALERTA DE SEGURIDAD:* Wind gusts at ${weather.windGusts} km/h (>20 kts). Gate 4 glass seating suspended / Montaje de cristal suspendido por viento.`;
-        } else if (weather.isRainingOrStorm || weather.precip > 0 || weather.precipProbability4h > 40) {
-          weatherNotice += `\n🌧️ *WEATHER NOTICE / ALERTA DE LLUVIA:* Rain/storm detected. Hold outdoor assembly & gluing / Suspender pegado y montaje exterior.`;
-        } else if (weather.humidity > 85 || dewDelta <= 2) {
-          weatherNotice += `\n⚠️ *CONDENSATION NOTICE / ALERTA DE HUMEDAD:* High surface moisture risk. Hold Gate 7 turf adhesive / Suspender adhesivo de césped.`;
-        }
+        weatherTripwires = evaluateWeatherTripwires(weather, forensicAudit.highest_gate);
       }
     }
   }
 
-  // ==================================================================
-  // PIPELINE A: INSTALLATION MILESTONE ENGINE (GATES 1 - 12)
-  // ==================================================================
+  // PIPELINE A: INSTALLATION MILESTONE ENGINE (8-GATES)
   if (siteMode === 'INSTALLATION' && !explicitTicketId) {
-    console.log(`[Installation Engine] Processing construction sweep for ${courtLabel}`);
-
-    const siteCapacity = parseInt(targetedSite?.fields?.['Total Courts'] || targetedSite?.fields?.['Venue Court Count']) || 1;
-    const detectedCount = forensicAudit.courts_detected_count || 1;
-    const isMultiCourt = siteCapacity > 1 || detectedCount > 1;
-
-    const highestGate = forensicAudit.highest_facility_gate ||
+    const highestGate = forensicAudit.highest_gate ||
       (forensicAudit.verified_gates?.length ? Math.max(...forensicAudit.verified_gates) : 0);
-    const lowestGate = forensicAudit.lowest_facility_gate || highestGate;
 
-    const progressPercent = Math.min(1.0, highestGate / 12);
-    const inProgressGateNum = forensicAudit.in_progress_gate || (highestGate < 12 ? highestGate + 1 : null);
+    const progressPercent = Math.min(1.0, highestGate / TOTAL_GATES);
+    const inProgressGateNum = forensicAudit.in_progress_gate || (highestGate < TOTAL_GATES ? highestGate + 1 : null);
     const inProgressLabel = inProgressGateNum && GATE_NAMES[inProgressGateNum] ? `${inProgressGateNum}. ${GATE_NAMES[inProgressGateNum]}` : null;
     const gateLabel = GATE_NAMES[highestGate] ? `${highestGate}. ${GATE_NAMES[highestGate]}` : `Gate ${highestGate}`;
 
-    const cleanEn = forensicAudit.transcript_en || forensicAudit.facility_summary || 'Construction sweep recorded.';
-
-    let breakdownText = '';
-    let compactGateStatus = inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel;
-
-    if (isMultiCourt && Array.isArray(forensicAudit.facility_breakdown) && forensicAudit.facility_breakdown.length > 0) {
-      breakdownText = `\n📋 *Facility Breakdown (${siteCapacity} Courts):*\n` +
-        forensicAudit.facility_breakdown.map(c => `• *${c.court_label}:* Gate ${c.highest_gate} (${c.stage_description || GATE_NAMES[c.highest_gate] || 'Active'})`).join('\n');
-      
-      compactGateStatus = forensicAudit.facility_breakdown.map(c => `${c.court_label}: G${c.highest_gate}`).join(' | ');
-    }
+    const cleanSummary = forensicAudit.summary || forensicAudit.transcript_en || 'Construction sweep recorded.';
+    const compactGateStatus = inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel;
 
     const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
     const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
@@ -2203,17 +1861,24 @@ async function processMediaBatch(batch) {
       return isNaN(num) ? String(g) : `Gate ${num}`;
     }).filter(g => !previouslyCleared.includes(g));
 
+    let siliconeStatusText = '';
+    if (forensicAudit.silicone_applied === true) {
+      siliconeStatusText = `• Silicone Sealant: Applied ✅`;
+    } else if (highestGate >= 4) {
+      siliconeStatusText = `• Silicone Sealant: None / Omitted (Partner Spec)`;
+    }
+
     if (targetedSite) {
       const allCleared = Array.from(new Set([...previouslyCleared, ...newlyVerifiedGates]));
 
       const updatePayload = {
         'Cleared Milestones': allCleared,
         'Current Gate': compactGateStatus,
-        'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${forensicAudit.facility_summary || cleanEn}${breakdownText ? `\n${breakdownText}` : ''}`,
+        'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${cleanSummary}${siliconeStatusText ? `\n${siliconeStatusText}` : ''}`,
         'Last Intent': 'MILESTONE_PROGRESS'
       };
 
-      if (lowestGate >= 12 && highestGate >= 12) {
+      if (highestGate >= TOTAL_GATES) {
         updatePayload['Workflow Mode'] = 'MAINTENANCE';
         updatePayload['Site Status'] = 'ACTIVE';
       }
@@ -2225,90 +1890,37 @@ async function processMediaBatch(batch) {
       }
     }
 
-    let installCard = `🏗️ *TITAN OS | FACILITY MILESTONE VERIFIED*\n` +
-      `*(Hito de Instalación Verificado)*\n` +
+    let installCard = `🏗️ *TITAN OS | MILESTONE VERIFIED*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🏟️ *Venue:* ${courtLabel} (${siteCapacity} Court${siteCapacity > 1 ? 's' : ''})\n` +
-      `👤 *Lead / Instalador:* ${workerName}\n` +
-      `📊 *Progress:* ${Math.round(progressPercent * 100)}% (Leading at ${gateLabel})\n` +
-      (breakdownText ? `${breakdownText}\n` : '') +
+      `🏟️ *Court:* ${courtLabel}\n` +
+      `👤 *Lead:* ${workerName}\n` +
+      `📊 *Progress:* ${Math.round(progressPercent * 100)}% (${gateLabel})\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `👁️ *Visual Ground Truth:*\n${forensicAudit.facility_summary || cleanEn}\n\n`;
+      `👁️ *Observation:*\n${cleanSummary}\n` +
+      (siliconeStatusText ? `${siliconeStatusText}\n` : '');
 
-    if (weatherNotice) installCard += `${weatherNotice}\n\n`;
-    installCard += `✅ *Facility digital twin updated in Sites ledger.*`;
-
-    await sendWhatsAppMessage(dispatchTarget, installCard);
-
-    // Consolidate Vault Logging: write only on milestone advance or critical alerts
-    const hasMeaningfulMilestone = newlyVerifiedGates.length > 0 || highestGate === 12;
-    const hasBlockerOrAlert = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
-                              forensicAudit.status_observed === 'ACTION_REQUIRED';
-
-    if (hasMeaningfulMilestone || hasBlockerOrAlert) {
-      try {
-        const videoIndex = items.findIndex(item => item.type === 'video');
-        const storageResult = storageResults[videoIndex >= 0 ? videoIndex : 0];
-        const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
-          'Message ID': items[0]?.messageId,
-          'Worker Phone Raw': fromPhone,
-          'Message Type': hasVideo ? 'video' : 'image',
-          'Caption Text': `[FACILITY SWEEP - Gate ${highestGate}/12]: ${cleanEn}`,
-          'Media URL': storageResult?.signedUrl,
-          'Media Path': storageResult?.storagePath,
-          'Raw Payload JSON': JSON.stringify(items[0]?.rawMessage)
-        });
-
-        await airtableWriteWithAutoDrop('Reports 2', {
-          'Inbound Messages 2': inboundRecord?.id ? [inboundRecord.id] : [],
-          'Sites': targetedSite ? [targetedSite.id] : [],
-          'Workflow Mode': 'INSTALLATION',
-          'Overall Status': 'MILESTONE_PROGRESS',
-          'Site Conditions': forensicAudit.site_conditions || 'Construction Active',
-          'Action Items': (forensicAudit.action_items || []).join('\n'),
-          'Status Observed': forensicAudit.status_observed || 'MILESTONE_PROGRESS',
-          'Action Intent': 'MILESTONE_CLEARANCE',
-          'WhatsApp Reply Text': installCard,
-          'Clean JSON': JSON.stringify(forensicAudit, null, 2)
-        });
-      } catch (e) {
-        console.warn('[INOC Vault Sync Warning]:', e.message);
-      }
-    } else {
-      console.log(`[INOC Vault] Routine check with no milestone advancement; archived to Supabase Dark Matter.`);
+    if (weatherTripwires.summaryText) {
+      installCard += `\n📋 *Weather Telemetry:*${weatherTripwires.summaryText}\n`;
     }
 
+    installCard += `\n✅ *Progress updated in Sites ledger.*`;
+
+    await sendWhatsAppMessage(dispatchTarget, installCard);
     return;
   }
 
-  // ==================================================================
-  // PIPELINE B: MAINTENANCE VIDEO DELTA (PRE-WORK -> POST-WORK)
-  // ==================================================================
-  if (hasVideo) {
+  // PIPELINE B: MAINTENANCE CLOSEOUT
+  if (hasVideo && activeTicket) {
     const videoIndex = items.findIndex(item => item.type === 'video');
     const videoStorageUrl = storageResults[videoIndex]?.signedUrl || '';
-
-    if (!activeTicket) {
-      await sendWhatsAppMessage(dispatchTarget, `⚠️ Visual verified, but no active open work order was found for *${courtLabel}*.`);
-      return;
-    }
-
     const ticketExistingNotes = activeTicket.fields['Notes'] || '';
-    const hasExistingPreWork = Boolean(
-      activeTicket.fields['Pre-Work Media'] || ticketExistingNotes.includes('[PRE-WORK BASELINE VIDEO]')
-    );
 
     const isIntakeBaseline = (forensicAudit.video_phase === 'INTAKE_BASELINE') ||
-      (!hasExistingPreWork && forensicAudit.video_phase !== 'COMPLETION_CLOSEOUT');
-
-    const cleanEn = forensicAudit.transcript_en || forensicAudit.transcription || 'Court sweep logged.';
-    const cleanEs = forensicAudit.transcript_es || 'Barrido de cancha registrado.';
+      (!ticketExistingNotes.includes('[PRE-WORK BASELINE VIDEO]') && forensicAudit.video_phase !== 'COMPLETION_CLOSEOUT');
 
     if (isIntakeBaseline) {
       const blockers = forensicAudit.blockers_detected || [];
-      const blockerList = blockers.length > 0 ? blockers.map(b => `• ${b}`).join('\n') : 'None reported / Ninguno';
-
-      const updatedNotes = `${ticketExistingNotes}\n\n[PRE-WORK BASELINE VIDEO - ${timeStr} by ${workerName}]:\nURL: ${videoStorageUrl}\nEN: "${cleanEn}"\nES: "${cleanEs}"\nBlockers: ${blockers.join(', ') || 'None'}`.trim();
+      const updatedNotes = `${ticketExistingNotes}\n\n[PRE-WORK BASELINE - ${timeStr} by ${workerName}]:\nURL: ${videoStorageUrl}\nBlockers: ${blockers.join(', ') || 'None'}`.trim();
 
       await airtableWriteWithAutoDrop('Daily Assignments', {
         'Status': 'In Progress',
@@ -2316,70 +1928,47 @@ async function processMediaBatch(batch) {
         'Notes': updatedNotes
       }, activeTicket.id);
 
-      if (targetedSite) {
-        await airtableWriteWithAutoDrop('Sites', {
-          'Last Note': `Intake baseline locked for Ticket #${activeTicket.fields['Assignment ID'] || activeTicket.id}: ${blockers.length ? `Blockers: ${blockers.join(', ')}` : 'Nominal'}`,
-          'Last Intent': 'INTAKE_BASELINE_LOCKED'
-        }, targetedSite.id);
-      }
-
-      let baselineCard = `🎥 *TITAN OS | PRE-WORK BASELINE LOCKED*\n` +
-        `*(Línea Base Previa Bloqueada)*\n` +
+      let baselineCard = `🎥 *TITAN OS | INTAKE BASELINE LOCKED*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `🎫 *Ticket #${activeTicket.fields['Assignment ID'] || activeTicket.id} Active / Activo*\n` +
-        `🏟️ *Court / Cancha:* ${courtLabel}\n` +
-        `👤 *Technician / Técnico:* ${workerName}\n` +
-        `⏱️ *Time / Hora:* ${timeStr}\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `🎙️ *Field Audio / Audio de Campo:*\n` +
-        `🇺🇸 *EN:* "${cleanEn}"\n` +
-        `🇪🇸 *ES:* "${cleanEs}"\n\n`;
-
-      if (blockers.length > 0) {
-        baselineCard += `⚠️ *Blockers Detected / Bloqueadores:*\n${blockerList}\n\n`;
-      } else {
-        baselineCard += `🟢 *Baseline Condition / Condición:* Nominal (No blockers logged)\n\n`;
-      }
-
-      if (weatherNotice) baselineCard += `${weatherNotice}\n\n`;
-
-      baselineCard += `👉 *Status: IN PROGRESS / EN PROGRESO.*\n` +
-        `Proceed with service. When finished, send a 10-second completion video to auto-verify and close hands-free.\n` +
-        `_Realice el trabajo. Al terminar, envíe video de 10s para verificar y cerrar automáticamente._`;
+        `🎫 *Ticket #${activeTicket.fields['Assignment ID'] || activeTicket.id} Active*\n` +
+        `🏟️ *Court:* ${courtLabel}\n` +
+        `👤 *Technician:* ${workerName}\n` +
+        `⏱️ *Time:* ${timeStr}\n\n` +
+        (blockers.length ? `⚠️ *Blockers:* ${blockers.join(', ')}\n\n` : `🟢 *Condition:* Nominal\n\n`) +
+        (weatherTripwires.summaryText ? `📋 *Weather Telemetry:*${weatherTripwires.summaryText}\n\n` : '') +
+        `👉 Send 10s completion video when work is finished to close ticket.`;
 
       await sendWhatsAppMessage(dispatchTarget, baselineCard);
       return;
     }
 
-    if (!isIntakeBaseline || forensicAudit.video_phase === 'COMPLETION_CLOSEOUT') {
-      const workDone = (forensicAudit.work_verified && forensicAudit.work_verified.length > 0)
-        ? forensicAudit.work_verified.join(', ')
-        : (forensicAudit.resolution_summary || forensicAudit.worker_summary || 'Service and playability verified on-site.');
+    const workDone = (forensicAudit.work_verified && forensicAudit.work_verified.length > 0)
+      ? forensicAudit.work_verified.join(', ')
+      : (forensicAudit.resolution_summary || 'Service verified on-site.');
 
-      const updatedNotes = `${ticketExistingNotes}\n\n[POST-WORK CLOSEOUT VIDEO - ${timeStr} by ${workerName}]:\nURL: ${videoStorageUrl}\nWork Verified: ${workDone}`.trim();
+    const updatedNotes = `${ticketExistingNotes}\n\n[POST-WORK CLOSEOUT - ${timeStr} by ${workerName}]:\nWork Verified: ${workDone}`.trim();
 
-      await airtableWriteWithAutoDrop('Daily Assignments', {
-        'Status': 'Complete',
-        'Post-Work Media': videoStorageUrl,
-        'Notes': updatedNotes
-      }, activeTicket.id);
+    await airtableWriteWithAutoDrop('Daily Assignments', {
+      'Status': 'Complete',
+      'Post-Work Media': videoStorageUrl,
+      'Notes': updatedNotes
+    }, activeTicket.id);
 
-      await executeWorkOrderCloseout({
-        site: targetedSite,
-        targetCourtName: courtLabel,
-        ticketId: activeTicket.fields['Assignment ID'],
-        resolutionNotes: `Video Delta Verified: ${workDone}`,
-        worker,
-        dispatchTarget,
-        fromPhone,
-        isVideoDelta: true
-      });
-      return;
-    }
+    await executeWorkOrderCloseout({
+      site: targetedSite,
+      targetCourtName: courtLabel,
+      ticketId: activeTicket.fields['Assignment ID'],
+      resolutionNotes: `Video Sweep Verified: ${workDone}`,
+      worker,
+      dispatchTarget,
+      fromPhone,
+      isVideoDelta: true
+    });
+    return;
   }
 
   let replyText = forensicAudit.whatsapp_status_text || 'Audit logged.';
-  if (weatherNotice) replyText += `\n\n${weatherNotice}`;
+  if (weatherTripwires.summaryText) replyText += `\n\n${weatherTripwires.summaryText}`;
   await sendWhatsAppMessage(dispatchTarget, replyText);
 }
 
@@ -2393,7 +1982,6 @@ app.get('/webhook', (req, res) => {
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === CONFIG.meta.verifyToken) {
-    console.log('[Meta Webhook] Verification successful.');
     return res.status(200).send(challenge);
   }
   return res.sendStatus(403);
@@ -2427,10 +2015,7 @@ app.post('/webhook', async (req, res) => {
     if (!message) return;
 
     const messageId = message.id;
-    if (processedMessageMap.has(messageId)) {
-      console.log(`[Deduplicator] Dropped duplicate message ${messageId}`);
-      return;
-    }
+    if (processedMessageMap.has(messageId)) return;
     processedMessageMap.set(messageId, Date.now());
 
     const rawFrom = message.from || '';
@@ -2438,9 +2023,7 @@ app.post('/webhook', async (req, res) => {
     const rawChatId = message.chat_id || message.group_id || changes?.metadata?.phone_number_id || '';
 
     const isGroupMessage = rawFrom.includes('@g.us') || rawChatId.includes('@g.us');
-    const groupJid = rawFrom.includes('@g.us')
-      ? rawFrom
-      : (rawChatId.includes('@g.us') ? rawChatId : null);
+    const groupJid = rawFrom.includes('@g.us') ? rawFrom : (rawChatId.includes('@g.us') ? rawChatId : null);
 
     const fromPhone = isGroupMessage && rawAuthor
       ? rawAuthor.split('@')[0].replace(/\D/g, '')
@@ -2479,457 +2062,205 @@ app.post('/webhook', async (req, res) => {
 
     const indoorSite = isIndoorSite(site);
 
-    // INTERACTIVE BUTTON REPLIES
+    // INTERACTIVE BUTTON TAPS
     if (message.type === 'interactive') {
-      const interactive = message.interactive;
-      const buttonReply = interactive?.button_reply;
-      const selectedId = buttonReply?.id || '';
-      const selectedTitle = buttonReply?.title || '';
-
-      console.log(`[Interactive Button Tap] Received '${selectedTitle}' (${selectedId}) from ${fromPhone}`);
-
-      if (selectedId.startsWith('DISPATCH_APPROVE_')) {
-        const parts = selectedId.split('_');
-        const nextTicketId = parts[2];
-        const nextWorkerId = parts[3];
-
-        let targetTicket = null;
-        if (nextTicketId && nextTicketId !== 'any') {
-          targetTicket = await findActiveTicketForSite(null, nextTicketId);
-        }
-
-        if (targetTicket) {
-          const updateFields = { 'Status': 'In Progress' };
-          if (nextWorkerId && nextWorkerId !== 'any') {
-            updateFields['Worker'] = [nextWorkerId];
-          }
-          await airtableWriteWithAutoDrop('Daily Assignments', updateFields, targetTicket.id);
-
-          const targetSiteId = targetTicket.fields['Sites']?.[0] || targetTicket.fields['Site']?.[0];
-          const cachedSites = await getCachedSites();
-          const targetSiteRecord = targetSiteId ? cachedSites.find(s => s.id === targetSiteId) : null;
-          const targetCourtName = targetSiteRecord?.fields?.['Site Name'] || 'Assigned Court';
-          const taskCategory = targetTicket.fields['Task Category'] || targetTicket.fields['Assignment Type'] || 'Service';
-
-          let isCoLocated = false;
-          let distanceKm = null;
-          let targetCoords = null;
-
-          if (targetSiteRecord) {
-            targetCoords = await resolveCoordinates(targetSiteRecord);
-          }
-
-          if (site && targetSiteRecord) {
-            if (site.id === targetSiteRecord.id) {
-              isCoLocated = true;
-              distanceKm = 0.0;
-            } else {
-              const currentCoords = await resolveCoordinates(site);
-              if (currentCoords && targetCoords) {
-                distanceKm = haversineDistanceKm(currentCoords.lat, currentCoords.lon, targetCoords.lat, targetCoords.lon);
-                if (distanceKm <= 0.15) isCoLocated = true;
-              }
-            }
-          }
-
-          if (isCoLocated || distanceKm === 0.0) {
-            const onSiteCard = `🎾 *TITAN OS | ON-SITE DISPATCH ACTIVATED*\n` +
-              `*(Despacho en Sitio Activado)*\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n` +
-              `🎫 *Ticket #${nextTicketId} Activated / Activado*\n` +
-              `🏟️ *Court / Cancha:* ${targetCourtName}\n` +
-              `📍 *Distance / Distancia:* ~0.0 km (Co-located at venue / En el mismo club)\n` +
-              `🔧 *Scope / Alcance:* ${taskCategory}\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n` +
-              `👉 *STEP 1: INTAKE SWEEP (BEFORE TOUCHING TOOLS)*\n` +
-              `Record a 15-second walkaround video of the court. Speak conditions & blockers out loud.\n\n` +
-              `👉 *PASO 1: BARRIDO DE ENTRADA (ANTES DE TOCAR HERRAMIENTAS)*\n` +
-              `Grabe un video de 15 segundos alrededor de la cancha. Mencione el estado y cualquier impedimento.`;
-
-            await dispatchReply(onSiteCard);
-          } else {
-            const navLink = targetCoords
-              ? `https://www.google.com/maps/dir/?api=1&destination=${targetCoords.lat},${targetCoords.lon}`
-              : 'Address logged in Sites directory';
-            const distLabel = distanceKm !== null ? `~${distanceKm.toFixed(1)} km away` : 'En Route';
-
-            const transitCard = `🚗 *TITAN OS | TRANSIT DISPATCH ACTIVATED*\n` +
-              `*(Despacho en Tránsito Activado)*\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n` +
-              `🎫 *Ticket #${nextTicketId} Assigned / Asignado*\n` +
-              `🏟️ *Destination / Destino:* ${targetCourtName} (${distLabel})\n` +
-              `🗺️ *Google Maps:* ${navLink}\n` +
-              `🔧 *Scope / Tarea:* ${taskCategory}\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n` +
-              `👉 *UPON ARRIVAL (STEP 1) / AL LLEGAR (PASO 1):*\n` +
-              `Send a 15-second walkaround video before starting work / Envíe video de 15s antes de empezar.`;
-
-            await dispatchReply(transitCard);
-          }
-        } else {
-          await dispatchReply(`✅ *DISPATCH CONFIRMED*\nRoute verified and updated in Daily Assignments.`);
-        }
-        return;
-      }
+      const selectedId = message.interactive?.button_reply?.id || '';
 
       if (selectedId.startsWith('PROMOTE_VAULT_')) {
         const vaultId = selectedId.replace('PROMOTE_VAULT_', '');
-        try {
-          const res = await fetch(`${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?id=eq.${vaultId}`, {
-            headers: getSupabaseHeaders('application/json')
-          });
-          const records = await res.json();
-          const item = records?.[0];
+        const res = await fetch(`${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?id=eq.${vaultId}`, {
+          headers: getSupabaseHeaders('application/json')
+        });
+        const records = await res.json();
+        const item = records?.[0];
 
-          if (item) {
-            const assignmentPayload = {
-              'Date': new Date().toISOString().split('T')[0],
-              'Assignment Type': 'Service',
-              'Priority': item.urgency === 'HIGH' ? 'High' : 'Medium',
-              'Source': 'Dark Matter Promotion',
-              'Status': 'Open',
-              'Notes': `[PROMOTED AMBIENT NOTE - ${item.category}]:\n"${item.raw_text}"`
-            };
+        if (item) {
+          const assignmentPayload = {
+            'Date': new Date().toISOString().split('T')[0],
+            'Assignment Type': 'Service',
+            'Priority': item.urgency === 'HIGH' ? 'High' : 'Medium',
+            'Source': 'Note Promotion',
+            'Status': 'Open',
+            'Notes': `[FIELD NOTE - ${item.category}]:\n"${item.raw_text}"`
+          };
 
-            if (item.site_id) assignmentPayload['Sites'] = [item.site_id];
-            const created = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-            const ticketId = created?.fields?.['Assignment ID'] ? `#${created.fields['Assignment ID']}` : 'NEW';
+          if (item.site_id) assignmentPayload['Sites'] = [item.site_id];
+          const created = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+          const ticketId = created?.fields?.['Assignment ID'] ? `#${created.fields['Assignment ID']}` : 'NEW';
 
-            await fetch(`${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?id=eq.${vaultId}`, {
-              method: 'PATCH',
-              headers: getSupabaseHeaders('application/json'),
-              body: JSON.stringify({ status: 'PROMOTED', actionable_followup: `Ticket ${ticketId}` })
-            });
-
-            await dispatchReply(`📋 *PROMOTED TO TICKET ${ticketId}*\nAmbient note officially entered into Daily Assignments for ${item.site_name}.`);
-            return;
-          }
-        } catch (e) {
-          console.error('[Promotion Error]:', e);
+          await dispatchReply(`📋 *Ticket ${ticketId} Created*\nNote added to Daily Assignments for ${item.site_name}.`);
+          return;
         }
       }
-
-      if (selectedId.startsWith('ROUTE_FACTORY_')) {
-        await dispatchReply(`🏭 *RETURN ROUTE LOGGED / REGRESO A FÁBRICA*\nTechnician heading back to Orillia Factory for staging.`);
-        return;
-      }
-
-      await dispatchReply(`✅ Selected: *${selectedTitle}* — Logged into Operations.`);
       return;
     }
 
-    // LOCATION PIN-DROP (ADDITIVE 300M ARRIVAL TRIGGER)
+    // LOCATION PIN-DROP (PROACTIVE ARRIVAL WEATHER SCAN)
     if (message.type === 'location') {
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
 
       if (!site) {
-        await dispatchReply(`⚠️ This group is not connected to a court yet. Type */group <Court Name>* to connect.`);
+        await dispatchReply(`⚠️ Link this group to a court first: /group <Court Name>`);
         return;
       }
 
       let siteCoords = await resolveCoordinates(site);
-
       if (!siteCoords) {
         const coordString = `${userLat.toFixed(5)}, ${userLon.toFixed(5)}`;
         await airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, site.id);
-        siteCoords = { lat: userLat, lon: userLon };
-
-        await dispatchReply(
-          `📍 *COURT GPS ANCHORED*\n` +
-          `Locked coordinates (*${coordString}*) to *${site.fields['Site Name']}*.\n` +
-          `✅ 300m presence geofence and weather tripwires are now active!`
-        );
+        await dispatchReply(`📍 *Coordinates Locked: ${coordString}* to *${site.fields['Site Name']}*`);
         return;
       }
 
       const distanceMeters = haversineDistanceKm(userLat, userLon, siteCoords.lat, siteCoords.lon) * 1000;
-      const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || (fromPhone ? `Crew (+${fromPhone.slice(-4)})` : 'Field Tech');
+      const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
       const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
       if (distanceMeters <= 300) {
-        const checkinNote = `On-site presence verified for ${workerName} at ${timestamp} (${Math.round(distanceMeters)}m from court center).`;
-        await airtableWriteWithAutoDrop('Sites', { 'Last Note': checkinNote, 'Last Intent': 'PRESENCE_VERIFIED' }, site.id);
+        await airtableWriteWithAutoDrop('Sites', {
+          'Last Note': `Arrival verified for ${workerName} at ${timestamp} (${Math.round(distanceMeters)}m).`,
+          'Last Intent': 'PRESENCE_VERIFIED'
+        }, site.id);
 
         const activeTicket = await findActiveTicketForSite(site.id);
 
-        let checkinResponse = `📍 *ON-SITE ARRIVAL VERIFIED / LLEGADA EN SITIO*\n` +
+        // Proactive weather check right upon arrival
+        let arrivalWeatherNotice = '';
+        if (!indoorSite) {
+          const weather = await getHyperlocalWeather(siteCoords.lat, siteCoords.lon);
+          if (weather) {
+            const tripwire = evaluateWeatherTripwires(weather);
+            arrivalWeatherNotice = tripwire.summaryText;
+          }
+        }
+
+        let checkinResponse = `📍 *ON-SITE ARRIVAL VERIFIED*\n` +
           `━━━━━━━━━━━━━━━━━━━━\n` +
-          `👤 *Technician / Técnico:* ${workerName}\n` +
-          `🏟️ *Court / Cancha:* ${site.fields['Site Name']}\n` +
-          `⏱️ *Time / Hora:* ${timestamp} (~${Math.round(distanceMeters)}m)\n`;
+          `👤 *Technician:* ${workerName}\n` +
+          `🏟️ *Court:* ${site.fields['Site Name']}\n` +
+          `⏱️ *Time:* ${timestamp}\n`;
+
+        if (arrivalWeatherNotice) {
+          checkinResponse += `\n🌤️ *Site Telemetry:*${arrivalWeatherNotice}\n`;
+        }
 
         if (activeTicket) {
-          const ticketNum = activeTicket.fields['Assignment ID'] ? `#${activeTicket.fields['Assignment ID']}` : '';
-          const taskCat = activeTicket.fields['Task Category'] || activeTicket.fields['Assignment Type'] || 'Service';
-
           await airtableWriteWithAutoDrop('Daily Assignments', { 'Status': 'In Progress' }, activeTicket.id);
-
-          checkinResponse += `🎫 *Active Ticket / Boleto Activo:* ${ticketNum} (${taskCat})\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `👉 *STEP 1: INTAKE SWEEP / PASO 1: ENTRADA*\n` +
-            `Send your 15-second walkaround video before touching tools.\n` +
-            `_Envíe su video de 15 segundos narrando impedimentos antes de empezar a trabajar._`;
-        } else {
-          checkinResponse += `\n🟢 No active work orders pending. Shift logged on court twin / Sin órdenes pendientes.`;
+          checkinResponse += `\n🎫 *Ticket Active:* #${activeTicket.fields['Assignment ID'] || activeTicket.id}\n` +
+            `👉 Send 15-second walkaround video before touching tools.`;
         }
 
         await dispatchReply(checkinResponse);
       } else {
-        await dispatchReply(
-          `📍 *LOCATION PIN RECEIVED / PIN RECIBIDO*\n\n` +
-          `Distance to court: ${(distanceMeters / 1000).toFixed(1)} km from *${site.fields['Site Name']}*.\n` +
-          `Arrival check-in requires being within 300m / El check-in requiere estar a menos de 300m.`
-        );
+        await dispatchReply(`📍 Location received: ${(distanceMeters / 1000).toFixed(1)} km from *${site.fields['Site Name']}*.`);
       }
       return;
     }
 
-    // TEXT PROCESSING & AMBIENT SIPHON
+    // TEXT & SPOKEN CONVERSATIONAL DISPATCH
     if (message.type === 'text') {
       const rawText = message.text.body.trim();
       const [trigger, ...args] = rawText.split(' ');
-      const intent = COMMAND_MAP[trigger.toLowerCase()];
+      const explicitIntent = COMMAND_MAP[trigger.toLowerCase()];
 
-      if (intent) {
-        if (intent === 'LINK_SITE') {
-          const targetSiteName = args.join(' ');
-          const targetSite = await lookupSite(null, targetSiteName);
-          if (!targetSite) {
-            await dispatchReply(`❌ Could not find "${targetSiteName}". Check spelling in Airtable.`);
-            return;
-          }
-
-          const targetBindingId = groupJid || fromPhone;
-          await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': targetBindingId }, targetSite.id);
-          await dispatchReply(`✅ *CONNECTED TO ${targetSite.fields['Site Name'].toUpperCase()}*`);
+      if (explicitIntent === 'LINK_SITE') {
+        const targetSiteName = args.join(' ');
+        const targetSite = await lookupSite(null, targetSiteName);
+        if (!targetSite) {
+          await dispatchReply(`❌ Could not find "${targetSiteName}". Check spelling in Airtable.`);
           return;
         }
-
-        if (intent === 'LOCATION') {
-          if (!site) {
-            await dispatchReply(`⚠️ Please link a court first with /group <Court Name> to fetch coordinates.`);
-            return;
-          }
-          const coords = await resolveCoordinates(site);
-          if (!coords) {
-            await dispatchReply(`📍 No GPS coordinates locked for *${site.fields['Site Name']}*. Drop a location pin to anchor!`);
-            return;
-          }
-          const links = getGoogleMapsLinks(coords.lat, coords.lon);
-          await dispatchReply(
-            `📍 *${site.fields['Site Name'].toUpperCase()} | GPS ANCHOR*\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `• *Coordinates:* ${coords.lat}, ${coords.lon}\n\n` +
-            `🗺️ *Driving Directions / Ruta:*\n${links.directions}\n\n` +
-            `🛰️ *Satellite Staging View (Yard & Tree Clearance):*\n${links.satellite}`
-          );
-          return;
-        }
-
-        if (intent === 'WEATHER') {
-          if (!site) {
-            await dispatchReply(`⚠️ Please link a court first with /group <Court Name> to check telemetry.`);
-            return;
-          }
-          const coords = await resolveCoordinates(site);
-          if (!coords) {
-            await dispatchReply(`📍 Court coordinates not found. Drop a location pin first!`);
-            return;
-          }
-          const weather = await getHyperlocalWeather(coords.lat, coords.lon);
-          if (!weather) {
-            await dispatchReply(`⚠️ Weather service temporarily unavailable.`);
-            return;
-          }
-          const dewDelta = weather.temp - weather.dewPoint;
-          const wReport = `🌤️ *HYPERLOCAL WEATHER | ${site.fields['Site Name'].toUpperCase()}*\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `• Temperature: ${weather.temp}°C (Dew Point: ${weather.dewPoint}°C)\n` +
-            `• Wind: ${weather.windSpeed} km/h (Gusts: ${weather.windGusts} km/h)\n` +
-            `• Humidity: ${weather.humidity}% (Delta: ${dewDelta.toFixed(1)}°C)\n` +
-            `• Rain Probability (Next 4h): ${weather.precipProbability4h}%\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `• Wind: ${weather.windGusts > 37 ? '⛔ Wind gusts > 20 kts. Glass seating suspended.' : '🟢 Wind nominal for glass.'}\n` +
-            `• Moisture: ${weather.humidity > 85 || dewDelta <= 2 ? '⚠️ High moisture. Turf adhesive hold.' : '🟢 Surface dry for turf gluing.'}`;
-          await dispatchReply(wReport);
-          return;
-        }
-
-        if (intent === 'COURT_BOARD') {
-          await handleCompoundScheduler('board', callerIdentity, dispatchTarget, fromPhone, site);
-          return;
-        }
-
-        if (intent === 'FLEET_MAP_LINK') {
-          await dispatchReply(`🗺️ *TITAN OS LIVE FLEET MAP*\n\nView continental digital twins and site conditions:\nhttps://${req.headers.host}/fleet-map`);
-          return;
-        }
-
-        if (intent === 'READINESS_GATE_CHECK') {
-          if (!site) {
-            await dispatchReply(`⚠️ Please link a court first with /group <Court Name> to check readiness.`);
-            return;
-          }
-          const gate = evaluateReadinessGate(site);
-          const report = `🏗️ *BOUNCE PADEL | SPRING 2027 READINESS GATE*\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `🏟️ *Court:* ${site.fields['Site Name']}\n` +
-            `🚦 *Status:* ${gate.status}\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `📋 *Verification Matrix:*\n` +
-            `${gate.details}\n\n` +
-            `👉 *Assigned Crew:* ${site.fields['Assigned Crew'] || 'Unassigned (Alpha/Beta)'}`;
-          await dispatchReply(report);
-          return;
-        }
-
-        if (intent === 'SITE_CONTEXT') {
-          const targetName = args.join(' ') || site?.fields?.['Site Name'];
-          if (!targetName) {
-            await dispatchReply(`⚠️ Specify court: /context <Court Name>`);
-            return;
-          }
-
-          const notes = await fetchRecentDarkMatter(targetName, 5);
-          if (notes.length === 0) {
-            await dispatchReply(`ℹ️ No ambient dark matter or field logs recorded yet for *${targetName}*.`);
-            return;
-          }
-
-          let response = `🌌 *AMBIENT FIELD INTELLIGENCE | ${targetName.toUpperCase()}*\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n`;
-          notes.forEach((n, idx) => {
-            const time = new Date(n.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-            response += `${idx + 1}. [${n.category}] *${n.sender_name}* (${time}):\n   "${n.distilled_context || n.raw_text}"\n`;
-          });
-          response += `━━━━━━━━━━━━━━━━━━━━\n💡 Type */promote <number>* or reply to convert any note to an active ticket.`;
-
-          await dispatchReply(response);
-          return;
-        }
-
-        if (intent === 'SEARCH_VAULT') {
-          const query = args.join(' ');
-          if (!query) {
-            await dispatchReply(`⚠️ Usage: */search <keyword>* (e.g. */search generator*, */search glass*)`);
-            return;
-          }
-
-          const results = await searchDarkMatterVault(query, 5);
-          if (results.length === 0) {
-            await dispatchReply(`🔍 No field logs found matching "*${query}*".`);
-            return;
-          }
-
-          let response = `🔍 *TITAN VAULT SEARCH | "${query}"*\n━━━━━━━━━━━━━━━━━━━━\n`;
-          results.forEach((r, idx) => {
-            const d = new Date(r.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' });
-            response += `• *${r.site_name}* (${d} by ${r.sender_name}):\n   "${r.distilled_context || r.raw_text}"\n`;
-          });
-
-          await dispatchReply(response);
-          return;
-        }
-
-        if (intent === 'HELP') {
-          await dispatchReply(`🤖 *TITAN OS COMMAND MATRIX (COMANDOS)*\n\n` +
-            `• */w* — Hyperlocal Weather & Wind / Clima y Viento\n` +
-            `• */map* — Google Maps Navigation & Satellite / Navegación y Satélite\n` +
-            `• */s* — Site Status / Estado de Cancha\n` +
-            `• */g* — Spring 2027 Mobilization Gate Check\n` +
-            `• */context* [Court] — Review ambient field notes\n` +
-            `• */search* <keyword> — Search dark matter field vault\n` +
-            `• */board* — Compound Court Reservations Board\n` +
-            `• */fleet* — Continental Fleet Map\n` +
-            `• */group <Court Name>* — Bind WhatsApp Channel\n\n` +
-            `🧾 Photos of receipts automatically log expense tickets with attachments into Daily Assignments.\n` +
-            `🎥 Video sweeps automatically lock pre-work baselines & post-work completion deltas hands-free.`);
-          return;
-        }
+        await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': groupJid || fromPhone }, targetSite.id);
+        await dispatchReply(`✅ *Connected to ${targetSite.fields['Site Name']}*`);
+        return;
       }
 
-      if (isBoundGroupMember || callerIdentity.role === 'Family Member / Player' || callerIdentity.role === 'Compound Member') {
-        const handled = await handleCompoundScheduler(rawText, callerIdentity, dispatchTarget, fromPhone, site);
-        if (handled) return;
+      if (explicitIntent === 'LOCATION') {
+        await handleSpokenLocationQuery(args.join(' '), site, dispatchTarget);
+        return;
       }
 
-      if (callerIdentity.role === 'Owner / Principal' || callerIdentity.role === 'Property Manager / Caretaker') {
-        const lower = rawText.toLowerCase();
-        if (lower.includes('sand') || lower.includes('groom') || lower.includes('clean') ||
-            lower.includes('glass') || lower.includes('net') || lower.includes('tournament') || lower.includes('sweep')) {
-          await handleVIPConcierge(rawText, callerIdentity, dispatchTarget, fromPhone);
-          return;
-        }
+      if (explicitIntent === 'WEATHER') {
+        await handleSpokenWeatherQuery(args.join(' '), site, dispatchTarget);
+        return;
       }
 
-      const isDirectOrAdmin = !isGroupMessage || (worker && worker.fields['Role'] === 'Admin') || isAmbientChannel || (site && AMBIENT_CHAT_MODES.includes(site.fields['Workflow Mode']));
+      if (explicitIntent === 'STATUS') {
+        await handleSpokenStatusQuery(args.join(' '), site, dispatchTarget);
+        return;
+      }
 
-      if (isDirectOrAdmin && rawText.length > 2) {
-        try {
-          const recentDarkMatter = site ? await fetchRecentDarkMatter(site.fields['Site Name'], 3) : [];
-          const triage = await triageDispatchText(rawText, worker, site, recentDarkMatter);
+      if (explicitIntent === 'READINESS_GATE_CHECK') {
+        await handleSpokenReadinessQuery(args.join(' '), site, dispatchTarget);
+        return;
+      }
 
-          if (triage.exhaust_tier === 'PURE_NOISE') return;
+      if (explicitIntent === 'HELP') {
+        await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n` +
+          `• Ask naturally via voice note or text:\n` +
+          `  _"Where is Levinsky?"_ (returns pin & directions)\n` +
+          `  _"What's the weather at RCOR?"_ (returns tripwires & wind holds)\n` +
+          `  _"What gate is Don Walker on?"_\n` +
+          `• Send photo of receipt -> Instant QuickBooks sync\n` +
+          `• Send video walkaround -> Instant milestone progression`);
+        return;
+      }
 
-          if (triage.exhaust_tier === 'DARK_MATTER') {
+      // Natural language conversational text classification
+      if (rawText.length > 2) {
+        const nlp = await triageSpokenOrTextNLP(rawText, false);
+        if (nlp) {
+          if (nlp.intent === 'LOCATION_QUERY') {
+            await handleSpokenLocationQuery(nlp.queried_court_name, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'WEATHER_QUERY') {
+            await handleSpokenWeatherQuery(nlp.queried_court_name, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'STATUS_QUERY') {
+            await handleSpokenStatusQuery(nlp.queried_court_name, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'READINESS_QUERY') {
+            await handleSpokenReadinessQuery(nlp.queried_court_name, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'WORK_ORDER_CLOSEOUT') {
+            await executeWorkOrderCloseout({
+              site,
+              targetCourtName: nlp.queried_court_name || nlp.matched_site_name,
+              ticketId: nlp.ticket_id,
+              resolutionNotes: nlp.resolution_summary || rawText,
+              worker,
+              dispatchTarget,
+              fromPhone
+            });
+            return;
+          }
+          if (nlp.intent === 'DARK_MATTER') {
             const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
-            const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Fleet General';
-
-            const archivedRecord = await streamToDarkMatterVault({
+            const siteLabel = site?.fields?.['Site Name'] || nlp.matched_site_name || 'Fleet Operations';
+            await streamToDarkMatterVault({
               siteId: site?.id || null,
               siteName: siteLabel,
               senderPhone: fromPhone,
               senderName: senderName,
               rawText: rawText,
-              category: triage.dark_matter_category || 'Site Conditions',
-              distilledContext: triage.distilled_context || rawText,
-              urgency: triage.urgency || 'LOW',
-              gravityScore: triage.gravity_score || 1
+              category: nlp.dark_matter_category || 'Logistics',
+              distilledContext: nlp.distilled_context || rawText,
+              urgency: nlp.urgency || 'LOW',
+              gravityScore: nlp.gravity_score || 1
             });
-
-            if (site && (triage.gravity_score >= 4 || triage.urgency === 'HIGH')) {
-              await airtableWriteWithAutoDrop('Sites', {
-                'Last Note': `[FIELD NOTE - ${triage.dark_matter_category}]: ${triage.distilled_context}`,
-                'Last Intent': 'AMBIENT_ALERT'
-              }, site.id);
-
-              if (archivedRecord?.id) {
-                const alertPrompt = `⚠️ *FIELD INTELLIGENCE RECORDED*\n\n` +
-                  `*Site:* ${siteLabel}\n` +
-                  `*Issue:* ${triage.distilled_context}\n` +
-                  `*Category:* ${triage.dark_matter_category} (Urgency: ${triage.urgency})\n\n` +
-                  `Archived into Supabase vault. Want to promote this into an active dispatch ticket?`;
-
-                const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Promote to Ticket' }];
-                await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
-              }
-            }
             return;
           }
-
-          if (triage.exhaust_tier === 'ACTIONABLE_STATE_CHANGE') {
-            if (triage.intent === 'WORK_ORDER_CLOSEOUT') {
-              await executeWorkOrderCloseout({
-                site,
-                targetCourtName: triage.matched_site_name,
-                ticketId: triage.ticket_id,
-                resolutionNotes: triage.resolution_summary || 'Task completed.',
-                worker,
-                dispatchTarget,
-                fromPhone
-              });
-              return;
-            }
-          }
-        } catch (triageErr) {
-          console.warn('[Dispatch Triage Exception]:', triageErr.message);
         }
       }
       return;
     }
 
-    // MULTIMODAL MEDIA BATCHING (PHOTOS, VIDEOS & AUDIO)
+    // MULTIMODAL INGESTION (IMAGES, VIDEOS, AUDIO)
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
     const isAudio = message.type === 'audio' || message.type === 'voice';
@@ -2939,10 +2270,9 @@ app.post('/webhook', async (req, res) => {
     const mediaObj = message[message.type];
     const mediaId = mediaObj.id;
     const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
-    const caption = mediaObj.caption || (isAudio ? '[Spoken Voice Memo]' : '');
+    const caption = mediaObj.caption || '';
 
-    const reactionEmoji = isAudio ? '🎧' : (isVideo ? '🎥' : '🧾');
-    sendWhatsAppReaction(dispatchTarget, messageId, reactionEmoji).catch(() => {});
+    sendWhatsAppReaction(dispatchTarget, messageId, isAudio ? '🎧' : (isVideo ? '🎥' : '🧾')).catch(() => {});
 
     const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
@@ -2950,12 +2280,7 @@ app.post('/webhook', async (req, res) => {
     const metaMediaData = await metaMediaRes.json().catch(() => ({}));
 
     if (!metaMediaRes.ok || !metaMediaData?.url) {
-      if (metaMediaRes.status === 401 || metaMediaData?.error?.code === 190) {
-        console.error(`[Meta Auth Error] WhatsApp Token expired or invalid (Code 190). Update META_ACCESS_TOKEN in Render environment variables!`);
-      } else {
-        console.error(`[Meta Graph Error] Could not resolve mediaId ${mediaId}:`, metaMediaData);
-      }
-      await dispatchReply(`⚠️ WhatsApp connection error. Please verify the system token.`);
+      console.error(`[Meta Graph Error] Could not resolve mediaId ${mediaId}:`, metaMediaData);
       return;
     }
 
@@ -2963,10 +2288,7 @@ app.post('/webhook', async (req, res) => {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
     });
 
-    if (!mediaBufferRes.ok) {
-      console.error(`[CDN Error] Failed to stream binary (${mediaBufferRes.status})`);
-      return;
-    }
+    if (!mediaBufferRes.ok) return;
 
     const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
     const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
@@ -3019,108 +2341,32 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ====================================================================
-// 15. GAMECAM OFF-HOURS 4K COURT HEALTH WEBHOOK GATEWAY
+// 15. GAMECAM 4K COURT HEALTH WEBHOOK
 // ====================================================================
 
 app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
   const apiKey = req.headers['x-gamecam-secret'];
   if (apiKey !== CONFIG.gamecam.webhookSecret) {
-    return res.status(401).json({ error: 'Unauthorized: Invalid GameCam secret key' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { venue_name, court_number, image_url, captured_at, telemetry } = req.body;
-
+  const { venue_name, court_number, image_url } = req.body;
   if (!venue_name || !image_url) {
-    return res.status(400).json({ error: 'Missing venue_name or image_url payload parameter' });
+    return res.status(400).json({ error: 'Missing venue_name or image_url' });
   }
 
-  res.status(200).json({ status: 'received', venue: venue_name, court: court_number || 1 });
+  res.status(200).json({ status: 'received' });
 
   setImmediate(async () => {
     try {
-      console.log(`[GameCam Webhook] Ingested snapshot for ${venue_name} - Court ${court_number || 1}`);
-
       const matchedSite = await lookupSite(null, venue_name);
-      const siteLabel = matchedSite?.fields?.['Site Name'] || venue_name;
-
-      const healthPrompt = `
-You are the Titan OS Court Preservation & Maintenance Auditor.
-Analyze this 4K snapshot from the elevated court camera for physical condition.
-
-EVALUATE:
-1. Silica Sand Distribution: Is infill uniform, or depleted at baseline/'T' boxes?
-2. Turf Pile Wear: Is synthetic turf backing exposed? Compaction score (1-100).
-3. Overhead LED Luminaires: Are any floodlights burned out or dark?
-4. Tempered Glass: Smudges, cracks, or loose gaskets visible?
-
-OUTPUT FORMAT (JSON ONLY):
-{
-  "court_health_score": number (1-100),
-  "condition": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
-  "sand_infill_uniformity_pct": number,
-  "turf_wear_severity": "LOW" | "MODERATE" | "SEVERE",
-  "led_fixtures_status": "ALL_LIT" | "PARTIAL_OUTAGE" | "OFFLINE",
-  "defects_detected": ["string in English"],
-  "recommended_action": "string in English",
-  "estimated_remediation_hours": number
-}
-`;
-
-      const payload = {
-        system_instruction: { parts: [{ text: healthPrompt }] },
-        contents: [
-          {
-            parts: [
-              { text: `Evaluate asset health for ${siteLabel} - Court ${court_number || 1}. Image URL: ${image_url}` }
-            ]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.0,
-          responseMimeType: 'application/json',
-          thinkingConfig: { thinkingBudget: 0 }
-        }
-      };
-
-      const gRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!gRes.ok) throw new Error(`Gemini health scan failed: ${await gRes.text()}`);
-
-      const gData = await gRes.json();
-      const audit = JSON.parse(gData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-
-      console.log(`[GameCam Audit Result] ${siteLabel} - Court ${court_number}: Score ${audit.court_health_score}/100 (${audit.condition})`);
-
       if (matchedSite) {
-        const updateFields = {
-          'Last Note': `[GAMECAM 4K AUDIT - Court ${court_number || 1}]: Score ${audit.court_health_score}/100 | ${audit.condition} | ${audit.recommended_action || 'Nominal'}`,
+        await airtableWriteWithAutoDrop('Sites', {
+          'Last Note': `[GAMECAM AUDIT - Court ${court_number || 1}]: Snapshot ingested for playability review.`,
           'Last Intent': 'FACILITY_HEALTH_AUDIT'
-        };
-        await airtableWriteWithAutoDrop('Sites', updateFields, matchedSite.id);
-
-        if (audit.condition === 'ACTION_REQUIRED' || audit.condition === 'HAZARD_OUT_OF_SERVICE') {
-          const gmPhone = matchedSite.fields['Client Phone'] || matchedSite.fields['WhatsApp Group ID'];
-          if (gmPhone) {
-            const alertCard = `🎾 *TITAN OS × GAMECAM | COURT HEALTH ALERT*\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n` +
-              `🏟️ *Venue:* ${siteLabel} — Court ${court_number || 1}\n` +
-              `📊 *Status:* ${audit.condition} 🟡 (Score: ${audit.court_health_score}/100)\n\n` +
-              `👁️ *Visual Diagnostic:*\n` +
-              (audit.defects_detected || []).map(d => `• ${d}`).join('\n') + `\n\n` +
-              `💡 *Recommended Action:*\n${audit.recommended_action || 'Schedule grooming.'}\n\n` +
-              `👉 Tap to dispatch service van or notify district team.`;
-
-            await sendWhatsAppMessage(gmPhone, alertCard);
-          }
-        }
+        }, matchedSite.id);
       }
-    } catch (err) {
-      console.error('[GameCam Processing Error]:', err.message);
-    }
+    } catch (err) {}
   });
 });
 
@@ -3130,15 +2376,13 @@ OUTPUT FORMAT (JSON ONLY):
 
 app.get('/api/admin/backfill-geo', async (req, res) => {
   try {
-    console.log('🌍 [Google Geo] Starting continental fleet backfill & pin-nudging sweep...');
     const records = await getCachedSites(true);
     let updatedCount = 0;
     const coordTracker = new Map();
 
     for (const record of records) {
-      const siteName = record.fields['Site Name'] || 'Unnamed Site';
+      const siteName = record.fields['Site Name'] || 'Site';
       let rawLocation = (record.fields['Site location'] || '').replace(/-{2,}/g, '-').trim();
-
       if (!rawLocation || rawLocation === '+') continue;
 
       let lat = null;
@@ -3158,6 +2402,7 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 
       if (!lat || !lon) continue;
 
+      // Twin-Court Pin Nudging: offset longitude by ~15m if coordinates collide
       const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
       const seenCount = coordTracker.get(coordKey) || 0;
       coordTracker.set(coordKey, seenCount + 1);
@@ -3167,23 +2412,17 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
       }
 
       const formatted = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
-
       if (rawLocation !== formatted) {
         await airtableWriteWithAutoDrop('Sites', { 'Site location': formatted }, record.id);
         updatedCount++;
-        console.log(`📍 [Google Geo] Updated ${siteName} -> ${formatted}`);
+        console.log(`📍 Geocoded & Nudged ${siteName} -> ${formatted}`);
         await new Promise(r => setTimeout(r, 150));
       }
     }
 
     invalidateAirtableCache('sites');
-    res.json({
-      status: 'success',
-      courts_updated: updatedCount,
-      timestamp: new Date().toISOString()
-    });
+    res.json({ status: 'success', courts_updated: updatedCount });
   } catch (err) {
-    console.error('[Google Geo Backfill Error]:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3191,24 +2430,18 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.2.1',
-    engine: 'Titan OS V5.2.1 (Direct QuickBooks Attachment Pipeline & Expense Sync)',
-    cache_status: {
-      sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
-      workers_cached: memoryCache.workers ? memoryCache.workers.length : 0,
-      assignments_cached: memoryCache.assignments ? memoryCache.assignments.length : 0
-    }
+    version: '5.3.1',
+    engine: 'Titan OS V5.3.1 (Proactive Weather Tripwires & Google Geo Engine)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.2.1 RUNNING ON PORT ${PORT}`);
-  console.log(`🧾 EXPENSE INGESTION ENGINE: Receipts Auto-Routed & Attachments Synced to QB`);
-  console.log(`🛡️ VISUAL TRIAGE ROUTER: Multimodal Bifurcation (Receipts vs Court Sweeps) Active`);
-  console.log(`🛰️ GOOGLE GEO ENGINE: Millimeter Geocoding & Coordinate Auto-Heal Active`);
-  console.log(`🎾 GAMECAM WEBHOOK GATEWAY: /api/webhooks/gamecam/snapshot Active`);
-  console.log(`🛡️ API QUOTA PROTECTOR: In-Place Cache Mutation & Assignment Pooling Active`);
+  console.log(`🚀 TITAN OS V5.3.1 RUNNING ON PORT ${PORT}`);
+  console.log(`🌤️ PROACTIVE WEATHER ENGINE: Wind, Cold Glue (<10°C), Moisture & Heat Active`);
+  console.log(`📍 GOOGLE GEO ENTERPRISE: Geocoding, Driving, Satellite & Twin Nudging Active`);
+  console.log(`🗣️ SPOKEN LOOKUPS: Voice & Text Location/Weather/Gate Routing Active`);
+  console.log(`🏗️ 8-GATE FIELD RUBRIC: Single-Court Evaluation Active`);
   console.log(`====================================================================`);
 
   try {
@@ -3216,7 +2449,5 @@ app.listen(PORT, '0.0.0.0', async () => {
     await getCachedWorkers();
     await getCachedContacts();
     await getCachedOpenAssignments();
-  } catch (err) {
-    console.warn('[Cache Warmup Warning]:', err.message);
-  }
+  } catch (err) {}
 });
