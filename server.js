@@ -1,36 +1,39 @@
 /**
- * TITAN OS V5.3.4 — ZERO-TOUCH FIELD PROVISIONING & OPEN FOR PLAY ENGINE
+ * TITAN OS V5.3.5 — SILENT EXPENSE GHOST ROUTING & RESILIENT META DISPATCH
  * 
  * Production Build Features:
- * 1. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
+ * 1. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
+ *    and Task Category: 'Expense' so Automation 4 passes attachments to QuickBooks instantly
+ *    without cluttering the active dispatch/punch-list board.
+ * 2. Resilient Meta Dispatch with Auto-Retry: sendWhatsAppMessage includes automatic retry
+ *    with exponential backoff, preventing dropped cards during transient Meta DNS/TCP timeouts.
+ * 3. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
  *    and immediately reply "create new site [Name]" to automatically build a bound ledger
  *    record with live coordinates, triggering INOC prep-alerts.
- * 2. Open For Play Readiness Engine: Overrides pre-con checks for commissioned/maintenance courts
+ * 4. Open For Play Readiness Engine: Overrides pre-con checks for commissioned/maintenance courts
  *    ('OPEN FOR PLAY 🎾') and headquarters/operational nodes ('OPERATIONAL 🏢').
- * 3. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
+ * 5. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
  *    missed client celebratory alerts when gates are in-progress or partial.
- * 4. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
+ * 6. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
  *    direct Meta Graph API calls to prevent HTTP 400 (#100) invalid parameter rejections.
- * 5. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
+ * 7. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
  *    turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
  *    wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
- * 6. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 7. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
+ * 8. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 9. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
  *    ("Where is Levinsky?", "Send pin for Don Walker"), weather, readiness, and status lookups.
- * 8. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
- *    zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
- * 9. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
- *    Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
- * 10. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
+ * 10. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
+ *     zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
+ * 11. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
+ *     Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
+ * 12. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
  *     never trigger false gate skips. Each court row is graded independently.
- * 11. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
+ * 13. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
  *     as a quality check without blocking gate advancement.
- * 12. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
- * 13. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
- *     Airtable's native 'Attachment(s)' field for instant Automation 4 Gmail export.
- * 14. Universal Visual Triage Router: Bifurcates receipts and invoices from court walkarounds.
- * 15. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
- * 16. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
+ * 14. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
+ * 15. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
+ * 16. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
+ * 17. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
  */
 
 process.on('uncaughtException', (err) => {
@@ -500,13 +503,14 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
 
   const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
 
+  // Status set to 'Complete' so it triggers Automation 4 for QuickBooks pass-through without cluttering active dispatch boards
   const assignmentPayload = {
     'Date': todayStr,
     'Assignment Type': 'Expense',
     'Task Category': 'Expense',
     'Priority': 'Low',
     'Source': 'WhatsApp Receipt Intake',
-    'Status': 'Open',
+    'Status': 'Complete',
     'Notes': formattedNotes,
     'Attachment(s)': attachmentPayload
   };
@@ -527,7 +531,7 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
     distilledContext: `Expense $${grandTotal} ${currency} (${receipts.map(r => r.vendor).filter(Boolean).join(', ') || 'Receipts'}) submitted by ${workerName}`,
     urgency: 'LOW',
     gravityScore: 2,
-    actionableFollowup: `Ticket ${ticketId}`
+    actionableFollowup: `Expense ${ticketId}`
   });
 
   let receiptCard = `🧾 *TITAN OS | EXPENSE RECEIPT LOGGED*\n` +
@@ -547,7 +551,7 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
   }
 
   receiptCard += `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎫 *Ticket:* ${ticketId} (Dispatched to QuickBooks)`;
+    `🧾 *Expense Ref:* ${ticketId} (Dispatched to QuickBooks)`;
 
   await sendWhatsAppMessage(dispatchTarget, receiptCard);
 }
@@ -1207,7 +1211,7 @@ async function resolveCallerIdentity(fromPhone) {
 }
 
 // ====================================================================
-// 10. WHATSAPP MESSAGING & JOY CANNON ENGINE
+// 10. WHATSAPP MESSAGING & JOY CANNON ENGINE (WITH AUTO-RETRY)
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -1240,7 +1244,7 @@ async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
   }
 }
 
-async function sendWhatsAppMessage(toTarget, messageBody) {
+async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
   if (!toTarget) return false;
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
   // Auto-strip '+' and non-digit formatting for individual recipient numbers
@@ -1256,21 +1260,35 @@ async function sendWhatsAppMessage(toTarget, messageBody) {
   if (!isGroup) payload.recipient_type = 'individual';
 
   const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${CONFIG.meta.accessToken}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
 
-  if (!res.ok) {
-    const errData = await res.text();
-    console.error(`WhatsApp dispatch failed to ${cleanDestination} (${res.status}): ${errData}`);
-    return false;
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${CONFIG.meta.accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        const errData = await res.text();
+        console.error(`WhatsApp dispatch failed to ${cleanDestination} (${res.status}): ${errData}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn(`[Meta Dispatch Attempt ${attempt} failed]: ${err.message}`);
+      if (attempt <= retries) {
+        await new Promise(r => setTimeout(r, 1000 * attempt));
+      } else {
+        console.error(`[Meta Dispatch Error] Exhausted all retries to ${cleanDestination}:`, err.message);
+        return false;
+      }
+    }
   }
-  return true;
+  return false;
 }
 
 async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
@@ -1658,7 +1676,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   if (triage.intent === 'PURE_NOISE') return;
 
-  // New Site Provisioning Catch
+  // New Site Provisioning Catch via Spoken Voice Memo
   const combinedTranscript = (triage.transcript_en || '').toLowerCase();
   const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
 
@@ -2173,7 +2191,7 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // LOCATION PIN-DROP (PROACTIVE ARRIVAL WEATHER SCAN)
+    // LOCATION PIN-DROP (PROACTIVE ARRIVAL WEATHER SCAN & NEW SITE STAGING)
     if (message.type === 'location') {
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
@@ -2236,7 +2254,8 @@ app.post('/webhook', async (req, res) => {
 
         await dispatchReply(checkinResponse);
       } else {
-        await dispatchReply(`📍 Location received: ${(distanceMeters / 1000).toFixed(1)} km from *${site.fields['Site Name']}*.`);
+        await dispatchReply(`📍 Location received: ${(distanceMeters / 1000).toFixed(1)} km from *${site.fields['Site Name']}*.\n\n` +
+          `👉 *If you are scouting a new location here:*\nReply with *"Create new site <Name>"*`);
       }
       return;
     }
@@ -2547,14 +2566,16 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.3.4',
-    engine: 'Titan OS V5.3.4 (Zero-Touch Field Provisioning & Open For Play Engine)'
+    version: '5.3.5',
+    engine: 'Titan OS V5.3.5 (Silent Expense Ghost Routing & Resilient Meta Dispatch)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.3.4 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.3.5 RUNNING ON PORT ${PORT}`);
+  console.log(`🧾 EXPENSE GHOSTING: Auto-Complete & Filtered from Active Dispatch Active`);
+  console.log(`📡 RESILIENT DISPATCH: Auto-Retry on Meta Timeout Active`);
   console.log(`📍 ZERO-TOUCH PROVISIONING: Drop a Pin & Say 'Create New Site' Active`);
   console.log(`🎾 OPEN FOR PLAY: Readiness Gate Overrides Active`);
   console.log(`🎉 JOY CANNON: Direct Milestone Advancement & Number Sanitizer Active`);
