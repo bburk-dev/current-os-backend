@@ -1,30 +1,32 @@
 /**
- * TITAN OS V5.2.0 — FINANCIAL RECEIPT INGESTION & UNIVERSAL VISUAL TRIAGE ENGINE
+ * TITAN OS V5.2.1 — DIRECT QUICKBOOKS ATTACHMENT PIPELINE & EXPENSE SYNC
  * 
  * Production Build Features:
- * 1. Universal Visual Triage Router: Differentiates paper receipts, invoices, and packing slips
+ * 1. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
+ *    Airtable's native 'Attachment(s)' field so Automation 4 triggers instant Gmail dispatch to QuickBooks.
+ * 2. Universal Visual Triage Router: Differentiates paper receipts, invoices, and packing slips
  *    from padel court sweeps, preventing non-construction photos from corrupting the Sites ledger.
- * 2. Automated Expense Ingestion: Extracts vendor, line items, date, grand total, and currency from
+ * 3. Automated Expense Ingestion: Extracts vendor, line items, date, grand total, and currency from
  *    receipt batches, logging structured expense tickets into Daily Assignments.
- * 3. Google Geo Coordinate Auto-Healer: Sanitizes duplicate minus signs (e.g. '--80.2866') across
+ * 4. Google Geo Coordinate Auto-Healer: Sanitizes duplicate minus signs (e.g. '--80.2866') across
  *    geocoding and routing, auto-persisting clean coordinates back into Airtable.
- * 4. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for automated
+ * 5. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for automated
  *    off-hours court health audits from elevated cage cameras.
- * 5. In-Place RAM Cache Mutation: Updates Airtable records in RAM immediately upon write rather than
+ * 6. In-Place RAM Cache Mutation: Updates Airtable records in RAM immediately upon write rather than
  *    invalidating the cache, eliminating repetitive site and worker read calls across active work shifts.
- * 6. Cached Daily Assignments Engine: Caches open dispatch tickets in memory with a 3-minute TTL,
+ * 7. Cached Daily Assignments Engine: Caches open dispatch tickets in memory with a 3-minute TTL,
  *    eliminating API roundtrips on routine arrival checks and distance routing.
- * 7. Selective Forensic Vault Sync: Retains full Supabase ambient logging while writing to Airtable
+ * 8. Selective Forensic Vault Sync: Retains full Supabase ambient logging while writing to Airtable
  *    'Inbound Messages 2' and 'Reports 2' exclusively when verified milestones advance or critical alerts occur.
- * 8. Multi-Court Facility Wide-Angle Pan: Gemini visually parses 180° sweeps across multi-court pads
+ * 9. Multi-Court Facility Wide-Angle Pan: Gemini visually parses 180° sweeps across multi-court pads
  *    (e.g., Fairgrounds Leaside, RCOR) to evaluate each court's gates independently.
- * 9. Consolidated Digital Twins: Single venue records track aggregate facility health while storing
+ * 10. Consolidated Digital Twins: Single venue records track aggregate facility health while storing
  *    per-court breakdowns (e.g. C1: G4 | C2: G2).
- * 10. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
- * 11. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria.
- * 12. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um") while preserving technical terminology.
- * 13. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently.
- * 14. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds.
+ * 11. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
+ * 12. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria.
+ * 13. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um") while preserving technical terminology.
+ * 14. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently.
+ * 15. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds.
  */
 
 process.on('uncaughtException', (err) => {
@@ -501,7 +503,10 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
 
   formattedNotes += `\nRECEIPT MEDIA URLS:\n` + storageResults.map(s => `• ${s.signedUrl}`).join('\n');
 
-  // Create Assignment Ticket in Daily Assignments
+  // Format array of attachment objects for Airtable
+  const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
+
+  // Create Assignment Ticket in Daily Assignments with Attachment(s) populated for QuickBooks Automation
   const assignmentPayload = {
     'Date': todayStr,
     'Assignment Type': 'Expense',
@@ -509,7 +514,8 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
     'Priority': 'Low',
     'Source': 'WhatsApp Receipt Intake',
     'Status': 'Open',
-    'Notes': formattedNotes
+    'Notes': formattedNotes,
+    'Attachment(s)': attachmentPayload
   };
 
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
@@ -550,7 +556,7 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
   }
 
   receiptCard += `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎫 *Ticket:* ${ticketId} (Pending Accounting / QB Review)\n` +
+    `🎫 *Ticket:* ${ticketId} (Dispatched to QuickBooks)\n` +
     `📁 *Vault:* Archived securely in Supabase Storage.`;
 
   await sendWhatsAppMessage(dispatchTarget, receiptCard);
@@ -819,7 +825,6 @@ function isIndoorSite(site) {
 async function geocodeAddressWithGoogle(addressString) {
   if (!CONFIG.google.apiKey || !addressString) return null;
   try {
-    // Sanitize duplicate minus signs (e.g. "--80.2866" -> "-80.2866")
     const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
     const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${CONFIG.google.apiKey}`;
     const res = await fetch(url);
@@ -2838,7 +2843,7 @@ app.post('/webhook', async (req, res) => {
             `• */board* — Compound Court Reservations Board\n` +
             `• */fleet* — Continental Fleet Map\n` +
             `• */group <Court Name>* — Bind WhatsApp Channel\n\n` +
-            `🧾 Photos of receipts automatically log expense tickets into Daily Assignments.\n` +
+            `🧾 Photos of receipts automatically log expense tickets with attachments into Daily Assignments.\n` +
             `🎥 Video sweeps automatically lock pre-work baselines & post-work completion deltas hands-free.`);
           return;
         }
@@ -3029,7 +3034,6 @@ app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
     return res.status(400).json({ error: 'Missing venue_name or image_url payload parameter' });
   }
 
-  // Immediate 200 OK acknowledgment so camera edge daemon does not hang
   res.status(200).json({ status: 'received', venue: venue_name, court: court_number || 1 });
 
   setImmediate(async () => {
@@ -3187,8 +3191,8 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.2.0',
-    engine: 'Titan OS V5.2.0 (Financial Receipt Ingestion & Universal Visual Triage Engine)',
+    version: '5.2.1',
+    engine: 'Titan OS V5.2.1 (Direct QuickBooks Attachment Pipeline & Expense Sync)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0,
@@ -3199,8 +3203,8 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.2.0 RUNNING ON PORT ${PORT}`);
-  console.log(`🧾 EXPENSE INGESTION ENGINE: Receipts & Invoices Auto-Routed to Assignments`);
+  console.log(`🚀 TITAN OS V5.2.1 RUNNING ON PORT ${PORT}`);
+  console.log(`🧾 EXPENSE INGESTION ENGINE: Receipts Auto-Routed & Attachments Synced to QB`);
   console.log(`🛡️ VISUAL TRIAGE ROUTER: Multimodal Bifurcation (Receipts vs Court Sweeps) Active`);
   console.log(`🛰️ GOOGLE GEO ENGINE: Millimeter Geocoding & Coordinate Auto-Heal Active`);
   console.log(`🎾 GAMECAM WEBHOOK GATEWAY: /api/webhooks/gamecam/snapshot Active`);
