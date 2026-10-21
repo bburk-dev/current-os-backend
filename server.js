@@ -1,20 +1,23 @@
 /**
- * TITAN OS V4.9.9 — EXECUTIVE TEXT-ONLY JOY CANNON & FORENSIC 12-GATE ENGINE
+ * TITAN OS V5.0.0 — FACILITY PANORAMA & ZERO-FRICTION MULTI-COURT ENGINE
  * 
  * Production Build Features:
- * 1. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
- * 2. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria
+ * 1. Multi-Court Facility Wide-Angle Pan: Gemini visually parses 180° sweeps across multi-court pads
+ *    (e.g., Fairgrounds Leaside, RCOR) to evaluate each court's gates independently with zero installer speech required.
+ * 2. Consolidated Digital Twins: Single venue records track aggregate facility health while storing per-court breakdown (e.g. C1: G4 | C2: G2).
+ * 3. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
+ * 4. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria
  *    even during completely silent or background-noise walkarounds (identifies slab, frame uprights, mesh, glass, turf).
- * 3. In-Progress Stage Tracking: Captures verified completed gates alongside active installation phases (e.g. Gate 4 glass seating).
- * 4. Multimodal Concierge Onboarding: Final handover prompts clients to text, voice note, or send a video for future service.
- * 5. Strict Pipeline Bifurcation: Installation sites strictly mutate Sites state; Daily Assignments tickets remain isolated.
- * 6. Schema Auto-Healer Hardening: Omit computed formula fields ('Completion %') to prevent HTTP 422 write faults.
- * 7. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um", "will will") while preserving technical terminology.
- * 8. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently on every sweep.
- * 9. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
- * 10. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
- * 11. INOC Forensic Vault: Granular audit logging to Reports 2 and Inbound Messages 2.
- * 12. Google Geo Enterprise Engine: Millimeter geocoding, contractor satellite staging views, twin-court pin nudging, and continental backfill.
+ * 5. In-Progress Stage Tracking: Captures verified completed gates alongside active installation phases.
+ * 6. Multimodal Concierge Onboarding: Final handover prompts clients to text, voice note, or send a video for future service.
+ * 7. Strict Pipeline Bifurcation: Installation sites strictly mutate Sites state; Daily Assignments tickets remain isolated.
+ * 8. Schema Auto-Healer Hardening: Omit computed formula fields ('Completion %') to prevent HTTP 422 write faults.
+ * 9. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um", "will will") while preserving technical terminology.
+ * 10. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently on every sweep.
+ * 11. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
+ * 12. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
+ * 13. Google Geo Enterprise Engine: Millimeter geocoding, contractor satellite staging views, twin-court pin nudging, and continental backfill.
+ * 14. INOC Forensic Vault: Granular audit logging to Reports 2 and Inbound Messages 2.
  */
 
 process.on('uncaughtException', (err) => {
@@ -431,7 +434,7 @@ const INDUSTRIAL_SYSTEM_PROMPT = `
 You are the Titan OS Forensic Inspection & Construction Gate Engine for Bounce Padel.
 
 PADEL COURT 12-GATE PHYSICAL CONSTRUCTION RUBRIC:
-When inspecting video frames, you MUST visually identify all completed physical stages, even if the technician does not speak or if only background drill/construction noise is present:
+When inspecting video frames, you MUST visually identify completed physical stages:
 - Gate 1: "Foundation & Anchor Slab" (Cured concrete pad, slab anchor channels, perimeter base plates)
 - Gate 2: "Steel Frame Assembly" (Vertical structural steel columns, corner posts, and perimeter frame beams fully bolted upright)
 - Gate 3: "Structural Mesh Panels" (Electro-welded wire mesh fencing panels mounted and bolted to the steel columns)
@@ -445,17 +448,27 @@ When inspecting video frames, you MUST visually identify all completed physical 
 - Gate 11: "Net Posts & Calibration" (Center net installed, tensioned to 88cm center height)
 - Gate 12: "Site Cleanliness & Handover" (Debris/tools removed, glass cleaned, ready for play)
 
+MULTI-COURT FACILITY WIDE-ANGLE PAN DIRECTIVE:
+Technicians will stand at the apron or center between courts and slowly pan across the entire facility.
+1. Identify the number of distinct padel court cages/pads visible ("courts_detected_count").
+2. Evaluate each visible court independently (from left to right, near to far, or by visible visual markers).
+3. For each court, detect its completed gates and active stage.
+4. "facility_breakdown": Array of objects:
+   [
+     { "court_label": "Court 1", "highest_gate": 4, "stage_description": "Glass seated, turf staging" },
+     { "court_label": "Court 2", "highest_gate": 2, "stage_description": "Columns upright, mesh unbolted" }
+   ]
+5. "highest_facility_gate": Integer (the furthest gate reached by any court at the site).
+6. "lowest_facility_gate": Integer (the baseline gate reached across all courts).
+7. "facility_summary": A 1-2 sentence executive summary of visible progress across all courts.
+
 VISUAL INSPECTION MANDATES:
-1. "verified_gates": Array of integers (e.g., [1, 2, 3]) for gates that are 100% complete across the court.
-   - If lower steel and columns are bolted and standing, Gate 2 is VERIFIED.
-   - If wire mesh panels are mounted around the structure, Gate 3 is VERIFIED.
-2. "in_progress_gate": Single integer (e.g., 4) representing the stage currently being installed (e.g., if one side of glass is mounted or crates are being unpacked, Gate 4 is IN PROGRESS).
-3. "SMART VERBATIM" DISFLUENCY REMOVAL:
-   - If spoken audio is present, purge all speech hesitations and filler words ("uh", "ah", "um", "like", "you know", stutters, "will will").
-   - If no spoken audio exists, provide an objective engineering narrative of visible physical progress.
+1. "verified_gates": Array of integers (e.g., [1, 2, 3]) for gates that are 100% complete across the court or leading court.
+2. "in_progress_gate": Single integer representing the stage currently being installed.
+3. SMART VERBATIM: Purge all speech hesitations and filler words ("uh", "ah", "um", "like", stutters). Disregard ambient background construction noise.
 4. DUAL-TRACK BILINGUAL OUTPUT:
-   - "transcript_en": Cleaned, professional, fluent English transcription or visual scene summary.
-   - "transcript_es": Cleaned, professional, fluent Spanish translation or visual scene summary.
+   - "transcript_en": Clean English transcript or visual engineering narrative.
+   - "transcript_es": Clean Spanish transcript or visual engineering narrative.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
@@ -464,10 +477,18 @@ OUTPUT SPECIFICATION (JSON ONLY):
   "spoken_court_name": "string or null",
   "spoken_ticket_id": integer or null,
   "video_phase": "INSTALLATION_SWEEP" | "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT",
+  "courts_detected_count": integer,
   "verified_gates": [1, 2, 3],
   "in_progress_gate": 4,
+  "highest_facility_gate": 4,
+  "lowest_facility_gate": 2,
+  "facility_breakdown": [
+    { "court_label": "Court 1", "highest_gate": 4, "stage_description": "Glass seated" },
+    { "court_label": "Court 2", "highest_gate": 2, "stage_description": "Columns bolted upright" }
+  ],
+  "facility_summary": "Court 1 glass is fully mounted; Court 2 steel structure is upright and awaiting mesh.",
   "blockers_detected": ["Specific impediment or missing item in English"],
-  "work_verified": ["Foundation slab complete", "Structural steel frame erected", "Wire mesh panels mounted"],
+  "work_verified": ["Foundation slab complete", "Structural steel frame erected"],
   "task_category": "string or null",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
@@ -1566,7 +1587,7 @@ async function handleVIPConcierge(text, identity, dispatchTarget, fromPhone) {
 
 async function triageDispatchText(text, workerRecord, currentSite = null, recentAmbientSnippets = []) {
   const activeSites = await getAllActiveSitesList();
-  const siteListStr = activeSites.join(', ') || 'BPC RCOR Court 1, BPC RCOR Court 2, BPC Don Walker, BPC North Padel 1';
+  const siteListStr = activeSites.join(', ') || 'BPC RCOR Court 1, BPC RCOR Court 2, BPC Don Walker, BPC North Padel Club';
   const siteWorkflowMode = currentSite?.fields?.['Workflow Mode'] || 'INSTALLATION';
 
   const ambientMemory = recentAmbientSnippets.length > 0
@@ -1641,7 +1662,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   await Promise.all(uploadPromises);
 
   const activeSites = await getAllActiveSitesList();
-  const siteListStr = activeSites.join(', ') || 'BPC RCOR Court 1, BPC RCOR Court 2, BPC Don Walker, BPC North Padel 1';
+  const siteListStr = activeSites.join(', ') || 'BPC RCOR Court 1, BPC RCOR Court 2, BPC Don Walker, BPC North Padel Club';
 
   const audioPrompt = `
 You are the Titan OS Spoken Voice Triage Engine for Bounce Padel.
@@ -1772,11 +1793,13 @@ async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
   const auditContextText = `AUDIT CONTEXT:
 Active Padel Court Registry: [${siteListStr}]
 Current Bound Asset: ${cumulativeContext.siteName || 'Unbound Court'}
+Total Physical Courts at Facility: ${cumulativeContext.totalCourts || 1}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
 Evaluate video frames against the 12-Gate Physical Construction Rubric.
-Extract verified_gates (integers 1-12 completely finished), in_progress_gate (integer currently active), Smart Verbatim transcript_en, and transcript_es.`;
+If this is a multi-court venue, assess the 180° apron sweep across all visible courts.
+Extract courts_detected_count, facility_breakdown, highest_facility_gate, lowest_facility_gate, verified_gates, in_progress_gate, facility_summary, Smart Verbatim transcript_en, and transcript_es.`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -1823,9 +1846,12 @@ async function processMediaBatch(batch) {
   const hasVideo = items.some(item => item.type === 'video');
 
   const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
+  const totalFacilityCourts = parseInt(site?.fields?.['Total Courts'] || site?.fields?.['Venue Court Count']) || 1;
+
   const cumulativeContext = {
     siteName: site?.fields?.['Site Name'] || 'BPC Court',
     workflowMode: currentMode,
+    totalCourts: totalFacilityCourts,
     siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
     openTickets: site?.fields?.['Open Tickets'] || 0,
     clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
@@ -1913,39 +1939,56 @@ async function processMediaBatch(batch) {
 
   // ==================================================================
   // PIPELINE A: INSTALLATION MILESTONE ENGINE (GATES 1 - 12)
-  // Executes whenever site is in INSTALLATION mode and no explicit repair ticket was spoken
+  // Multi-Court Facility Panorama Aware
   // ==================================================================
   if (siteMode === 'INSTALLATION' && !explicitTicketId) {
-    console.log(`[Installation Engine] Processing construction progress sweep for ${courtLabel}`);
+    console.log(`[Installation Engine] Processing construction sweep for ${courtLabel}`);
 
-    const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
-      const num = parseInt(String(g).replace(/\D/g, ''));
-      return isNaN(num) ? String(g) : `Gate ${num}`;
-    });
+    const siteCapacity = parseInt(targetedSite?.fields?.['Total Courts'] || targetedSite?.fields?.['Venue Court Count']) || 1;
+    const detectedCount = forensicAudit.courts_detected_count || 1;
+    const isMultiCourt = siteCapacity > 1 || detectedCount > 1;
 
-    const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
-    const allCleared = Array.from(new Set([...previouslyCleared, ...newlyVerifiedGates]));
+    // Highest milestone reached across the venue
+    const highestGate = forensicAudit.highest_facility_gate ||
+      (forensicAudit.verified_gates?.length ? Math.max(...forensicAudit.verified_gates) : 0);
+    const lowestGate = forensicAudit.lowest_facility_gate || highestGate;
 
-    const numericGates = allCleared.map(g => parseInt(String(g).replace(/\D/g, ''))).filter(n => !isNaN(n));
-    const highestGate = numericGates.length > 0 ? Math.max(...numericGates) : 0;
     const progressPercent = Math.min(1.0, highestGate / 12);
-    
     const inProgressGateNum = forensicAudit.in_progress_gate || (highestGate < 12 ? highestGate + 1 : null);
     const inProgressLabel = inProgressGateNum && GATE_NAMES[inProgressGateNum] ? `${inProgressGateNum}. ${GATE_NAMES[inProgressGateNum]}` : null;
-    const gateLabel = GATE_NAMES[highestGate] ? `${highestGate}. ${GATE_NAMES[highestGate]}` : `${highestGate}. In Progress`;
+    const gateLabel = GATE_NAMES[highestGate] ? `${highestGate}. ${GATE_NAMES[highestGate]}` : `Gate ${highestGate}`;
 
-    const cleanEn = forensicAudit.transcript_en || forensicAudit.transcription || 'Construction sweep recorded.';
+    const cleanEn = forensicAudit.transcript_en || forensicAudit.facility_summary || 'Construction sweep recorded.';
     const cleanEs = forensicAudit.transcript_es || 'Barrido de construcción registrado.';
 
+    // Format Multi-Court Breakdown for Digital Twin & WhatsApp
+    let breakdownText = '';
+    let compactGateStatus = inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel;
+
+    if (isMultiCourt && Array.isArray(forensicAudit.facility_breakdown) && forensicAudit.facility_breakdown.length > 0) {
+      breakdownText = `\n📋 *Facility Breakdown (${siteCapacity} Courts):*\n` +
+        forensicAudit.facility_breakdown.map(c => `• *${c.court_label}:* Gate ${c.highest_gate} (${c.stage_description || GATE_NAMES[c.highest_gate] || 'Active'})`).join('\n');
+      
+      compactGateStatus = forensicAudit.facility_breakdown.map(c => `${c.court_label}: G${c.highest_gate}`).join(' | ');
+    }
+
     if (targetedSite) {
+      const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
+      const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
+        const num = parseInt(String(g).replace(/\D/g, ''));
+        return isNaN(num) ? String(g) : `Gate ${num}`;
+      });
+      const allCleared = Array.from(new Set([...previouslyCleared, ...newlyVerifiedGates]));
+
       const updatePayload = {
         'Cleared Milestones': allCleared,
-        'Current Gate': inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel,
-        'Last Note': `[INSTALLATION PROGRESS - Gate ${highestGate}/12 by ${workerName} at ${timeStr}]:\nEN: "${cleanEn}"\nES: "${cleanEs}"`,
+        'Current Gate': compactGateStatus,
+        'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${forensicAudit.facility_summary || cleanEn}${breakdownText ? `\n${breakdownText}` : ''}`,
         'Last Intent': 'MILESTONE_PROGRESS'
       };
 
-      if (highestGate === 12) {
+      // If all courts reach Gate 12, transition venue to active maintenance
+      if (lowestGate >= 12 && highestGate >= 12) {
         updatePayload['Workflow Mode'] = 'MAINTENANCE';
         updatePayload['Site Status'] = 'ACTIVE';
       }
@@ -1957,21 +2000,18 @@ async function processMediaBatch(batch) {
       }
     }
 
-    let installCard = `🏗️ *TITAN OS | INSTALLATION MILESTONE VERIFIED*\n` +
+    let installCard = `🏗️ *TITAN OS | FACILITY MILESTONE VERIFIED*\n` +
       `*(Hito de Instalación Verificado)*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🏟️ *Court / Cancha:* ${courtLabel}\n` +
+      `🏟️ *Venue:* ${courtLabel} (${siteCapacity} Court${siteCapacity > 1 ? 's' : ''})\n` +
       `👤 *Lead / Instalador:* ${workerName}\n` +
-      `📊 *Progress / Progreso:* ${Math.round(progressPercent * 100)}% (Gate ${highestGate}/12)\n` +
-      `🟢 *Completed / Completado:* ${gateLabel}\n` +
-      (inProgressLabel ? `🟡 *In Progress / En Proceso:* ${inProgressLabel}\n` : '') +
+      `📊 *Progress:* ${Math.round(progressPercent * 100)}% (Leading at ${gateLabel})\n` +
+      (breakdownText ? `${breakdownText}\n` : '') +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🎙️ *Field Audio / Audio de Campo:*\n` +
-      `🇺🇸 *EN:* "${cleanEn}"\n` +
-      `🇪🇸 *ES:* "${cleanEs}"\n\n`;
+      `👁️ *Visual Ground Truth:*\n${forensicAudit.facility_summary || cleanEn}\n\n`;
 
     if (weatherNotice) installCard += `${weatherNotice}\n\n`;
-    installCard += `✅ *Digital twin updated in Sites ledger (${allCleared.join(', ') || 'None'}).*`;
+    installCard += `✅ *Facility digital twin updated in Sites ledger.*`;
 
     await sendWhatsAppMessage(dispatchTarget, installCard);
 
@@ -1983,7 +2023,7 @@ async function processMediaBatch(batch) {
         'Message ID': items[0]?.messageId,
         'Worker Phone Raw': fromPhone,
         'Message Type': hasVideo ? 'video' : 'image',
-        'Caption Text': `[INSTALLATION SWEEP - Gate ${highestGate}/12]: ${cleanEn}`,
+        'Caption Text': `[FACILITY SWEEP - Gate ${highestGate}/12]: ${cleanEn}`,
         'Media URL': storageResult?.signedUrl,
         'Media Path': storageResult?.storagePath,
         'Raw Payload JSON': JSON.stringify(items[0]?.rawMessage)
@@ -2813,8 +2853,8 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '4.9.9',
-    engine: 'Titan OS V4.9.9 (Executive Text-Only Joy Cannon & Forensic 12-Gate Engine with Google Geo)',
+    version: '5.0.0',
+    engine: 'Titan OS V5.0.0 (Multi-Court Facility Panorama & Google Geo Engine)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0
@@ -2824,9 +2864,9 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V4.9.9 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.0.0 RUNNING ON PORT ${PORT}`);
   console.log(`🎾 TEXT-ONLY JOY CANNON: Executive Concierge Updates Active (No Court Tag)`);
-  console.log(`🏗️ FORENSIC 12-GATE RUBRIC: Visual Detection (Slab, Steel, Mesh, Glass) Active`);
+  console.log(`🏗️ FACILITY PANORAMA GATE: Multi-Court 180° Visual Inspection Active`);
   console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
   console.log(`🌐 BILINGUAL SMART-VERBATIM: Disfluency Removal & Dual EN/ES Active`);
   console.log(`🛰️ GOOGLE GEO ENGINE: High-Res Satellite Staging & Millimeter Pin Nudging Active`);
