@@ -14,6 +14,7 @@
  * 9. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
  * 10. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
  * 11. INOC Forensic Vault: Granular audit logging to Reports 2 and Inbound Messages 2.
+ * 12. Google Geo Enterprise Engine: Millimeter geocoding, contractor satellite staging views, twin-court pin nudging, and continental backfill.
  */
 
 process.on('uncaughtException', (err) => {
@@ -71,6 +72,9 @@ const CONFIG = {
     apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
     baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
     endpoint: 'https://api.airtable.com/v0'
+  },
+  google: {
+    apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
   }
 };
 
@@ -570,7 +574,7 @@ const GATE_NAMES = {
 };
 
 // ====================================================================
-// 7. GEOSPATIAL & METEOROLOGICAL TELEMETRY
+// 7. GEOSPATIAL & METEOROLOGICAL TELEMETRY (GOOGLE GEO POWERED)
 // ====================================================================
 
 function isIndoorSite(site) {
@@ -582,20 +586,62 @@ function isIndoorSite(site) {
   return env.includes('indoor') || name.includes('indoor') || notes.includes('indoor');
 }
 
-async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
+/**
+ * Direct Google Geocoding API Engine
+ */
+async function geocodeAddressWithGoogle(addressString) {
+  if (!CONFIG.google.apiKey || !addressString) return null;
+  try {
+    const cleanAddress = addressString.replace(/[^\w\s,#.-]/gi, '').trim();
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${CONFIG.google.apiKey}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+
+    if (data.status === 'OK' && data.results && data.results.length > 0) {
+      const loc = data.results[0].geometry.location;
+      return {
+        lat: loc.lat,
+        lon: loc.lng,
+        formattedAddress: data.results[0].formatted_address
+      };
+    } else {
+      console.warn(`[Google Geo] Geocode zero results for "${addressString}": ${data.status}`);
+      return null;
+    }
+  } catch (err) {
+    console.error('[Google Geo Engine Exception]:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Generates turn-by-turn driving and high-res satellite links for outdoor staging
+ */
+function getGoogleMapsLinks(lat, lon) {
+  return {
+    directions: `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`,
+    satellite: `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=20&basemap=satellite`
+  };
+}
+
+async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersistSiteId = null) {
   let rawLocation = rawLocationOrSite;
   let cache = mapCache;
+  let siteId = autoPersistSiteId;
 
   if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
     const fields = rawLocationOrSite.fields || rawLocationOrSite;
     rawLocation = fields['Site location'];
     cache = fields['Map Cache'];
+    siteId = rawLocationOrSite.id || autoPersistSiteId;
   }
 
   if (typeof rawLocation === 'string' && memoryCache.coordinates.has(rawLocation)) {
     return memoryCache.coordinates.get(rawLocation);
   }
 
+  // 1. Direct regex match on raw "lat, lon"
   if (typeof rawLocation === 'string') {
     const directMatch = rawLocation.trim().match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
     if (directMatch) {
@@ -603,14 +649,9 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
       memoryCache.coordinates.set(rawLocation, coords);
       return coords;
     }
-    const urlMatch = rawLocation.trim().match(/[@?&/=](-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
-    if (urlMatch) {
-      const coords = { lat: parseFloat(urlMatch[1]), lon: parseFloat(urlMatch[2]) };
-      memoryCache.coordinates.set(rawLocation, coords);
-      return coords;
-    }
   }
 
+  // 2. Decode native Airtable Map Cache
   if (cache && typeof cache === 'string') {
     try {
       const decoded = Buffer.from(cache, 'base64').toString('utf8');
@@ -625,6 +666,26 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
     } catch (e) {}
   }
 
+  // 3. Primary Google Maps Geocoding Resolver
+  if (typeof rawLocation === 'string' && rawLocation.length > 3) {
+    const googleResult = await geocodeAddressWithGoogle(rawLocation);
+    if (googleResult) {
+      const coords = { lat: googleResult.lat, lon: googleResult.lon };
+      memoryCache.coordinates.set(rawLocation, coords);
+
+      // Auto-persist clean lat/lon back into Airtable Sites table
+      if (siteId && !rawLocation.includes(',')) {
+        const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
+        airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(err => {
+          console.warn('[Google Geo] Auto-persist to Sites skipped:', err.message);
+        });
+      }
+
+      return coords;
+    }
+  }
+
+  // 4. Fallback to Open-Meteo
   if (typeof rawLocation === 'string' && rawLocation.length > 5) {
     try {
       const cleanAddress = rawLocation.replace(/[^\w\s,]/gi, '').trim();
@@ -633,16 +694,13 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null) {
       if (res.ok) {
         const data = await res.json();
         if (data.results && data.results.length > 0) {
-          const coords = {
-            lat: data.results[0].latitude,
-            lon: data.results[0].longitude
-          };
+          const coords = { lat: data.results[0].latitude, lon: data.results[0].longitude };
           memoryCache.coordinates.set(rawLocation, coords);
           return coords;
         }
       }
     } catch (err) {
-      console.warn('[Geocoding Engine] Address lookup failed:', err.message);
+      console.warn('[Geocoding Engine] Fallback address lookup failed:', err.message);
     }
   }
 
@@ -2386,8 +2444,14 @@ app.post('/webhook', async (req, res) => {
             await dispatchReply(`📍 No GPS coordinates locked for *${site.fields['Site Name']}*. Drop a location pin to anchor!`);
             return;
           }
-          const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}`;
-          await dispatchReply(`📍 *${site.fields['Site Name'].toUpperCase()} | GPS ANCHOR*\n━━━━━━━━━━━━━━━━━━━━\n• Coordinates: ${coords.lat}, ${coords.lon}\n• Turn-by-Turn: ${navUrl}`);
+          const links = getGoogleMapsLinks(coords.lat, coords.lon);
+          await dispatchReply(
+            `📍 *${site.fields['Site Name'].toUpperCase()} | GPS ANCHOR*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `• *Coordinates:* ${coords.lat}, ${coords.lon}\n\n` +
+            `🗺️ *Driving Directions / Ruta:*\n${links.directions}\n\n` +
+            `🛰️ *Satellite Staging View (Yard & Tree Clearance):*\n${links.satellite}`
+          );
           return;
         }
 
@@ -2489,7 +2553,7 @@ app.post('/webhook', async (req, res) => {
           let response = `🔍 *TITAN VAULT SEARCH | "${query}"*\n━━━━━━━━━━━━━━━━━━━━\n`;
           results.forEach((r, idx) => {
             const d = new Date(r.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' });
-            response += `• *${r.site_name}* (${d} by ${r.sender_name}):\n  "${r.distilled_context || r.raw_text}"\n`;
+            response += `• *${r.site_name}* (${d} by ${r.sender_name}):\n   "${r.distilled_context || r.raw_text}"\n`;
           });
 
           await dispatchReply(response);
@@ -2499,7 +2563,7 @@ app.post('/webhook', async (req, res) => {
         if (intent === 'HELP') {
           await dispatchReply(`🤖 *TITAN OS COMMAND MATRIX (COMANDOS)*\n\n` +
             `• */w* — Hyperlocal Weather & Wind / Clima y Viento\n` +
-            `• */map* — Google Maps Navigation / Navegación GPS\n` +
+            `• */map* — Google Maps Navigation & Satellite / Navegación y Satélite\n` +
             `• */s* — Site Status / Estado de Cancha\n` +
             `• */g* — Spring 2027 Mobilization Gate Check\n` +
             `• */context* [Court] — Review ambient field notes\n` +
@@ -2681,11 +2745,76 @@ app.post('/webhook', async (req, res) => {
 // 15. HEALTH & RUNTIME
 // ====================================================================
 
+/**
+ * Administrative Route: One-tap fleet geocoding & multi-court pin-nudging
+ */
+app.get('/api/admin/backfill-geo', async (req, res) => {
+  try {
+    console.log('🌍 [Google Geo] Starting continental fleet backfill & pin-nudging sweep...');
+    const records = await getCachedSites(true);
+    let updatedCount = 0;
+    const coordTracker = new Map();
+
+    for (const record of records) {
+      const siteName = record.fields['Site Name'] || 'Unnamed Site';
+      const rawLocation = (record.fields['Site location'] || '').trim();
+
+      if (!rawLocation || rawLocation === '+') continue;
+
+      let lat = null;
+      let lon = null;
+
+      const directMatch = rawLocation.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
+      if (directMatch) {
+        lat = parseFloat(directMatch[1]);
+        lon = parseFloat(directMatch[2]);
+      } else {
+        const geo = await geocodeAddressWithGoogle(rawLocation);
+        if (geo) {
+          lat = geo.lat;
+          lon = geo.lon;
+        }
+      }
+
+      if (!lat || !lon) continue;
+
+      // De-duplicate stacked pins (e.g. Court 1 vs Court 2 at same club)
+      const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+      const seenCount = coordTracker.get(coordKey) || 0;
+      coordTracker.set(coordKey, seenCount + 1);
+
+      if (seenCount > 0) {
+        // Nudge longitude by ~15m per court so pins render side-by-side
+        lon = lon + (seenCount * 0.00015);
+      }
+
+      const formatted = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+
+      if (rawLocation !== formatted) {
+        await airtableWriteWithAutoDrop('Sites', { 'Site location': formatted }, record.id);
+        updatedCount++;
+        console.log(`📍 [Google Geo] Updated ${siteName} -> ${formatted}`);
+        await new Promise(r => setTimeout(r, 150)); // Respect Airtable API rate limit
+      }
+    }
+
+    invalidateAirtableCache('sites');
+    res.json({
+      status: 'success',
+      courts_updated: updatedCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('[Google Geo Backfill Error]:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
     version: '4.9.9',
-    engine: 'Titan OS V4.9.9 (Executive Text-Only Joy Cannon & Forensic 12-Gate Engine)',
+    engine: 'Titan OS V4.9.9 (Executive Text-Only Joy Cannon & Forensic 12-Gate Engine with Google Geo)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
       workers_cached: memoryCache.workers ? memoryCache.workers.length : 0
@@ -2700,6 +2829,7 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`🏗️ FORENSIC 12-GATE RUBRIC: Visual Detection (Slab, Steel, Mesh, Glass) Active`);
   console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
   console.log(`🌐 BILINGUAL SMART-VERBATIM: Disfluency Removal & Dual EN/ES Active`);
+  console.log(`🛰️ GOOGLE GEO ENGINE: High-Res Satellite Staging & Millimeter Pin Nudging Active`);
   console.log(`====================================================================`);
 
   try {
