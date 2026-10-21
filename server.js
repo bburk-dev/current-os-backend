@@ -1,23 +1,28 @@
 /**
- * TITAN OS V5.0.0 — FACILITY PANORAMA & ZERO-FRICTION MULTI-COURT ENGINE
+ * TITAN OS V5.1.0 — API QUOTA PROTECTOR & FACILITY PANORAMA ENGINE
  * 
  * Production Build Features:
- * 1. Multi-Court Facility Wide-Angle Pan: Gemini visually parses 180° sweeps across multi-court pads
+ * 1. In-Place RAM Cache Mutation: Updates Airtable records in RAM immediately upon write rather than
+ *    invalidating the cache, eliminating repetitive site and worker read calls across active work shifts.
+ * 2. Cached Daily Assignments Engine: Caches open dispatch tickets in memory with a 3-minute TTL,
+ *    eliminating API roundtrips on routine arrival checks and distance routing.
+ * 3. Selective Forensic Vault Sync: Retains full Supabase ambient logging while writing to Airtable
+ *    'Inbound Messages 2' and 'Reports 2' exclusively when verified milestones advance or critical alerts occur.
+ * 4. Multi-Court Facility Wide-Angle Pan: Gemini visually parses 180° sweeps across multi-court pads
  *    (e.g., Fairgrounds Leaside, RCOR) to evaluate each court's gates independently with zero installer speech required.
- * 2. Consolidated Digital Twins: Single venue records track aggregate facility health while storing per-court breakdown (e.g. C1: G4 | C2: G2).
- * 3. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
- * 4. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria
+ * 5. Consolidated Digital Twins: Single venue records track aggregate facility health while storing per-court breakdown (e.g. C1: G4 | C2: G2).
+ * 6. Text-Only Executive Joy Cannons: Pure, frictionless momentum updates with database court labels removed.
+ * 7. 12-Gate Visual Forensic Rubric: Gemini evaluates video frames against physical criteria
  *    even during completely silent or background-noise walkarounds (identifies slab, frame uprights, mesh, glass, turf).
- * 5. In-Progress Stage Tracking: Captures verified completed gates alongside active installation phases.
- * 6. Multimodal Concierge Onboarding: Final handover prompts clients to text, voice note, or send a video for future service.
- * 7. Strict Pipeline Bifurcation: Installation sites strictly mutate Sites state; Daily Assignments tickets remain isolated.
- * 8. Schema Auto-Healer Hardening: Omit computed formula fields ('Completion %') to prevent HTTP 422 write faults.
- * 9. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um", "will will") while preserving technical terminology.
- * 10. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently on every sweep.
- * 11. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
- * 12. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
- * 13. Google Geo Enterprise Engine: Millimeter geocoding, contractor satellite staging views, twin-court pin nudging, and continental backfill.
- * 14. INOC Forensic Vault: Granular audit logging to Reports 2 and Inbound Messages 2.
+ * 8. In-Progress Stage Tracking: Captures verified completed gates alongside active installation phases.
+ * 9. Multimodal Concierge Onboarding: Final handover prompts clients to text, voice note, or send a video for future service.
+ * 10. Strict Pipeline Bifurcation: Installation sites strictly mutate Sites state; Daily Assignments tickets remain isolated.
+ * 11. Schema Auto-Healer Hardening: Omit computed formula fields ('Completion %') to prevent HTTP 422 write faults.
+ * 12. Smart Verbatim Engine: Purges vocal fillers ("uh", "ah", "um", "will will") while preserving technical terminology.
+ * 13. Dual-Track Bilingual Output: Generates clean English and Spanish transcripts concurrently on every sweep.
+ * 14. Decoupled Blind Visual Gate: Pure visual frame inspection with zero audio context (100% immune to semantic bleed).
+ * 15. Meteorological Safety Tripwires: Real-time wind gust (>20 kts) & condensation turf adhesive holds via Open-Meteo.
+ * 16. Google Geo Enterprise Engine: Millimeter geocoding, contractor satellite staging views, twin-court pin nudging, and continental backfill.
  */
 
 process.on('uncaughtException', (err) => {
@@ -89,6 +94,8 @@ const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY',
 // 2. IN-MEMORY CACHE-ASIDE ENGINE (AIRTABLE API BURN PROTECTOR)
 // ====================================================================
 const CACHE_TTL_MS = 10 * 60 * 1000;
+const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
+
 const memoryCache = {
   sites: null,
   sitesLastFetched: 0,
@@ -96,6 +103,8 @@ const memoryCache = {
   workersLastFetched: 0,
   contacts: null,
   contactsLastFetched: 0,
+  assignments: null,
+  assignmentsLastFetched: 0,
   coordinates: new Map()
 };
 
@@ -172,11 +181,34 @@ async function getCachedContacts(forceRefresh = false) {
   }
 }
 
+async function getCachedOpenAssignments(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && memoryCache.assignments && (now - memoryCache.assignmentsLastFetched < ASSIGNMENTS_CACHE_TTL_MS)) {
+    return memoryCache.assignments;
+  }
+
+  try {
+    const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc&maxRecords=50`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    memoryCache.assignments = data.records || [];
+    memoryCache.assignmentsLastFetched = now;
+    console.log(`[Cache Engine] Refreshed ${memoryCache.assignments.length} Open Assignments into RAM`);
+    return memoryCache.assignments;
+  } catch (err) {
+    console.warn('[Cache Engine] Assignments refresh failed, using stale cache if available:', err.message);
+    return memoryCache.assignments || [];
+  }
+}
+
 function invalidateAirtableCache(entity = 'all') {
   if (entity === 'all' || entity === 'sites') memoryCache.sitesLastFetched = 0;
   if (entity === 'all' || entity === 'workers') memoryCache.workersLastFetched = 0;
   if (entity === 'all' || entity === 'contacts') memoryCache.contactsLastFetched = 0;
-  console.log(`[Cache Engine] Invalidated cache scope: ${entity}`);
+  if (entity === 'all' || entity === 'assignments') memoryCache.assignmentsLastFetched = 0;
+  console.log(`[Cache Engine] Explicit cache invalidation scope: ${entity}`);
 }
 
 // ====================================================================
@@ -694,7 +726,7 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
       const coords = { lat: googleResult.lat, lon: googleResult.lon };
       memoryCache.coordinates.set(rawLocation, coords);
 
-      // Auto-persist clean lat/lon back into Airtable Sites table
+      // Auto-persist clean lat/lon back into Airtable Sites table without clearing cache
       if (siteId && !rawLocation.includes(',')) {
         const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
         airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(err => {
@@ -816,6 +848,10 @@ async function uploadToSupabase(fileBuffer, mimeType) {
   return { storagePath, signedUrl: fullSignedUrl };
 }
 
+/**
+ * Enhanced Auto-Healer with In-Place RAM Cache Mutation
+ * Eliminates aggressive cache invalidation, mutating memoryCache directly to avoid API burns.
+ */
 async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
   const cleanFields = { ...fields };
 
@@ -845,9 +881,39 @@ async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt
   });
 
   if (res.ok) {
-    if (table.toLowerCase().includes('site')) invalidateAirtableCache('sites');
-    if (table.toLowerCase().includes('worker')) invalidateAirtableCache('workers');
-    return await res.json();
+    const savedRecord = await res.json();
+    const lowerTable = table.toLowerCase();
+
+    // In-Place RAM Cache Mutation: Keep local memory 100% synced without refetching from Airtable
+    if (lowerTable.includes('site') && memoryCache.sites) {
+      if (recordId) {
+        const item = memoryCache.sites.find(s => s.id === recordId);
+        if (item) item.fields = { ...item.fields, ...cleanFields, ...(savedRecord.fields || {}) };
+      } else if (savedRecord?.id) {
+        memoryCache.sites.push(savedRecord);
+      }
+    } else if (lowerTable.includes('worker') && memoryCache.workers) {
+      if (recordId) {
+        const item = memoryCache.workers.find(w => w.id === recordId);
+        if (item) item.fields = { ...item.fields, ...cleanFields, ...(savedRecord.fields || {}) };
+      } else if (savedRecord?.id) {
+        memoryCache.workers.push(savedRecord);
+      }
+    } else if (lowerTable.includes('assignment') && memoryCache.assignments) {
+      if (recordId) {
+        const item = memoryCache.assignments.find(a => a.id === recordId);
+        if (item) {
+          item.fields = { ...item.fields, ...cleanFields, ...(savedRecord.fields || {}) };
+          if (item.fields['Status'] === 'Complete' || item.fields['Status'] === 'Cancelled') {
+            memoryCache.assignments = memoryCache.assignments.filter(a => a.id !== recordId);
+          }
+        }
+      } else if (savedRecord?.id && savedRecord.fields?.['Status'] !== 'Complete') {
+        memoryCache.assignments.unshift(savedRecord);
+      }
+    }
+
+    return savedRecord;
   }
 
   const errBody = await res.json().catch(() => ({}));
@@ -1193,56 +1259,28 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
   }
 }
 
-async function notifyAssignedWorker(ticketNumber, courtName, taskCategory, priority, directiveNotes, workerRecord) {
-  if (!workerRecord) return false;
-
-  const workerPhone = workerRecord.fields?.['WhatsApp Number'] || workerRecord.fields?.['Phone E164'];
-  if (!workerPhone) return false;
-
-  const cleanPhone = String(workerPhone).replace(/\D/g, '');
-  const dispatchCard = `📋 *TITAN OS | WORK ORDER ASSIGNED*\n` +
-    `*(Orden de Trabajo Asignada)*\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎫 *Ticket #${ticketNumber} Assigned / Asignado*\n` +
-    `🏟️ *Court / Cancha:* ${courtName || 'Facility Court'}\n` +
-    `🔧 *Scope / Alcance:* ${taskCategory || 'Service'}\n` +
-    `⚡ *Priority / Prioridad:* ${priority || 'Medium'}\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📝 *Directive / Directiva:*\n${directiveNotes}\n\n` +
-    `👉 *VIDEO DELTA PROTOCOL:*\n` +
-    `1. *Intake / Entrada:* Send a 15-sec walkaround video narrating blockers before starting.\n` +
-    `2. *Closeout / Cierre:* Send a 10-sec completion sweep when finished to close hands-free.`;
-
-  return await sendWhatsAppMessage(cleanPhone, dispatchCard);
-}
-
 // ====================================================================
 // 10. WORK ORDER CLOSEOUT ENGINE
 // ====================================================================
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
+  const openTickets = await getCachedOpenAssignments();
+
   if (ticketId) {
-    const formula = `{Assignment ID} = ${ticketId}`;
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      if (data.records && data.records.length > 0) return data.records[0];
-    }
+    const cleanNum = parseInt(String(ticketId).replace(/\D/g, ''));
+    const match = openTickets.find(r => {
+      const aId = r.fields['Assignment ID'];
+      return aId === ticketId || aId === cleanNum || r.id === ticketId;
+    });
+    if (match) return match;
   }
 
   if (siteId) {
-    const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc&maxRecords=20`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      const records = data.records || [];
-      return records.find(r => {
-        const sites = r.fields['Sites'] || r.fields['Site'] || [];
-        return Array.isArray(sites) && sites.includes(siteId);
-      }) || null;
-    }
+    const match = openTickets.find(r => {
+      const sites = r.fields['Sites'] || r.fields['Site'] || [];
+      return Array.isArray(sites) && sites.includes(siteId);
+    });
+    if (match) return match;
   }
 
   return null;
@@ -1250,13 +1288,7 @@ async function findActiveTicketForSite(siteId, ticketId = null) {
 
 async function findNearestOpenAssignment(currentLat, currentLon, excludeSiteId = null) {
   try {
-    const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&maxRecords=30`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok) return null;
-
-    const data = await res.json();
-    const openTickets = data.records || [];
+    const openTickets = await getCachedOpenAssignments();
     if (openTickets.length === 0) return null;
 
     const cachedSites = await getCachedSites();
@@ -1908,7 +1940,7 @@ async function processMediaBatch(batch) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Technician';
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-  // Resolve Explicit Ticket
+  // Resolve Explicit Ticket via RAM-Cached Assignments
   let activeTicket = null;
   const explicitTicketId = forensicAudit.spoken_ticket_id || forensicAudit.ticket_id;
 
@@ -1972,12 +2004,13 @@ async function processMediaBatch(batch) {
       compactGateStatus = forensicAudit.facility_breakdown.map(c => `${c.court_label}: G${c.highest_gate}`).join(' | ');
     }
 
+    const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
+    const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
+      const num = parseInt(String(g).replace(/\D/g, ''));
+      return isNaN(num) ? String(g) : `Gate ${num}`;
+    }).filter(g => !previouslyCleared.includes(g));
+
     if (targetedSite) {
-      const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
-      const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
-        const num = parseInt(String(g).replace(/\D/g, ''));
-        return isNaN(num) ? String(g) : `Gate ${num}`;
-      });
       const allCleared = Array.from(new Set([...previouslyCleared, ...newlyVerifiedGates]));
 
       const updatePayload = {
@@ -1995,7 +2028,7 @@ async function processMediaBatch(batch) {
 
       await airtableWriteWithAutoDrop('Sites', updatePayload, targetedSite.id);
 
-      if (highestGate > 0) {
+      if (highestGate > 0 && newlyVerifiedGates.length > 0) {
         await fireInstallationJoyCannon(targetedSite, highestGate);
       }
     }
@@ -2015,35 +2048,45 @@ async function processMediaBatch(batch) {
 
     await sendWhatsAppMessage(dispatchTarget, installCard);
 
-    // Full INOC Vault Sync
-    try {
-      const videoIndex = items.findIndex(item => item.type === 'video');
-      const storageResult = storageResults[videoIndex >= 0 ? videoIndex : 0];
-      const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
-        'Message ID': items[0]?.messageId,
-        'Worker Phone Raw': fromPhone,
-        'Message Type': hasVideo ? 'video' : 'image',
-        'Caption Text': `[FACILITY SWEEP - Gate ${highestGate}/12]: ${cleanEn}`,
-        'Media URL': storageResult?.signedUrl,
-        'Media Path': storageResult?.storagePath,
-        'Raw Payload JSON': JSON.stringify(items[0]?.rawMessage)
-      });
+    // ADJUSTMENT 3: Consolidate Vault Logging
+    // Only write to Inbound Messages 2 and Reports 2 when an actual milestone advances or a critical alert occurs
+    const hasMeaningfulMilestone = newlyVerifiedGates.length > 0 || highestGate === 12;
+    const hasBlockerOrAlert = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
+                              forensicAudit.status_observed === 'ACTION_REQUIRED';
 
-      await airtableWriteWithAutoDrop('Reports 2', {
-        'Inbound Messages 2': inboundRecord?.id ? [inboundRecord.id] : [],
-        'Sites': targetedSite ? [targetedSite.id] : [],
-        'Workflow Mode': 'INSTALLATION',
-        'Overall Status': 'MILESTONE_PROGRESS',
-        'Site Conditions': forensicAudit.site_conditions || 'Construction Active',
-        'Action Items': (forensicAudit.action_items || []).join('\n'),
-        'Status Observed': 'MILESTONE_PROGRESS',
-        'Action Intent': 'MILESTONE_CLEARANCE',
-        'WhatsApp Reply Text': installCard,
-        'Clean JSON': JSON.stringify(forensicAudit, null, 2)
-      });
-    } catch (e) {
-      console.warn('[INOC Vault Sync Warning]:', e.message);
+    if (hasMeaningfulMilestone || hasBlockerOrAlert) {
+      try {
+        const videoIndex = items.findIndex(item => item.type === 'video');
+        const storageResult = storageResults[videoIndex >= 0 ? videoIndex : 0];
+        const inboundRecord = await airtableWriteWithAutoDrop('Inbound Messages 2', {
+          'Message ID': items[0]?.messageId,
+          'Worker Phone Raw': fromPhone,
+          'Message Type': hasVideo ? 'video' : 'image',
+          'Caption Text': `[FACILITY SWEEP - Gate ${highestGate}/12]: ${cleanEn}`,
+          'Media URL': storageResult?.signedUrl,
+          'Media Path': storageResult?.storagePath,
+          'Raw Payload JSON': JSON.stringify(items[0]?.rawMessage)
+        });
+
+        await airtableWriteWithAutoDrop('Reports 2', {
+          'Inbound Messages 2': inboundRecord?.id ? [inboundRecord.id] : [],
+          'Sites': targetedSite ? [targetedSite.id] : [],
+          'Workflow Mode': 'INSTALLATION',
+          'Overall Status': 'MILESTONE_PROGRESS',
+          'Site Conditions': forensicAudit.site_conditions || 'Construction Active',
+          'Action Items': (forensicAudit.action_items || []).join('\n'),
+          'Status Observed': forensicAudit.status_observed || 'MILESTONE_PROGRESS',
+          'Action Intent': 'MILESTONE_CLEARANCE',
+          'WhatsApp Reply Text': installCard,
+          'Clean JSON': JSON.stringify(forensicAudit, null, 2)
+        });
+      } catch (e) {
+        console.warn('[INOC Vault Sync Warning]:', e.message);
+      }
+    } else {
+      console.log(`[INOC Vault] Routine check with no milestone advancement; archived to Supabase Dark Matter (Airtable API write saved).`);
     }
+
     return;
   }
 
@@ -2853,18 +2896,20 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.0.0',
-    engine: 'Titan OS V5.0.0 (Multi-Court Facility Panorama & Google Geo Engine)',
+    version: '5.1.0',
+    engine: 'Titan OS V5.1.0 (API Quota Protector & Facility Panorama Engine)',
     cache_status: {
       sites_cached: memoryCache.sites ? memoryCache.sites.length : 0,
-      workers_cached: memoryCache.workers ? memoryCache.workers.length : 0
+      workers_cached: memoryCache.workers ? memoryCache.workers.length : 0,
+      assignments_cached: memoryCache.assignments ? memoryCache.assignments.length : 0
     }
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.0.0 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.1.0 RUNNING ON PORT ${PORT}`);
+  console.log(`🛡️ API QUOTA PROTECTOR: In-Place Cache Mutation & Cached Assignments Active`);
   console.log(`🎾 TEXT-ONLY JOY CANNON: Executive Concierge Updates Active (No Court Tag)`);
   console.log(`🏗️ FACILITY PANORAMA GATE: Multi-Court 180° Visual Inspection Active`);
   console.log(`🛡️ BLIND VISION GATE: Decoupled Frame Analysis Active`);
@@ -2876,6 +2921,7 @@ app.listen(PORT, '0.0.0.0', async () => {
     await getCachedSites();
     await getCachedWorkers();
     await getCachedContacts();
+    await getCachedOpenAssignments();
   } catch (err) {
     console.warn('[Cache Warmup Warning]:', err.message);
   }
