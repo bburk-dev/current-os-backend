@@ -1,28 +1,30 @@
 /**
- * TITAN OS V5.3.3 — OPEN FOR PLAY READINESS & JOY CANNON ENGINE
+ * TITAN OS V5.3.4 — ZERO-TOUCH FIELD PROVISIONING & OPEN FOR PLAY ENGINE
  * 
  * Production Build Features:
- * 1. Open For Play Readiness Engine: Overrides pre-con checks for commissioned/maintenance courts
+ * 1. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
+ *    and immediately reply "create new site [Name]" to automatically build a bound ledger
+ *    record with live coordinates, triggering INOC prep-alerts.
+ * 2. Open For Play Readiness Engine: Overrides pre-con checks for commissioned/maintenance courts
  *    ('OPEN FOR PLAY 🎾') and headquarters/operational nodes ('OPERATIONAL 🏢').
- * 2. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
+ * 3. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
  *    missed client celebratory alerts when gates are in-progress or partial.
- * 3. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
+ * 4. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
  *    direct Meta Graph API calls to prevent HTTP 400 (#100) invalid parameter rejections.
- * 4. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
+ * 5. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
  *    turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
  *    wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
- * 5. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 6. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
+ * 6. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 7. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
  *    ("Where is Levinsky?", "Send pin for Don Walker"), weather, readiness, and status lookups.
- * 7. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
+ * 8. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
  *    zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
- * 8. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
+ * 9. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
  *    Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
- * 9. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
- *    never trigger false gate skips. Each court row is graded independently.
- * 10. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
+ * 10. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
+ *     never trigger false gate skips. Each court row is graded independently.
+ * 11. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
  *     as a quality check without blocking gate advancement.
- * 11. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
  * 12. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
  * 13. Direct QuickBooks Attachment Sync: Automatically maps Supabase signed image URLs into
  *     Airtable's native 'Attachment(s)' field for instant Automation 4 Gmail export.
@@ -98,6 +100,8 @@ const CONFIG = {
 const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3500;
 const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
+
+const lastDroppedCoordinates = new Map();
 
 // ====================================================================
 // 2. IN-MEMORY CACHE-ASIDE ENGINE
@@ -1654,6 +1658,38 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   if (triage.intent === 'PURE_NOISE') return;
 
+  // New Site Provisioning Catch
+  const combinedTranscript = (triage.transcript_en || '').toLowerCase();
+  const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
+
+  if (newSiteMatch) {
+    const newSiteName = newSiteMatch[1].trim();
+    const recentPin = lastDroppedCoordinates.get(fromPhone);
+
+    const newRecordPayload = {
+      'Site Name': newSiteName,
+      'Workflow Mode': 'PLANNING',
+      'Site Status': 'ACTIVE',
+      'Last Note': `[SITE VISIT - Created via Spoken Audio on ${new Date().toLocaleDateString()}]`,
+      'WhatsApp Group ID': dispatchTarget || fromPhone
+    };
+
+    if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
+      newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+    }
+
+    await airtableWriteWithAutoDrop('Sites', newRecordPayload);
+    invalidateAirtableCache('sites');
+
+    await sendWhatsAppMessage(dispatchTarget, `🏟️ *TITAN OS | NEW SITE CREATED*\n\n` +
+      `• *Court:* ${newSiteName}\n` +
+      (newRecordPayload['Site location'] ? `• *Coordinates:* ${newRecordPayload['Site location']}\n` : '') +
+      `• *Mode:* PLANNING\n` +
+      `• *Readiness:* HOLD: PRE-CON BLOCKED 🔴\n\n` +
+      `📋 Queued for INOC to populate specs & deposit.`);
+    return;
+  }
+
   if (triage.intent === 'LOCATION_QUERY') {
     await handleSpokenLocationQuery(triage.queried_court_name, site, dispatchTarget);
     return;
@@ -2141,9 +2177,14 @@ app.post('/webhook', async (req, res) => {
     if (message.type === 'location') {
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
+      
+      // Store pin in RAM for up to 10 minutes in case they say "create new site" right after
+      lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
 
       if (!site) {
-        await dispatchReply(`⚠️ Link this group to a court first: /group <Court Name>`);
+        await dispatchReply(`📍 Location received (${userLat.toFixed(4)}, ${userLon.toFixed(4)}).\n\n` +
+          `👉 *To assign this coordinate:*\nLink a court using \`/group <Name>\`\n\n` +
+          `👉 *To provision a brand new site here:*\nReply with *"Create new site <Name>"*`);
         return;
       }
 
@@ -2206,6 +2247,39 @@ app.post('/webhook', async (req, res) => {
       const [trigger, ...args] = rawText.split(' ');
       const explicitIntent = COMMAND_MAP[trigger.toLowerCase()];
 
+      // New Site Provisioning Catch via Text
+      const newSiteMatch = rawText.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
+      
+      if (newSiteMatch) {
+        const newSiteName = newSiteMatch[1].trim();
+        const recentPin = lastDroppedCoordinates.get(fromPhone);
+
+        const newRecordPayload = {
+          'Site Name': newSiteName,
+          'Workflow Mode': 'PLANNING',
+          'Site Status': 'ACTIVE',
+          'Last Note': `[SITE VISIT - Created via WhatsApp Text by ${callerIdentity.name || 'User'} on ${new Date().toLocaleDateString()}]`,
+          'WhatsApp Group ID': isGroupMessage ? groupJid : fromPhone
+        };
+
+        if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
+          newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+        }
+
+        await airtableWriteWithAutoDrop('Sites', newRecordPayload);
+        invalidateAirtableCache('sites');
+
+        await dispatchReply(`🏟️ *TITAN OS | NEW SITE CREATED*\n\n` +
+          `• *Court:* ${newSiteName}\n` +
+          (newRecordPayload['Site location'] ? `• *Coordinates:* ${newRecordPayload['Site location']}\n` : '') +
+          `• *Mode:* PLANNING\n` +
+          `• *Readiness:* HOLD: PRE-CON BLOCKED 🔴\n\n` +
+          `📋 Queued for INOC to populate specs & deposit.` +
+          (!newRecordPayload['Site location'] ? `\n\n👉 *Drop a location pin now* to anchor GPS.` : '')
+        );
+        return;
+      }
+
       if (explicitIntent === 'LINK_SITE') {
         const targetSiteName = args.join(' ');
         const targetSite = await lookupSite(null, targetSiteName);
@@ -2245,7 +2319,8 @@ app.post('/webhook', async (req, res) => {
           `  _"What's the weather at RCOR?"_ (returns tripwires & wind holds)\n` +
           `  _"What gate is Don Walker on?"_\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
-          `• Send video walkaround -> Instant milestone progression`);
+          `• Send video walkaround -> Instant milestone progression\n` +
+          `• Drop a pin and text _"Create new site Burk"_ -> Auto-provisions in Airtable`);
         return;
       }
 
@@ -2472,14 +2547,15 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.3.3',
-    engine: 'Titan OS V5.3.3 (Open For Play Readiness Engine & Joy Cannon Sanitization)'
+    version: '5.3.4',
+    engine: 'Titan OS V5.3.4 (Zero-Touch Field Provisioning & Open For Play Engine)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.3.3 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.3.4 RUNNING ON PORT ${PORT}`);
+  console.log(`📍 ZERO-TOUCH PROVISIONING: Drop a Pin & Say 'Create New Site' Active`);
   console.log(`🎾 OPEN FOR PLAY: Readiness Gate Overrides Active`);
   console.log(`🎉 JOY CANNON: Direct Milestone Advancement & Number Sanitizer Active`);
   console.log(`🌤️ PROACTIVE WEATHER ENGINE: Wind, Cold Glue (<10°C), Moisture & Heat Active`);
