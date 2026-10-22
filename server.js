@@ -1,47 +1,56 @@
 /**
- * TITAN OS V5.3.6 — SILENT EXPENSE GHOST ROUTING, MULTIMODAL SALES LEAD INGESTION,
- * RESILIENT META DISPATCH & DYNAMIC SEASONAL WINTERIZATION ENGINE
+ * TITAN OS V5.3.8 — DYNAMIC SESSION SITE BINDING, ZERO-FRICTION TICKET UPDATES,
+ * MULTIMODAL COMMERCIAL LEAD INGESTION, AND RESILIENT FLEET DISPATCH
  * 
  * Production Build Features:
- * 1. Multimodal Commercial Sales Lead Ingestion: Screenshots of forwarded emails,
+ * 1. Dynamic Session Site Overrides: Eliminates multi-site phone collisions. When linking
+ *    to a court (e.g. /link RCOR Court 2) or provisioning a new site, an in-memory session map
+ *    overrides stale ledger entries and automatically unlinks older sites holding your WhatsApp ID.
+ * 2. Zero-Friction Ticket & Lead Updates: Reply directly to lead or chore notifications via WhatsApp
+ *    (e.g., "Left a voicemail and will try Ondako tomorrow"). Gemini identifies the target ticket/lead
+ *    in Daily Assignments, appends timestamped notes, and confirms back to WhatsApp without opening Airtable.
+ * 3. Multimodal Commercial Sales Lead Ingestion: Screenshots of forwarded emails,
  *    partner leads (e.g. Mondo / Michael Tovar), texts, or RFPs are OCR-extracted
  *    via Gemini and written straight into Daily Assignments with Assignment Type: 'Sales',
  *    Priority: 'High', Status: 'Open', and formatted for ENTRY #088 relational indexing.
- * 2. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
+ * 4. Interactive Field Note Promotion: Field observations (text or voice) with high gravity
+ *    trigger the interactive '⚠️ FIELD NOTE RECORDED' card with a 1-tap '[📋 Create Ticket]' button,
+ *    even when not bound to an existing court record.
+ * 5. Dynamic Seasonal Closeout Engine: Analyzes work-order categories and spoken closeout notes to
+ *    automatically set Site Status to 'WINTERIZED_CLOSED' or 'OPEN_FOR_PLAY', generating contextual voucher cards.
+ * 6. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
  *    and Task Category: 'Expense' so Automation 4 passes attachments to QuickBooks instantly
  *    without cluttering the active dispatch/punch-list board.
- * 3. Resilient Meta Dispatch with Auto-Retry: sendWhatsAppMessage includes automatic retry
+ * 7. Resilient Meta Dispatch with Auto-Retry: sendWhatsAppMessage includes automatic retry
  *    with exponential backoff, preventing dropped cards during transient Meta DNS/TCP timeouts.
- * 4. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
+ * 8. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
  *    and immediately reply "create new site [Name]" to automatically build a bound ledger
  *    record with live coordinates, triggering INOC prep-alerts.
- * 5. Open For Play & Seasonal Readiness Engine: Evaluates dynamic Site Status ('OPEN_FOR_PLAY' vs
+ * 9. Open For Play & Seasonal Readiness Engine: Evaluates dynamic Site Status ('OPEN_FOR_PLAY' vs
  *    'WINTERIZED_CLOSED') with pre-con bypasses for commissioned nodes.
- * 6. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
- *    missed client celebratory alerts when gates are in-progress or partial.
- * 7. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
- *    direct Meta Graph API calls to prevent HTTP 400 (#100) invalid parameter rejections.
- * 8. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
- *    turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
- *    wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
- * 9. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 10. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal
+ * 10. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
+ *     missed client celebratory alerts when gates are in-progress or partial.
+ * 11. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
+ *     direct Meta Graph API calls to prevent HTTP 400 (#100) invalid parameter rejections.
+ * 12. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
+ *     turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
+ *     wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
+ * 13. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 14. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal
  *     from Sites to open Daily Assignments. Seamlessly synthesizes open repairs, chores, and commercial leads
  *     for natural voice queries ("Any tickets for Cynamon?", "Where is Levinsky?", "Status of RCOR").
- * 11. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
+ * 15. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
  *     zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
- * 12. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
+ * 16. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
  *     Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
- * 13. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
+ * 17. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
  *     never trigger false gate skips. Each court row is graded independently.
- * 14. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
+ * 18. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
  *     as a quality check without blocking gate advancement.
- * 15. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
- * 16. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
- * 17. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
- * 18. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
- * 19. Dynamic Seasonal Closeout Engine: Analyzes work-order categories and spoken closeout notes to
- *     automatically set Site Status to 'WINTERIZED_CLOSED' or 'OPEN_FOR_PLAY', generating contextual voucher cards.
+ * 19. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
+ * 20. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
+ * 21. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
+ * 22. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
  */
 
 process.on('uncaughtException', (err) => {
@@ -113,6 +122,7 @@ const DEBOUNCE_DELAY_MS = 3500;
 const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
 
 const lastDroppedCoordinates = new Map();
+const userActiveSiteMap = new Map(); // Dynamic in-memory session override per phone/dispatch target
 
 // ====================================================================
 // 2. IN-MEMORY CACHE-ASIDE ENGINE
@@ -661,6 +671,65 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
     `🎫 *Ticket ${ticketId} Created* (Indexed under Daily Assignments -> Sales)`;
 
   await sendWhatsAppMessage(dispatchTarget, leadCard);
+}
+
+/**
+ * CONVERSATIONAL TICKET & LEAD UPDATE HANDLER
+ * Appends notes, call logs, and outreach details directly to Daily Assignments via WhatsApp.
+ */
+async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId, worker, dispatchTarget, fromPhone }) {
+  const openAssignments = await getCachedOpenAssignments();
+  const workerName = worker?.fields?.['Full Name'] || 'Bob';
+  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  let targetTicket = null;
+
+  if (explicitTicketId) {
+    const cleanNum = parseInt(String(explicitTicketId).replace(/\D/g, ''));
+    targetTicket = openAssignments.find(a => a.fields['Assignment ID'] === cleanNum || a.id === explicitTicketId);
+  }
+
+  if (!targetTicket && entityName) {
+    const cleanEntity = entityName.toLowerCase().trim();
+    targetTicket = openAssignments.find(a => {
+      const notes = (a.fields['Notes'] || '').toLowerCase();
+      const cat = (a.fields['Task Category'] || '').toLowerCase();
+      return notes.includes(cleanEntity) || cat.includes(cleanEntity);
+    });
+  }
+
+  // Fallback to most recent open ticket if not explicitly named
+  if (!targetTicket && openAssignments.length > 0) {
+    targetTicket = openAssignments[0];
+  }
+
+  if (!targetTicket) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate an open ticket or lead matching "${entityName || 'your update'}".`);
+    return false;
+  }
+
+  const existingNotes = targetTicket.fields['Notes'] || '';
+  const cleanUpdate = rawText.trim();
+  const appendedNotes = `${existingNotes}\n\n[UPDATE - ${workerName} at ${timeStr}]:\n${cleanUpdate}`.trim();
+
+  await airtableWriteWithAutoDrop('Daily Assignments', {
+    'Notes': appendedNotes
+  }, targetTicket.id);
+
+  const ticketId = targetTicket.fields['Assignment ID'] ? `#${targetTicket.fields['Assignment ID']}` : 'TICKET';
+  const type = targetTicket.fields['Assignment Type'] || 'Task';
+
+  const confirmCard = `📝 *TITAN OS | ${type.toUpperCase()} UPDATED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎫 *Ticket:* ${ticketId}\n` +
+    `👤 *Logged By:* ${workerName}\n` +
+    `⏱️ *Time:* ${timeStr}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *Added Note:*\n"${cleanUpdate}"\n\n` +
+    `✅ *Airtable ledger updated.*`;
+
+  await sendWhatsAppMessage(dispatchTarget, confirmCard);
+  return true;
 }
 
 // ====================================================================
@@ -1471,7 +1540,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
     if (!celebrationCard) return;
 
     if (clientGroup) {
-      console.log(`🎾 [Joy Cannon] Dispatching Gate ${highestGate} to Client WhatsApp: ${clientGroup}`);
+      console.log(`🎾 [Joy Cannon Triggered] Firing Gate ${highestGate} for ${siteRecord.fields['Site Name']}`);
       await sendWhatsAppMessage(clientGroup, celebrationCard);
     }
 
@@ -1764,18 +1833,26 @@ ROUTING INTENTS:
 4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks for a court.
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
-7. "ACTIONABLE_STATE_CHANGE": Milestones reached, deposit received, concrete pour dates set.
-8. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes).
-9. "PURE_NOISE": Casual banter, greetings, emojis.
+7. "TICKET_UPDATE": User is providing a status update, outreach log, or follow-up note on an open ticket, lead, client, or chore (e.g. "Left a voicemail and will try Ondako tomorrow", "Called Aaron, sent quote", "Waiting for parts on #2", "Spoke with GM, visit moved to Friday").
+8. "ACTIONABLE_STATE_CHANGE": Milestones reached, deposit received, concrete pour dates set.
+9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes).
+10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 
-Extract "queried_court_name": string or null.
+Extract:
+"queried_court_name": string or null,
+"referenced_ticket_id": integer or null,
+"referenced_entity_name": string or null (e.g. "Ondako", "Aaron", "Axon", "RCOR", "Cynamon"),
+"update_note": string or null
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
+  "referenced_ticket_id": integer or null,
+  "referenced_entity_name": "string or null",
+  "update_note": "string or null",
   "resolution_summary": "string in English or null",
   "dark_matter_category": "Logistics" | "Site Conditions" | "Hardware" | null,
   "distilled_context": "string or null",
@@ -1859,8 +1936,13 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
       newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
     }
 
-    await airtableWriteWithAutoDrop('Sites', newRecordPayload);
+    const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
     invalidateAirtableCache('sites');
+
+    if (createdSite?.id) {
+      if (fromPhone) userActiveSiteMap.set(fromPhone, createdSite.id);
+      if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, createdSite.id);
+    }
 
     await sendWhatsAppMessage(dispatchTarget, `🏟️ *TITAN OS | NEW SITE CREATED*\n\n` +
       `• *Court:* ${newSiteName}\n` +
@@ -1904,6 +1986,18 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
+  if (triage.intent === 'TICKET_UPDATE') {
+    await handleTicketOrLeadUpdate({
+      rawText: triage.update_note || triage.transcript_en,
+      entityName: triage.referenced_entity_name || triage.queried_court_name,
+      explicitTicketId: triage.referenced_ticket_id || triage.ticket_id,
+      worker,
+      dispatchTarget,
+      fromPhone
+    });
+    return;
+  }
+
   if (triage.intent === 'DARK_MATTER') {
     const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
     const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Fleet Operations';
@@ -1920,11 +2014,13 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
       gravityScore: triage.gravity_score || 1
     });
 
-    if (site && (triage.gravity_score >= 4 || triage.urgency === 'HIGH')) {
-      await airtableWriteWithAutoDrop('Sites', {
-        'Last Note': `[VOICE NOTE - ${triage.dark_matter_category}]: ${triage.distilled_context}`,
-        'Last Intent': 'AMBIENT_ALERT'
-      }, site.id);
+    if (triage.gravity_score >= 4 || triage.urgency === 'HIGH') {
+      if (site) {
+        await airtableWriteWithAutoDrop('Sites', {
+          'Last Note': `[VOICE NOTE - ${triage.dark_matter_category}]: ${triage.distilled_context}`,
+          'Last Intent': 'AMBIENT_ALERT'
+        }, site.id);
+      }
 
       if (archivedRecord?.id) {
         const alertPrompt = `⚠️ *FIELD NOTE RECORDED*\n\n` +
@@ -2308,7 +2404,18 @@ app.post('/webhook', async (req, res) => {
     };
 
     const callerIdentity = await resolveCallerIdentity(fromPhone);
-    let site = callerIdentity.siteRecord || await lookupSite(groupJid || fromPhone);
+
+    // DYNAMIC SESSION RESOLUTION: Priority to current session link in RAM
+    const sessionSiteId = (fromPhone && userActiveSiteMap.get(fromPhone)) || (dispatchTarget && userActiveSiteMap.get(dispatchTarget));
+    let site = null;
+    if (sessionSiteId) {
+      const allSites = await getCachedSites();
+      site = allSites.find(s => s.id === sessionSiteId) || null;
+    }
+    if (!site) {
+      site = callerIdentity.siteRecord || await lookupSite(groupJid || fromPhone);
+    }
+
     const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
 
     const isBoundGroupMember = Boolean(site && isGroupMessage);
@@ -2446,8 +2553,13 @@ app.post('/webhook', async (req, res) => {
           newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
         }
 
-        await airtableWriteWithAutoDrop('Sites', newRecordPayload);
+        const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
         invalidateAirtableCache('sites');
+
+        if (createdSite?.id) {
+          if (fromPhone) userActiveSiteMap.set(fromPhone, createdSite.id);
+          if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, createdSite.id);
+        }
 
         await dispatchReply(`🏟️ *TITAN OS | NEW SITE CREATED*\n\n` +
           `• *Court:* ${newSiteName}\n` +
@@ -2467,7 +2579,29 @@ app.post('/webhook', async (req, res) => {
           await dispatchReply(`❌ Could not find "${targetSiteName}". Check spelling in Airtable.`);
           return;
         }
-        await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': groupJid || fromPhone }, targetSite.id);
+
+        const linkTargetId = groupJid || fromPhone;
+
+        // 1. Force instant session override in RAM
+        if (fromPhone) userActiveSiteMap.set(fromPhone, targetSite.id);
+        if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, targetSite.id);
+
+        // 2. Clear WhatsApp Group ID from any older sites holding this phone/group
+        const allSites = await getCachedSites();
+        for (const s of allSites) {
+          if (s.id !== targetSite.id) {
+            const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
+            if (gid && (gid === linkTargetId || gid.includes(linkTargetId) || linkTargetId.includes(gid))) {
+              s.fields['WhatsApp Group ID'] = '';
+              airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': '' }, s.id).catch(() => {});
+            }
+          }
+        }
+
+        // 3. Bind new site in Airtable & update RAM cache
+        await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': linkTargetId }, targetSite.id);
+        if (targetSite.fields) targetSite.fields['WhatsApp Group ID'] = linkTargetId;
+
         await dispatchReply(`✅ *Connected to ${targetSite.fields['Site Name']}*`);
         return;
       }
@@ -2501,6 +2635,7 @@ app.post('/webhook', async (req, res) => {
           `  _"Any open tickets for Cynamon?"_ (returns active work orders & leads)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
+          `• Text or voice note follow-ups (e.g. _"Left a voicemail for Ondako"_) -> Logs directly to ticket notes\n` +
           `• Send video walkaround -> Instant milestone progression\n` +
           `• Drop a pin and text _"Create new site Burk"_ -> Auto-provisions in Airtable`);
         return;
@@ -2537,10 +2672,22 @@ app.post('/webhook', async (req, res) => {
             });
             return;
           }
+          if (nlp.intent === 'TICKET_UPDATE') {
+            await handleTicketOrLeadUpdate({
+              rawText: nlp.update_note || rawText,
+              entityName: nlp.referenced_entity_name || nlp.queried_court_name,
+              explicitTicketId: nlp.referenced_ticket_id || nlp.ticket_id,
+              worker,
+              dispatchTarget,
+              fromPhone
+            });
+            return;
+          }
           if (nlp.intent === 'DARK_MATTER') {
             const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
             const siteLabel = site?.fields?.['Site Name'] || nlp.matched_site_name || 'Fleet Operations';
-            await streamToDarkMatterVault({
+            
+            const archivedRecord = await streamToDarkMatterVault({
               siteId: site?.id || null,
               siteName: siteLabel,
               senderPhone: fromPhone,
@@ -2551,6 +2698,25 @@ app.post('/webhook', async (req, res) => {
               urgency: nlp.urgency || 'LOW',
               gravityScore: nlp.gravity_score || 1
             });
+
+            if (nlp.gravity_score >= 4 || nlp.urgency === 'HIGH') {
+              if (site) {
+                await airtableWriteWithAutoDrop('Sites', {
+                  'Last Note': `[FIELD NOTE - ${nlp.dark_matter_category}]: ${nlp.distilled_context || rawText}`,
+                  'Last Intent': 'AMBIENT_ALERT'
+                }, site.id);
+              }
+
+              if (archivedRecord?.id) {
+                const alertPrompt = `⚠️ *FIELD NOTE RECORDED*\n\n` +
+                  `*Site:* ${siteLabel}\n` +
+                  `*Observation:* "${nlp.distilled_context || rawText}"\n\n` +
+                  `Want to convert this into an open dispatch ticket?`;
+
+                const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Create Ticket' }];
+                await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
+              }
+            }
             return;
           }
         }
@@ -2726,14 +2892,16 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.3.6',
-    engine: 'Titan OS V5.3.6 (Commercial Sales Lead Ingestion & ENTRY #088)'
+    version: '5.3.8',
+    engine: 'Titan OS V5.3.8 (Dynamic Session Binding & Zero-Friction Ticket Updates)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.3.6 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.3.8 RUNNING ON PORT ${PORT}`);
+  console.log(`🔗 DYNAMIC SESSION BINDING: Auto-Unlink Stale Court Links Active`);
+  console.log(`📝 TICKET & LEAD UPDATES: Natural Reply Notes -> Daily Assignments Active`);
   console.log(`💼 COMMERCIAL LEAD INGESTION: Auto-OCR Screenshots -> Daily Assignments Active`);
   console.log(`🧾 EXPENSE GHOSTING: Auto-Complete & Filtered from Active Dispatch Active`);
   console.log(`📡 RESILIENT DISPATCH: Auto-Retry on Meta Timeout Active`);
