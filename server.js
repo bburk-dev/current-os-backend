@@ -1,56 +1,68 @@
 /**
- * TITAN OS V5.3.8 — DYNAMIC SESSION SITE BINDING, ZERO-FRICTION TICKET UPDATES,
- * MULTIMODAL COMMERCIAL LEAD INGESTION, AND RESILIENT FLEET DISPATCH
+ * TITAN OS V5.4.0 — CLOSED-LOOP AUTONOMOUS FACTORY QA BRIDGE & DEFECT BIFURCATION,
+ * 1-ON-1 SANDBOX RESILIENCE, DYNAMIC SESSION BINDING, ZERO-FRICTION UPDATES & LEAD INGESTION
  * 
  * Production Build Features:
- * 1. Dynamic Session Site Overrides: Eliminates multi-site phone collisions. When linking
+ * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine): When an install crew
+ *    uploads a field video revealing a fabrication variance (e.g., 15cm vs 16cm tab spacing,
+ *    jig offsets, or misdrilled holes), Titan OS automatically:
+ *      a) Holds gate advancement and marks the site card as '⚠️ ACTION REQUIRED — GATE HOLD'
+ *      b) Creates a tracked 'Shop QA / Fabrication' ticket in Daily Assignments
+ *      c) Autonomously broadcasts an Upstream Tolerance Alert to the 'Factory & Production'
+ *         WhatsApp hive with exact telemetry and forensic video proof—stopping bad steel
+ *         runs before powder coating without putting social blame on installers.
+ * 2. 1-on-1 Sandbox & Direct DM Resilience: Optimizes dark matter ingestion for direct 1-on-1
+ *    DMs (ideal for Meta 555 test numbers before live business phone migration). Guarantees
+ *    immediate receipt feedback so field notes never vanish into silent logging.
+ * 3. Orphan Ticket Auto-Healing: When promoting a field note to a ticket, dynamically resolves
+ *    and binds the parent Site record even if site_id was unassigned, preventing orphan tickets.
+ * 4. Dynamic Session Site Overrides: Eliminates multi-site phone collisions. When linking
  *    to a court (e.g. /link RCOR Court 2) or provisioning a new site, an in-memory session map
  *    overrides stale ledger entries and automatically unlinks older sites holding your WhatsApp ID.
- * 2. Zero-Friction Ticket & Lead Updates: Reply directly to lead or chore notifications via WhatsApp
+ * 5. Zero-Friction Ticket & Lead Updates: Reply directly to lead or chore notifications via WhatsApp
  *    (e.g., "Left a voicemail and will try Ondako tomorrow"). Gemini identifies the target ticket/lead
  *    in Daily Assignments, appends timestamped notes, and confirms back to WhatsApp without opening Airtable.
- * 3. Multimodal Commercial Sales Lead Ingestion: Screenshots of forwarded emails,
+ * 6. Multimodal Commercial Sales Lead Ingestion: Screenshots of forwarded emails,
  *    partner leads (e.g. Mondo / Michael Tovar), texts, or RFPs are OCR-extracted
  *    via Gemini and written straight into Daily Assignments with Assignment Type: 'Sales',
  *    Priority: 'High', Status: 'Open', and formatted for ENTRY #088 relational indexing.
- * 4. Interactive Field Note Promotion: Field observations (text or voice) with high gravity
- *    trigger the interactive '⚠️ FIELD NOTE RECORDED' card with a 1-tap '[📋 Create Ticket]' button,
- *    even when not bound to an existing court record.
- * 5. Dynamic Seasonal Closeout Engine: Analyzes work-order categories and spoken closeout notes to
+ * 7. Interactive Field Note Promotion: Field observations (text or voice) with high gravity
+ *    trigger the interactive '⚠️ FIELD NOTE RECORDED' card with a 1-tap '[📋 Create Ticket]' button.
+ * 8. Dynamic Seasonal Closeout Engine: Analyzes work-order categories and spoken closeout notes to
  *    automatically set Site Status to 'WINTERIZED_CLOSED' or 'OPEN_FOR_PLAY', generating contextual voucher cards.
- * 6. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
+ * 9. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
  *    and Task Category: 'Expense' so Automation 4 passes attachments to QuickBooks instantly
  *    without cluttering the active dispatch/punch-list board.
- * 7. Resilient Meta Dispatch with Auto-Retry: sendWhatsAppMessage includes automatic retry
- *    with exponential backoff, preventing dropped cards during transient Meta DNS/TCP timeouts.
- * 8. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
- *    and immediately reply "create new site [Name]" to automatically build a bound ledger
- *    record with live coordinates, triggering INOC prep-alerts.
- * 9. Open For Play & Seasonal Readiness Engine: Evaluates dynamic Site Status ('OPEN_FOR_PLAY' vs
- *    'WINTERIZED_CLOSED') with pre-con bypasses for commissioned nodes.
- * 10. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
+ * 10. Resilient Meta Dispatch with Auto-Retry: sendWhatsAppMessage includes automatic retry
+ *     with exponential backoff, preventing dropped cards during transient Meta DNS/TCP timeouts.
+ * 11. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
+ *     and immediately reply "create new site [Name]" to automatically build a bound ledger
+ *     record with live coordinates, triggering INOC prep-alerts.
+ * 12. Open For Play & Seasonal Readiness Engine: Evaluates dynamic Site Status ('OPEN_FOR_PLAY' vs
+ *     'WINTERIZED_CLOSED') with pre-con bypasses for commissioned nodes.
+ * 13. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
  *     missed client celebratory alerts when gates are in-progress or partial.
- * 11. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
+ * 14. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
  *     direct Meta Graph API calls to prevent HTTP 400 (#100) invalid parameter rejections.
- * 12. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
+ * 15. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
  *     turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
  *     wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
- * 13. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 14. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal
+ * 16. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 17. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal
  *     from Sites to open Daily Assignments. Seamlessly synthesizes open repairs, chores, and commercial leads
  *     for natural voice queries ("Any tickets for Cynamon?", "Where is Levinsky?", "Status of RCOR").
- * 15. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
+ * 18. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
  *     zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
- * 16. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
+ * 19. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
  *     Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
- * 17. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
+ * 20. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
  *     never trigger false gate skips. Each court row is graded independently.
- * 18. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
+ * 21. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
  *     as a quality check without blocking gate advancement.
- * 19. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
- * 20. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
- * 21. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
- * 22. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
+ * 22. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
+ * 23. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
+ * 24. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
+ * 25. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
  */
 
 process.on('uncaughtException', (err) => {
@@ -804,7 +816,7 @@ OUTPUT JSON ONLY:
 }
 
 // ====================================================================
-// 7. SIMPLIFIED 8-GATE FORENSIC RUBRIC & VERNACULAR
+// 7. SIMPLIFIED 8-GATE FORENSIC RUBRIC & CLOSED-LOOP QA LOGIC
 // ====================================================================
 
 const GATE_NAMES = {
@@ -837,6 +849,14 @@ When inspecting video frames, visually identify completed physical stages:
 - Gate 7: "Net & Posts" (Center net posts mounted, regulation net installed and tensioned)
 - Gate 8: "Clean & Handover" (Construction tools and debris cleared, court ready for tournament play)
 
+CLOSED-LOOP QA & UPSTREAM FABRICATION DEFECT IDENTIFICATION:
+Listen carefully to spoken audio and inspect visible tape measurements, welding, hole alignments, and tabs.
+If the inspector or field crew identifies a shop mistake, jig discrepancy, or manufacturing defect:
+- Set "defect_origin": "FABRICATION"
+- Set "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE"
+- List the specific variance in "blockers_detected" (e.g. "Glass tab welded at 15cm instead of 16cm specification")
+- Set "status_observed": "ACTION_REQUIRED"
+
 SILICONE INSPECTION CHECK (QUALITY AUDIT ONLY — NOT A BLOCKING GATE):
 - Check if perimeter glass silicone sealant has been applied along the glass panel joints.
 - Report "silicone_applied": true | false.
@@ -855,12 +875,14 @@ OUTPUT SPECIFICATION (JSON ONLY):
   "in_progress_gate": 4,
   "highest_gate": 4,
   "silicone_applied": boolean | null,
-  "blockers_detected": ["Specific impediment or missing hardware in English"],
+  "defect_origin": "FABRICATION" | "SITE_CONDITION" | "TRANSIT_DAMAGE" | null,
+  "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | null,
+  "blockers_detected": ["Specific impediment, dimensional error, or missing hardware in English"],
   "work_verified": ["Specific verified stage completed in English"],
   "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
   "site_conditions": "Short string in English",
   "action_items": ["Action item in English"],
-  "summary": "1-2 sentence concise executive summary of visible court progress",
+  "summary": "1-2 sentence concise executive summary of visible court progress or defect",
   "whatsapp_status_text": "Plaintext WhatsApp card"
 }
 `;
@@ -1260,7 +1282,8 @@ async function lookupContact(phoneRaw) {
   const contacts = await getCachedContacts();
   return contacts.find(c => {
     const p = (c.fields['Phone Number'] || '').replace(/\D/g, '');
-    return p === cleanDigits || p.endsWith(cleanDigits) || (cleanDigits.length >= 10 && cleanDigits.endsWith(p));
+    return p === cleanDigits || p.endsWith(cleanDigits) || cleanDigits.endsWith(p) ||
+      (cleanDigits.length >= 10 && p.length >= 10 && cleanDigits.slice(-10) === p.slice(-10));
   }) || null;
 }
 
@@ -1273,8 +1296,8 @@ async function lookupWorker(phoneRaw) {
     if (!isActive) return false;
     const pE164 = String(w.fields['Phone E164'] || '').replace(/\D/g, '');
     const wNum = String(w.fields['WhatsApp Number'] || '').replace(/\D/g, '');
-    return (pE164 && (pE164 === cleanDigits || cleanDigits.endsWith(pE164))) ||
-           (wNum && (wNum === cleanDigits || cleanDigits.endsWith(wNum)));
+    return (pE164 && (pE164 === cleanDigits || cleanDigits.endsWith(pE164) || pE164.endsWith(cleanDigits) || (cleanDigits.length >= 10 && pE164.slice(-10) === cleanDigits.slice(-10)))) ||
+           (wNum && (wNum === cleanDigits || cleanDigits.endsWith(wNum) || wNum.endsWith(cleanDigits) || (cleanDigits.length >= 10 && wNum.slice(-10) === cleanDigits.slice(-10))));
   }) || null;
 }
 
@@ -1312,11 +1335,15 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
 
   if (groupIdOrPhone) {
     const cleanTarget = String(groupIdOrPhone).trim();
+    const cleanDigits = cleanTarget.replace(/\D/g, '');
     const match = sites.find(s => {
       const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
       const clientGid = String(s.fields['Client WhatsApp Group ID'] || '').trim();
-      return (gid && (gid === cleanTarget || cleanTarget.includes(gid))) ||
-             (clientGid && (clientGid === cleanTarget || cleanTarget.includes(clientGid)));
+      const gidDigits = gid.replace(/\D/g, '');
+      const clientDigits = clientGid.replace(/\D/g, '');
+
+      return (gid && (gid === cleanTarget || cleanTarget.includes(gid) || (cleanDigits && gidDigits && (cleanDigits === gidDigits || cleanDigits.endsWith(gidDigits) || gidDigits.endsWith(cleanDigits))))) ||
+             (clientGid && (clientGid === cleanTarget || cleanTarget.includes(clientGid) || (cleanDigits && clientDigits && (cleanDigits === clientDigits || cleanDigits.endsWith(clientDigits) || clientDigits.endsWith(cleanDigits)))));
     });
     if (match) return match;
   }
@@ -1835,7 +1862,7 @@ ROUTING INTENTS:
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
 7. "TICKET_UPDATE": User is providing a status update, outreach log, or follow-up note on an open ticket, lead, client, or chore (e.g. "Left a voicemail and will try Ondako tomorrow", "Called Aaron, sent quote", "Waiting for parts on #2", "Spoke with GM, visit moved to Friday").
 8. "ACTIONABLE_STATE_CHANGE": Milestones reached, deposit received, concrete pour dates set.
-9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes).
+9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 
 Extract:
@@ -2014,10 +2041,13 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
       gravityScore: triage.gravity_score || 1
     });
 
-    if (triage.gravity_score >= 4 || triage.urgency === 'HIGH') {
+    const isHighPriority = (triage.gravity_score >= 3 || triage.urgency === 'HIGH' || triage.urgency === 'MEDIUM');
+    const isExecMode = site?.fields?.['Workflow Mode'] === 'EXECUTIVE';
+
+    if (isHighPriority || isExecMode) {
       if (site) {
         await airtableWriteWithAutoDrop('Sites', {
-          'Last Note': `[VOICE NOTE - ${triage.dark_matter_category}]: ${triage.distilled_context}`,
+          'Last Note': `[VOICE NOTE - ${triage.dark_matter_category}]: ${triage.distilled_context || triage.transcript_en}`,
           'Last Intent': 'AMBIENT_ALERT'
         }, site.id);
       }
@@ -2025,13 +2055,17 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
       if (archivedRecord?.id) {
         const alertPrompt = `⚠️ *FIELD NOTE RECORDED*\n\n` +
           `*Site:* ${siteLabel}\n` +
-          `*Observation:* "${triage.distilled_context}"\n\n` +
+          `*Observation:* "${triage.distilled_context || triage.transcript_en}"\n\n` +
           `Want to convert this into an open dispatch ticket?`;
 
         const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Create Ticket' }];
         await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
+        return;
       }
     }
+
+    // Direct 1-on-1 feedback so technicians and leaders never experience eerie silence
+    await sendWhatsAppMessage(dispatchTarget, `📌 *NOTE ARCHIVED*\n\n"${triage.distilled_context || triage.transcript_en}"\n\n_Logged to ${siteLabel}_`);
   }
 }
 
@@ -2048,7 +2082,8 @@ Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
 
 Evaluate ONLY the foreground court. Grade against 8-Gate physical rubric.
-Check silicone status on Gate 4 without treating it as a blocker.`;
+Check silicone status on Gate 4 without treating it as a blocker.
+Check for shop/manufacturing/jig discrepancies (15cm vs 16cm tab spacing, hole offsets, cut lengths).`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -2202,6 +2237,14 @@ async function processMediaBatch(batch) {
     }
   }
 
+  // Check if there are active blockers or defects holding the physical gate
+  const hasBlockers = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
+    forensicAudit.status_observed === 'ACTION_REQUIRED';
+
+  const isFabricationDefect = forensicAudit.defect_origin === 'FABRICATION' ||
+    (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|15cm|16cm|measurement|fabrication|shop/i.test(b)));
+
+  // PIPELINE A: INSTALLATION ENGINE (8-GATES + CLOSED-LOOP QA BRIDGE)
   if (siteMode === 'INSTALLATION' && !explicitTicketId) {
     const highestGate = forensicAudit.highest_gate ||
       (forensicAudit.verified_gates?.length ? Math.max(...forensicAudit.verified_gates) : 0);
@@ -2215,14 +2258,14 @@ async function processMediaBatch(batch) {
     const compactGateStatus = inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel;
 
     const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
-    const isNewMilestone = highestGate > 0 && !previouslyCleared.includes(`Gate ${highestGate}`);
+    const isNewMilestone = highestGate > 0 && !previouslyCleared.includes(`Gate ${highestGate}`) && !hasBlockers;
 
     const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
       const num = parseInt(String(g).replace(/\D/g, ''));
       return isNaN(num) ? String(g) : `Gate ${num}`;
     });
 
-    if (highestGate > 0) {
+    if (highestGate > 0 && !hasBlockers) {
       newlyVerifiedGates.push(`Gate ${highestGate}`);
     }
 
@@ -2240,10 +2283,10 @@ async function processMediaBatch(batch) {
         'Cleared Milestones': allCleared,
         'Current Gate': compactGateStatus,
         'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${cleanSummary}${siliconeStatusText ? `\n${siliconeStatusText}` : ''}`,
-        'Last Intent': 'MILESTONE_PROGRESS'
+        'Last Intent': hasBlockers ? 'ACTION_REQUIRED' : 'MILESTONE_PROGRESS'
       };
 
-      if (highestGate >= TOTAL_GATES) {
+      if (highestGate >= TOTAL_GATES && !hasBlockers) {
         updatePayload['Workflow Mode'] = 'MAINTENANCE';
         updatePayload['Site Status'] = 'ACTIVE';
       }
@@ -2256,12 +2299,18 @@ async function processMediaBatch(batch) {
       }
     }
 
-    let installCard = `🏗️ *TITAN OS | MILESTONE VERIFIED*\n` +
+    // Dynamic Card Header
+    const cardHeader = hasBlockers
+      ? `⚠️ *TITAN OS | ACTION REQUIRED — GATE ${inProgressGateNum || highestGate || 4} HOLD*`
+      : `🏗️ *TITAN OS | MILESTONE VERIFIED*`;
+
+    let installCard = `${cardHeader}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `🏟️ *Court:* ${courtLabel}\n` +
       `👤 *Lead:* ${workerName}\n` +
       `📊 *Progress:* ${Math.round(progressPercent * 100)}% (${gateLabel})\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
+      (hasBlockers && forensicAudit.blockers_detected?.length ? `🚨 *Blocker Detected:*\n${forensicAudit.blockers_detected.join('\n')}\n\n` : '') +
       `👁️ *Observation:*\n${cleanSummary}\n` +
       (siliconeStatusText ? `${siliconeStatusText}\n` : '');
 
@@ -2269,12 +2318,73 @@ async function processMediaBatch(batch) {
       installCard += `\n📋 *Weather Telemetry:*${weatherTripwires.summaryText}\n`;
     }
 
-    installCard += `\n✅ *Progress updated in Sites ledger.*`;
+    installCard += hasBlockers
+      ? `\n⚠️ *Remediation logged to Daily Assignments.*`
+      : `\n✅ *Progress updated in Sites ledger.*`;
 
     await sendWhatsAppMessage(dispatchTarget, installCard);
+
+    // ====================================================================
+    // AUTONOMOUS CLOSED-LOOP QA FORK: UPSTREAM BROADCAST TO FACTORY
+    // ====================================================================
+    if (hasBlockers && isFabricationDefect) {
+      try {
+        const primaryMediaUrl = storageResults.find(s => s.storagePath.includes('.mp4') || s.storagePath.includes('.mov'))?.signedUrl || storageResults[0]?.signedUrl || '';
+        const defectText = forensicAudit.blockers_detected?.join(' • ') || cleanSummary;
+        const componentLabel = forensicAudit.qa_component || 'Steel Framing / Tab Jig';
+
+        // 1. Create a tracked Shop QA remediation ticket in Daily Assignments
+        const qaAssignmentPayload = {
+          'Date': new Date().toISOString().split('T')[0],
+          'Assignment Type': 'Service',
+          'Task Category': 'Shop QA / Fabrication',
+          'Priority': 'Critical',
+          'Source': 'Automated Field QA Sweep',
+          'Status': 'Open',
+          'Notes': `[UPSTREAM FABRICATION DEFECT — ${courtLabel}]\n` +
+            `• Component: ${componentLabel}\n` +
+            `• Variance: ${defectText}\n` +
+            `• Observed by: ${workerName} at ${timeStr}\n\n` +
+            `FORENSIC VIDEO EVIDENCE:\n${primaryMediaUrl}`
+        };
+
+        if (targetedSite?.id) qaAssignmentPayload['Sites'] = [targetedSite.id];
+        const createdQaTicket = await airtableWriteWithAutoDrop('Daily Assignments', qaAssignmentPayload);
+        const qaTicketId = createdQaTicket?.fields?.['Assignment ID'] ? `#${createdQaTicket.fields['Assignment ID']}` : 'QA';
+
+        // 2. Lookup Factory & Production group JID in RAM
+        const allSites = await getCachedSites();
+        const factorySite = allSites.find(s =>
+          (s.fields['Workflow Mode'] === 'PRODUCTION') ||
+          /factory|production/i.test(s.fields['Site Name'] || '')
+        );
+
+        const factoryTarget = factorySite?.fields?.['WhatsApp Group ID'];
+
+        // 3. Autonomously broadcast neutral, blameless tolerance hold to shop
+        if (factoryTarget && factoryTarget !== dispatchTarget) {
+          const factoryAlertCard = `📐 *TITAN OS | UPSTREAM TOLERANCE ALERT*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📍 *Source:* Field Inspection (${courtLabel})\n` +
+            `🛠️ *Component:* ${componentLabel}\n` +
+            `📏 *Telemetry:* ${defectText}\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `⚠️ *Action for Shop:* Verify jig placement & tolerances before sending next batch to paint.\n` +
+            `🎫 *QA Ref:* Ticket ${qaTicketId}\n` +
+            (primaryMediaUrl ? `🎥 *Forensic Clip:* ${primaryMediaUrl}` : '');
+
+          console.log(`[Factory QA Bridge] Autonomously broadcasting tolerance hold to Factory Hive: ${factoryTarget}`);
+          await sendWhatsAppMessage(factoryTarget, factoryAlertCard);
+        }
+      } catch (qaErr) {
+        console.error('[Factory QA Bridge Error]:', qaErr.message);
+      }
+    }
+
     return;
   }
 
+  // PIPELINE B: MAINTENANCE CLOSEOUT
   if (hasVideo && activeTicket) {
     const videoIndex = items.findIndex(item => item.type === 'video');
     const videoStorageUrl = storageResults[videoIndex]?.signedUrl || '';
@@ -2453,7 +2563,17 @@ app.post('/webhook', async (req, res) => {
             'Notes': `[FIELD NOTE - ${item.category}]:\n"${item.raw_text}"`
           };
 
-          if (item.site_id) assignmentPayload['Sites'] = [item.site_id];
+          // Auto-heal site link so tickets are never orphaned
+          let targetSiteId = item.site_id;
+          if (!targetSiteId && item.site_name) {
+            const matched = await lookupSite(null, item.site_name);
+            if (matched) targetSiteId = matched.id;
+          }
+          if (!targetSiteId && site?.id) {
+            targetSiteId = site.id;
+          }
+          if (targetSiteId) assignmentPayload['Sites'] = [targetSiteId];
+
           const created = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
           const ticketId = created?.fields?.['Assignment ID'] ? `#${created.fields['Assignment ID']}` : 'NEW';
 
@@ -2636,7 +2756,7 @@ app.post('/webhook', async (req, res) => {
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
           `• Text or voice note follow-ups (e.g. _"Left a voicemail for Ondako"_) -> Logs directly to ticket notes\n` +
-          `• Send video walkaround -> Instant milestone progression\n` +
+          `• Send video walkaround -> Instant milestone progression or fabrication tolerance alert\n` +
           `• Drop a pin and text _"Create new site Burk"_ -> Auto-provisions in Airtable`);
         return;
       }
@@ -2699,7 +2819,10 @@ app.post('/webhook', async (req, res) => {
               gravityScore: nlp.gravity_score || 1
             });
 
-            if (nlp.gravity_score >= 4 || nlp.urgency === 'HIGH') {
+            const isHighPriority = (nlp.gravity_score >= 3 || nlp.urgency === 'HIGH' || nlp.urgency === 'MEDIUM');
+            const isExecMode = site?.fields?.['Workflow Mode'] === 'EXECUTIVE';
+
+            if (isHighPriority || isExecMode) {
               if (site) {
                 await airtableWriteWithAutoDrop('Sites', {
                   'Last Note': `[FIELD NOTE - ${nlp.dark_matter_category}]: ${nlp.distilled_context || rawText}`,
@@ -2715,8 +2838,12 @@ app.post('/webhook', async (req, res) => {
 
                 const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Create Ticket' }];
                 await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
+                return;
               }
             }
+
+            // Direct 1-on-1 feedback so user knows note was stored
+            await dispatchReply(`📌 *NOTE ARCHIVED*\n\n"${nlp.distilled_context || rawText}"\n\n_Logged to ${siteLabel}_`);
             return;
           }
         }
@@ -2892,14 +3019,17 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.3.8',
-    engine: 'Titan OS V5.3.8 (Dynamic Session Binding & Zero-Friction Ticket Updates)'
+    version: '5.4.0',
+    engine: 'Titan OS V5.4.0 (Autonomous Closed-Loop QA Bridge & Defect Bifurcation)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.3.8 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.4.0 RUNNING ON PORT ${PORT}`);
+  console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
+  console.log(`📱 1-ON-1 SANDBOX RESILIENCE: Active Feedback & Direct DM Logging Active`);
+  console.log(`🩹 ORPHAN HEALING: Auto-Link Parent Sites on Ticket Promotion Active`);
   console.log(`🔗 DYNAMIC SESSION BINDING: Auto-Unlink Stale Court Links Active`);
   console.log(`📝 TICKET & LEAD UPDATES: Natural Reply Notes -> Daily Assignments Active`);
   console.log(`💼 COMMERCIAL LEAD INGESTION: Auto-OCR Screenshots -> Daily Assignments Active`);
