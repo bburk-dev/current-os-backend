@@ -1,6 +1,7 @@
 /**
  * TITAN OS V5.3.5 — SILENT EXPENSE GHOST ROUTING & RESILIENT META DISPATCH
  * WITH ENTRY #088: ACOUSTIC RELATIONAL TICKET SYNTHESIS & FLEET OPEN-ISSUE ROUTING
+ * AND DYNAMIC SEASONAL WINTERIZATION CLOSEOUT ENGINE
  * 
  * Production Build Features:
  * 1. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
@@ -11,8 +12,8 @@
  * 3. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
  *    and immediately reply "create new site [Name]" to automatically build a bound ledger
  *    record with live coordinates, triggering INOC prep-alerts.
- * 4. Open For Play Readiness Engine: Overrides pre-con checks for commissioned/maintenance courts
- *    ('OPEN FOR PLAY 🎾') and headquarters/operational nodes ('OPERATIONAL 🏢').
+ * 4. Open For Play & Seasonal Readiness Engine: Evaluates dynamic Site Status ('OPEN_FOR_PLAY' vs
+ *    'WINTERIZED_CLOSED') with pre-con bypasses for commissioned nodes.
  * 5. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
  *    missed client celebratory alerts when gates are in-progress or partial.
  * 6. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
@@ -36,6 +37,8 @@
  * 15. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
  * 16. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
  * 17. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
+ * 18. Dynamic Seasonal Closeout Engine: Analyzes work-order categories and spoken closeout notes to
+ *     automatically set Site Status to 'WINTERIZED_CLOSED' or 'OPEN_FOR_PLAY', generating contextual voucher cards.
  */
 
 process.on('uncaughtException', (err) => {
@@ -319,8 +322,17 @@ function evaluateReadinessGate(siteRecord) {
   const status = f['Site Status'] || '';
   const mode = f['Workflow Mode'] || '';
 
-  // 1. Bypass pre-con checks if the court is already built or in maintenance
-  if (status === 'COMPLETE' || mode === 'MAINTENANCE') {
+  // 1. Explicit Seasonal Winterization check
+  if (status === 'WINTERIZED_CLOSED') {
+    return {
+      status: 'WINTERIZED / CLOSED ❄️',
+      details: 'Court is decommissioned and winterized for the cold season.',
+      isReady: false
+    };
+  }
+
+  // 2. Bypass pre-con checks if court is commissioned, open for play, or under active maintenance
+  if (status === 'COMPLETE' || status === 'OPEN_FOR_PLAY' || mode === 'MAINTENANCE') {
     return {
       status: 'OPEN FOR PLAY 🎾',
       details: 'Court is fully constructed and open for play.',
@@ -328,7 +340,7 @@ function evaluateReadinessGate(siteRecord) {
     };
   }
 
-  // 2. Bypass for internal headquarters, inventory, or production nodes
+  // 3. Bypass for internal headquarters, inventory, or production nodes
   if (['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY'].includes(mode)) {
     return {
       status: 'OPERATIONAL 🏢',
@@ -337,7 +349,7 @@ function evaluateReadinessGate(siteRecord) {
     };
   }
 
-  // 3. Pre-Construction Mobilization Gate for active/upcoming builds
+  // 4. Pre-Construction Mobilization Gate for active/upcoming builds
   const deposit = f['Deposit Status'] || '';
   const hasDeposit = (deposit === '50% Deposit Received' || deposit === 'Paid in Full');
 
@@ -1401,7 +1413,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
 }
 
 // ====================================================================
-// 11. WORK ORDER CLOSEOUT ENGINE
+// 11. WORK ORDER CLOSEOUT ENGINE (WITH DYNAMIC SEASONAL WINTERIZATION)
 // ====================================================================
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
@@ -1450,10 +1462,22 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
     'Notes': updatedNotes
   }, activeTicket.id);
 
+  // Evaluate if this task was seasonal winterization / shutdown
+  const taskCategory = activeTicket.fields['Task Category'] || '';
+  const isWinterCloseout = 
+    taskCategory === 'Season Closing' ||
+    /winter|clos(ing|ed)|take down|stow|pack away|season/i.test(resolutionNotes);
+
+  const siteStatusTag = isWinterCloseout ? 'WINTERIZED_CLOSED' : 'OPEN_FOR_PLAY';
+  const receiptStatusLine = isWinterCloseout 
+    ? '❄️ *Status:* Court Winterized / Closed for Season' 
+    : '🟢 *Status:* Court Open for Play';
+
   if (targetSite) {
     await airtableWriteWithAutoDrop('Sites', {
+      'Site Status': siteStatusTag,
       'Last Note': `Work Order #${activeTicket.fields['Assignment ID']} completed by ${workerName}: ${resolutionNotes}`,
-      'Last Intent': 'WORK_ORDER_COMPLETED'
+      'Last Intent': isWinterCloseout ? 'SEASON_CLOSEOUT' : 'WORK_ORDER_COMPLETED'
     }, targetSite.id);
   }
 
@@ -1469,7 +1493,7 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
     (isVideoDelta ? `🎥 *Video Sweep:* Pre/Post Verified 🟢\n` : '') +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `📋 *Work Done:*\n${resolutionNotes}\n\n` +
-    `🟢 *Status:* Court Open for Play`;
+    `${receiptStatusLine}`;
 
   await sendWhatsAppMessage(dispatchTarget, voucherReceipt);
   return true;
@@ -1564,6 +1588,7 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
   const siteName = targetSite.fields['Site Name'];
   const currentGate = targetSite.fields['Current Gate'] || 'No Gate Set';
   const workflowMode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
+  const siteStatus = targetSite.fields['Site Status'] || 'ACTIVE';
   const lastNote = targetSite.fields['Last Note'] || 'No notes logged';
 
   // 1. Traverse memoryCache.assignments for all open tasks linked to this site
@@ -1586,6 +1611,7 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
 
   if (!isTicketOnly) {
     responseCard += `• Mode: ${workflowMode}\n`;
+    responseCard += `• Status: ${siteStatus}\n`;
     if (workflowMode === 'INSTALLATION') {
       responseCard += `• Gate: ${currentGate}\n`;
     }
@@ -2051,7 +2077,6 @@ async function processMediaBatch(batch) {
 
       await airtableWriteWithAutoDrop('Sites', updatePayload, targetedSite.id);
 
-      // Fire Joy Cannon once whenever a new milestone is reached
       if (isNewMilestone) {
         console.log(`🎾 [Joy Cannon Triggered] Firing Gate ${highestGate} for ${courtLabel}`);
         await fireInstallationJoyCannon(targetedSite, highestGate);
@@ -2638,7 +2663,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
     version: '5.3.5',
-    engine: 'Titan OS V5.3.5 (Silent Expense Ghost Routing & Resilient Meta Dispatch + ENTRY #088)'
+    engine: 'Titan OS V5.3.5 (Silent Expense Ghost Routing & Resilient Meta Dispatch + ENTRY #088 + Seasonal Closeout)'
   });
 });
 
@@ -2648,7 +2673,7 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`🧾 EXPENSE GHOSTING: Auto-Complete & Filtered from Active Dispatch Active`);
   console.log(`📡 RESILIENT DISPATCH: Auto-Retry on Meta Timeout Active`);
   console.log(`📍 ZERO-TOUCH PROVISIONING: Drop a Pin & Say 'Create New Site' Active`);
-  console.log(`🎾 OPEN FOR PLAY: Readiness Gate Overrides Active`);
+  console.log(`🎾 OPEN FOR PLAY: Readiness Gate Overrides & WINTERIZED_CLOSED Routing Active`);
   console.log(`🎉 JOY CANNON: Direct Milestone Advancement & Number Sanitizer Active`);
   console.log(`🌤️ PROACTIVE WEATHER ENGINE: Wind, Cold Glue (<10°C), Moisture & Heat Active`);
   console.log(`📍 GOOGLE GEO ENTERPRISE: Geocoding, Driving, Satellite & Twin Nudging Active`);
