@@ -1,14 +1,3 @@
-Here is the fully updated `server.js`. I have built the **Logistics Missing Parts Bridge** directly into the intent engine and interactive webhook handler.
-
-### What was added:
-
-1. **`SUPPLY_REQUEST` NLP Intent:** The AI now listens for phrases like "we're missing a gate", "can't find the silicone", or "need base plates", and extracts the exact missing items.
-2. **Autonomous Dispatch to Logistics:** It immediately creates a `High` priority `Supply Delivery` ticket and broadcasts a `🚨 MISSING PARTS ALERT` to the Logistics & Freight WhatsApp Hive (where Rob and Ranjeet are).
-3. **1-Tap Claiming:** The alert includes a `[🚚 Claim Delivery]` button. When Rob or Ranjeet taps it, Titan OS binds their Airtable Worker ID to the ticket, updates the status to "In Progress," and automatically messages the install crew at RCOR to let them know who is en route with their parts.
-
-You can copy and deploy this entire file directly:
-
-```javascript
 /**
  * TITAN OS V5.4.0 — CLOSED-LOOP AUTONOMOUS FACTORY QA BRIDGE & DEFECT BIFURCATION,
  * 1-ON-1 SANDBOX RESILIENCE, DYNAMIC SESSION BINDING, ZERO-FRICTION UPDATES & LEAD INGESTION
@@ -293,6 +282,26 @@ async function streamToDarkMatterVault({
     return inserted?.[0] || null;
   } catch (err) {
     return null;
+  }
+}
+
+async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
+  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return [];
+  try {
+    const filter = siteNameOrId.startsWith('rec')
+      ? `site_id=eq.${siteNameOrId}`
+      : `site_name=ilike.*${encodeURIComponent(siteNameOrId.trim())}*`;
+
+    const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?${filter}&order=created_at.desc&limit=${limit}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: getSupabaseHeaders('application/json')
+    });
+
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (err) {
+    return [];
   }
 }
 
@@ -3322,5 +3331,3 @@ app.listen(PORT, '0.0.0.0', async () => {
     await getCachedOpenAssignments();
   } catch (err) {}
 });
-
-```
