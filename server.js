@@ -1,5 +1,6 @@
 /**
  * TITAN OS V5.3.5 — SILENT EXPENSE GHOST ROUTING & RESILIENT META DISPATCH
+ * WITH ENTRY #088: ACOUSTIC RELATIONAL TICKET SYNTHESIS & FLEET OPEN-ISSUE ROUTING
  * 
  * Production Build Features:
  * 1. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
@@ -20,8 +21,9 @@
  *    turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
  *    wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
  * 8. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 9. Conversational Spoken Lookups: Naturally answers voice notes and text for locations
- *    ("Where is Levinsky?", "Send pin for Don Walker"), weather, readiness, and status lookups.
+ * 9. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal
+ *    from Sites to open Daily Assignments. Seamlessly synthesizes open repairs, chores, and commercial leads
+ *    for natural voice queries ("Any tickets for Cynamon?", "Where is Levinsky?", "Status of RCOR").
  * 10. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
  *     zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
  * 11. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
@@ -205,7 +207,7 @@ async function getCachedOpenAssignments(forceRefresh = false) {
 
   try {
     const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc&maxRecords=50`;
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc&maxRecords=100`;
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -492,8 +494,8 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
   if (receipts.length > 0) {
     receipts.forEach((r, idx) => {
       formattedNotes += `${idx + 1}. ${r.vendor || 'Merchant'} — $${r.total_amount ? r.total_amount.toFixed(2) : '0.00'} (${r.category || 'General'})\n` +
-        `   Items: ${r.items_summary || 'Supplies'}\n` +
-        (r.date ? `   Date: ${r.date}\n` : '');
+        `    Items: ${r.items_summary || 'Supplies'}\n` +
+        (r.date ? `    Date: ${r.date}\n` : '');
     });
   } else {
     formattedNotes += `Single Expense Batch — Total: $${grandTotal} ${currency}\n`;
@@ -503,7 +505,6 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
 
   const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
 
-  // Status set to 'Complete' so it triggers Automation 4 for QuickBooks pass-through without cluttering active dispatch boards
   const assignmentPayload = {
     'Date': todayStr,
     'Assignment Type': 'Expense',
@@ -725,6 +726,9 @@ const COMMAND_MAP = {
   '/sum': 'STATUS',
   '/status': 'STATUS',
   '/summary': 'STATUS',
+  '/t': 'TICKET_QUERY',
+  '/ticket': 'TICKET_QUERY',
+  '/tickets': 'TICKET_QUERY',
   '/w': 'WEATHER',
   '/weather': 'WEATHER',
   '/clima': 'WEATHER',
@@ -1247,7 +1251,6 @@ async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
 async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
   if (!toTarget) return false;
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
-  // Auto-strip '+' and non-digit formatting for individual recipient numbers
   const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
 
   const payload = {
@@ -1542,7 +1545,12 @@ async function handleSpokenWeatherQuery(queriedName, fallbackSite, dispatchTarge
   await sendWhatsAppMessage(dispatchTarget, weatherCard);
 }
 
-async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget) {
+/**
+ * ENTRY #088: Spoken Relational Ticket Cross-Referencing & Fleet Open-Issue Synthesis
+ * Traverses memoryCache.sites to memoryCache.assignments to synthesize parent site
+ * status with all active physical child work orders and commercial sales inquiries.
+ */
+async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget, isTicketOnly = false) {
   let targetSite = null;
   if (queriedName) targetSite = await lookupSite(null, queriedName);
   if (!targetSite) targetSite = fallbackSite;
@@ -1552,18 +1560,81 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
     return;
   }
 
+  const siteId = targetSite.id;
   const siteName = targetSite.fields['Site Name'];
   const currentGate = targetSite.fields['Current Gate'] || 'No Gate Set';
   const workflowMode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
   const lastNote = targetSite.fields['Last Note'] || 'No notes logged';
 
-  const statusCard = `🏟️ *${siteName.toUpperCase()} | STATUS*\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `• Mode: ${workflowMode}\n` +
-    `• Current Gate: ${currentGate}\n` +
-    `• Last Update: ${lastNote.slice(0, 150)}`;
+  // 1. Traverse memoryCache.assignments for all open tasks linked to this site
+  const allOpenAssignments = await getCachedOpenAssignments();
+  const linkedAssignments = allOpenAssignments.filter(record => {
+    const s = record.fields['Sites'] || record.fields['Site'] || [];
+    const siteIds = Array.isArray(s) ? s : [s];
+    return siteIds.includes(siteId);
+  });
 
-  await sendWhatsAppMessage(dispatchTarget, statusCard);
+  // 2. Partition physical field work orders from commercial inquiries & expenses
+  const fieldTickets = linkedAssignments.filter(a => {
+    const type = a.fields['Assignment Type'];
+    return type !== 'Sales' && type !== 'Expense';
+  });
+  const salesLeads = linkedAssignments.filter(a => a.fields['Assignment Type'] === 'Sales');
+
+  // 3. Assemble unified response card
+  let responseCard = `🏟️ *${siteName.toUpperCase()} | ${isTicketOnly ? 'ACTIVE WORK ORDERS' : 'STATUS'}*\n━━━━━━━━━━━━━━━━━━━━\n`;
+
+  if (!isTicketOnly) {
+    responseCard += `• Mode: ${workflowMode}\n`;
+    if (workflowMode === 'INSTALLATION') {
+      responseCard += `• Gate: ${currentGate}\n`;
+    }
+    responseCard += `• Last Update: ${lastNote.slice(0, 100)}\n`;
+    responseCard += `━━━━━━━━━━━━━━━━━━━━\n`;
+  }
+
+  // 4. Synthesize physical field tickets
+  if (fieldTickets.length === 0) {
+    responseCard += `✅ *Field Tickets:* No open work orders.\n`;
+  } else {
+    responseCard += `🛠️ *Open Field Tickets (${fieldTickets.length}):*\n`;
+    fieldTickets.forEach(t => {
+      const ticketNum = t.fields['Assignment ID'] ? `#${t.fields['Assignment ID']}` : 'WO';
+      const priority = t.fields['Priority'] || 'Medium';
+      
+      // Resolve assigned workers
+      let assignedWorkers = '';
+      if (Array.isArray(t.fields['Worker']) && t.fields['Worker'].length > 0) {
+        const names = t.fields['Worker'].map(wId => {
+          if (typeof wId === 'string' && wId.startsWith('rec') && memoryCache.workers) {
+            const found = memoryCache.workers.find(wk => wk.id === wId);
+            return found?.fields?.['Full Name'] || found?.fields?.['Worker Name'] || wId;
+          }
+          return wId;
+        });
+        assignedWorkers = ` (${names.join(', ')})`;
+      } else if (typeof t.fields['Worker'] === 'string') {
+        assignedWorkers = ` (${t.fields['Worker']})`;
+      }
+
+      const rawNote = t.fields['Notes'] || t.fields['Task Category'] || t.fields['Assignment Type'] || 'Service Task';
+      const cleanNote = rawNote.split('\n')[0].replace(/^\[.*?\]\s*/, '').slice(0, 45);
+      responseCard += `• *${ticketNum}* [${priority}] ${cleanNote}${assignedWorkers} — _${t.fields['Status'] || 'Open'}_\n`;
+    });
+  }
+
+  // 5. Append commercial leads if present
+  if (salesLeads.length > 0) {
+    responseCard += `\n💼 *Commercial Leads (${salesLeads.length}):*\n`;
+    salesLeads.forEach(s => {
+      const leadNum = s.fields['Assignment ID'] ? `#${s.fields['Assignment ID']}` : 'LEAD';
+      const rawNote = s.fields['Notes'] || '';
+      const cleanDesc = rawNote.split('\n')[0].replace(/\[COMMERCIAL LEAD —\s*/i, '').replace(/\]/, '').slice(0, 45);
+      responseCard += `• *${leadNum}*: ${cleanDesc || 'Inbound Sales Lead'}\n`;
+    });
+  }
+
+  await sendWhatsAppMessage(dispatchTarget, responseCard.trim());
 }
 
 async function handleSpokenReadinessQuery(queriedName, fallbackSite, dispatchTarget) {
@@ -1597,18 +1668,19 @@ Classify incoming spoken audio transcripts or text messages.
 ROUTING INTENTS:
 1. "LOCATION_QUERY": User is asking for the location, directions, pin, map, or address of a court (e.g. "Can you send the location for Levinsky?", "Where is Don Walker?", "Send me the pin for RCOR").
 2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions (e.g. "What's the weather at Levinsky?", "Is it too windy for glass?").
-3. "STATUS_QUERY": User is asking about progress, gates, or status of a court (e.g. "What's the status of Mary's court?", "What gate are we on?").
-4. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received (e.g. "Is Levinsky ready to mobilize?").
-5. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
-6. "ACTIONABLE_STATE_CHANGE": Milestones reached, deposit received, concrete pour dates set.
-7. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes).
-8. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
+3. "STATUS_QUERY": User is asking about general progress, gates, or status of a court (e.g. "What's the status of Mary's court?", "What gate are we on?").
+4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks for a court (e.g. "Are there any open support tickets for Cynamon?", "What tickets are open for RCOR?", "Any chores for David?").
+5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received (e.g. "Is Levinsky ready to mobilize?").
+6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
+7. "ACTIONABLE_STATE_CHANGE": Milestones reached, deposit received, concrete pour dates set.
+8. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes).
+9. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 
-Extract "queried_court_name": string or null (e.g. "Levinsky", "Don Walker", "Mary", "RCOR").
+Extract "queried_court_name": string or null (e.g. "Levinsky", "Don Walker", "Mary", "RCOR", "Cynamon").
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
@@ -1718,8 +1790,8 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
-  if (triage.intent === 'STATUS_QUERY') {
-    await handleSpokenStatusQuery(triage.queried_court_name, site, dispatchTarget);
+  if (triage.intent === 'STATUS_QUERY' || triage.intent === 'TICKET_QUERY') {
+    await handleSpokenStatusQuery(triage.queried_court_name, site, dispatchTarget, triage.intent === 'TICKET_QUERY');
     return;
   }
 
@@ -2196,7 +2268,6 @@ app.post('/webhook', async (req, res) => {
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
       
-      // Store pin in RAM for up to 10 minutes in case they say "create new site" right after
       lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
 
       if (!site) {
@@ -2226,7 +2297,6 @@ app.post('/webhook', async (req, res) => {
 
         const activeTicket = await findActiveTicketForSite(site.id);
 
-        // Proactive weather check right upon arrival
         let arrivalWeatherNotice = '';
         if (!indoorSite) {
           const weather = await getHyperlocalWeather(siteCoords.lat, siteCoords.lon);
@@ -2321,8 +2391,8 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      if (explicitIntent === 'STATUS') {
-        await handleSpokenStatusQuery(args.join(' '), site, dispatchTarget);
+      if (explicitIntent === 'STATUS' || explicitIntent === 'TICKET_QUERY') {
+        await handleSpokenStatusQuery(args.join(' '), site, dispatchTarget, explicitIntent === 'TICKET_QUERY');
         return;
       }
 
@@ -2337,6 +2407,7 @@ app.post('/webhook', async (req, res) => {
           `  _"Where is Levinsky?"_ (returns pin & directions)\n` +
           `  _"What's the weather at RCOR?"_ (returns tripwires & wind holds)\n` +
           `  _"What gate is Don Walker on?"_\n` +
+          `  _"Any open tickets for Cynamon?"_ (returns active work orders & leads)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send video walkaround -> Instant milestone progression\n` +
           `• Drop a pin and text _"Create new site Burk"_ -> Auto-provisions in Airtable`);
@@ -2355,8 +2426,8 @@ app.post('/webhook', async (req, res) => {
             await handleSpokenWeatherQuery(nlp.queried_court_name, site, dispatchTarget);
             return;
           }
-          if (nlp.intent === 'STATUS_QUERY') {
-            await handleSpokenStatusQuery(nlp.queried_court_name, site, dispatchTarget);
+          if (nlp.intent === 'STATUS_QUERY' || nlp.intent === 'TICKET_QUERY') {
+            await handleSpokenStatusQuery(nlp.queried_court_name, site, dispatchTarget, nlp.intent === 'TICKET_QUERY');
             return;
           }
           if (nlp.intent === 'READINESS_QUERY') {
@@ -2567,7 +2638,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
     version: '5.3.5',
-    engine: 'Titan OS V5.3.5 (Silent Expense Ghost Routing & Resilient Meta Dispatch)'
+    engine: 'Titan OS V5.3.5 (Silent Expense Ghost Routing & Resilient Meta Dispatch + ENTRY #088)'
   });
 });
 
@@ -2581,7 +2652,7 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`🎉 JOY CANNON: Direct Milestone Advancement & Number Sanitizer Active`);
   console.log(`🌤️ PROACTIVE WEATHER ENGINE: Wind, Cold Glue (<10°C), Moisture & Heat Active`);
   console.log(`📍 GOOGLE GEO ENTERPRISE: Geocoding, Driving, Satellite & Twin Nudging Active`);
-  console.log(`🗣️ SPOKEN LOOKUPS: Voice & Text Location/Weather/Gate Routing Active`);
+  console.log(`🗣️ SPOKEN LOOKUPS & ENTRY #088: Relational Ticket Synthesis Active`);
   console.log(`🏗️ 8-GATE FIELD RUBRIC: Single-Court Evaluation Active`);
   console.log(`====================================================================`);
 
