@@ -1,43 +1,46 @@
 /**
- * TITAN OS V5.3.5 — SILENT EXPENSE GHOST ROUTING & RESILIENT META DISPATCH
- * WITH ENTRY #088: ACOUSTIC RELATIONAL TICKET SYNTHESIS & FLEET OPEN-ISSUE ROUTING
- * AND DYNAMIC SEASONAL WINTERIZATION CLOSEOUT ENGINE
+ * TITAN OS V5.3.6 — SILENT EXPENSE GHOST ROUTING, MULTIMODAL SALES LEAD INGESTION,
+ * RESILIENT META DISPATCH & DYNAMIC SEASONAL WINTERIZATION ENGINE
  * 
  * Production Build Features:
- * 1. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
+ * 1. Multimodal Commercial Sales Lead Ingestion: Screenshots of forwarded emails,
+ *    partner leads (e.g. Mondo / Michael Tovar), texts, or RFPs are OCR-extracted
+ *    via Gemini and written straight into Daily Assignments with Assignment Type: 'Sales',
+ *    Priority: 'High', Status: 'Open', and formatted for ENTRY #088 relational indexing.
+ * 2. Silent Expense Ghost Routing: Expenses write to Daily Assignments with Status: 'Complete'
  *    and Task Category: 'Expense' so Automation 4 passes attachments to QuickBooks instantly
  *    without cluttering the active dispatch/punch-list board.
- * 2. Resilient Meta Dispatch with Auto-Retry: sendWhatsAppMessage includes automatic retry
+ * 3. Resilient Meta Dispatch with Auto-Retry: sendWhatsAppMessage includes automatic retry
  *    with exponential backoff, preventing dropped cards during transient Meta DNS/TCP timeouts.
- * 3. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
+ * 4. Autonomous Zero-Touch Provisioning: Field operators can drop a WhatsApp location pin
  *    and immediately reply "create new site [Name]" to automatically build a bound ledger
  *    record with live coordinates, triggering INOC prep-alerts.
- * 4. Open For Play & Seasonal Readiness Engine: Evaluates dynamic Site Status ('OPEN_FOR_PLAY' vs
+ * 5. Open For Play & Seasonal Readiness Engine: Evaluates dynamic Site Status ('OPEN_FOR_PLAY' vs
  *    'WINTERIZED_CLOSED') with pre-con bypasses for commissioned nodes.
- * 5. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
+ * 6. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly, eliminating
  *    missed client celebratory alerts when gates are in-progress or partial.
- * 6. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
+ * 7. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters on all
  *    direct Meta Graph API calls to prevent HTTP 400 (#100) invalid parameter rejections.
- * 7. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
+ * 8. Proactive Weather Tripwire Matrix: Evaluates wind gust holds (>20 kts for glass),
  *    turf adhesive cold cure lockouts (<10°C / <5°C), surface condensation (dew point delta <=2.5°C),
  *    wet sand infill locks, active precipitation, and extreme heat flash-cure alerts (>35°C).
- * 8. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 9. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal
- *    from Sites to open Daily Assignments. Seamlessly synthesizes open repairs, chores, and commercial leads
- *    for natural voice queries ("Any tickets for Cynamon?", "Where is Levinsky?", "Status of RCOR").
- * 10. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
+ * 9. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 10. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal
+ *     from Sites to open Daily Assignments. Seamlessly synthesizes open repairs, chores, and commercial leads
+ *     for natural voice queries ("Any tickets for Cynamon?", "Where is Levinsky?", "Status of RCOR").
+ * 11. Google Geo Enterprise Engine: Millimeter geocoding, coordinate auto-healing, driving directions,
  *     zoom=20 satellite yard inspection, and twin-court 15m pin nudging.
- * 11. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
+ * 12. Simplified 8-Gate Field Rubric: Streamlined installer progression. Dropped lights gate.
  *     Rolled underlayment, seaming, gluing, and lines into Gate 5: 'Turf Laid'.
- * 12. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
+ * 13. Single-Court Targeting: Eliminates multi-court apron bleed so background courts
  *     never trigger false gate skips. Each court row is graded independently.
- * 13. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
+ * 14. Field Vernacular & Silicone Check: 'Glass Installed' and 'Posts'. Evaluates perimeter silicone
  *     as a quality check without blocking gate advancement.
- * 14. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
- * 15. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
- * 16. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
- * 17. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
- * 18. Dynamic Seasonal Closeout Engine: Analyzes work-order categories and spoken closeout notes to
+ * 15. Turf Color Neutrality: Fully agnostic visual turf detection across all court surface colors.
+ * 16. Clean Field Messaging: Removed developer jargon ('digital twin', 'vault', 'supabase') from all WhatsApp replies.
+ * 17. In-Place RAM Cache Mutation: Updates Airtable memory cache instantly on write without API refetches.
+ * 18. GameCam 4K Webhook Gateway: Ingestion endpoint (/api/webhooks/gamecam/snapshot) for elevated cameras.
+ * 19. Dynamic Seasonal Closeout Engine: Analyzes work-order categories and spoken closeout notes to
  *     automatically set Site Status to 'WINTERIZED_CLOSED' or 'OPEN_FOR_PLAY', generating contextual voucher cards.
  */
 
@@ -322,7 +325,6 @@ function evaluateReadinessGate(siteRecord) {
   const status = f['Site Status'] || '';
   const mode = f['Workflow Mode'] || '';
 
-  // 1. Explicit Seasonal Winterization check
   if (status === 'WINTERIZED_CLOSED') {
     return {
       status: 'WINTERIZED / CLOSED ❄️',
@@ -331,7 +333,6 @@ function evaluateReadinessGate(siteRecord) {
     };
   }
 
-  // 2. Bypass pre-con checks if court is commissioned, open for play, or under active maintenance
   if (status === 'COMPLETE' || status === 'OPEN_FOR_PLAY' || mode === 'MAINTENANCE') {
     return {
       status: 'OPEN FOR PLAY 🎾',
@@ -340,7 +341,6 @@ function evaluateReadinessGate(siteRecord) {
     };
   }
 
-  // 3. Bypass for internal headquarters, inventory, or production nodes
   if (['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY'].includes(mode)) {
     return {
       status: 'OPERATIONAL 🏢',
@@ -349,7 +349,6 @@ function evaluateReadinessGate(siteRecord) {
     };
   }
 
-  // 4. Pre-Construction Mobilization Gate for active/upcoming builds
   const deposit = f['Deposit Status'] || '';
   const hasDeposit = (deposit === '50% Deposit Received' || deposit === 'Paid in Full');
 
@@ -404,7 +403,7 @@ function evaluateReadinessGate(siteRecord) {
 }
 
 // ====================================================================
-// 5. UNIVERSAL VISUAL TRIAGE ENGINE (RECEIPTS VS COURT SWEEPS)
+// 5. UNIVERSAL VISUAL TRIAGE ENGINE (RECEIPTS, LEADS, SWEEPS)
 // ====================================================================
 
 const VISUAL_TRIAGE_PROMPT = `
@@ -413,9 +412,21 @@ Analyze the provided image(s) or video frames to classify the primary operationa
 
 CATEGORIES:
 1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, gas station, fuel, hardware store, Fastenal, restaurants/meals, lumber, supplies, equipment rental, parking), invoices, register slips.
-2. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, frame, net, concrete pad, or sports facility walkaround.
-3. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading.
-4. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, screenshots with no work context.
+2. "COMMERCIAL_LEAD": Screenshots of emails, text messages, quote inquiries, client forwards, RFPs, business cards, or lead referrals (e.g. forwarded emails from partners like Mondo, GMs, or new club developers seeking court installation, turf replacement, or quotes).
+3. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, frame, net, concrete pad, or sports facility walkaround.
+4. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading.
+5. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, random memes with no business context.
+
+IF COMMERCIAL_LEAD:
+Carefully extract all contact and lead metadata:
+- "lead_contact_name": "Full name of the prospect/lead contact or null",
+- "company_or_club": "Name of club, company, or facility or null",
+- "phone": "Phone number or null",
+- "email": "Email address or null",
+- "address": "Physical location or address or null",
+- "project_description": "Scope of work, products requested, or client need (e.g. turf replacement, new court build)",
+- "referring_partner": "Person or company referring the lead (e.g. Michael Tovar / Mondo)",
+- "summary": "1-2 sentence executive summary of the sales lead"
 
 IF FINANCIAL_RECEIPT:
 Examine every receipt visible across the images and extract:
@@ -437,8 +448,15 @@ Examine every receipt visible across the images and extract:
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "media_category": "FINANCIAL_RECEIPT" | "COURT_FACILITY" | "FREIGHT_LOGISTICS" | "IRRELEVANT_NOISE",
+  "media_category": "FINANCIAL_RECEIPT" | "COMMERCIAL_LEAD" | "COURT_FACILITY" | "FREIGHT_LOGISTICS" | "IRRELEVANT_NOISE",
   "confidence": number,
+  "lead_contact_name": string or null,
+  "company_or_club": string or null,
+  "phone": string or null,
+  "email": string or null,
+  "address": string or null,
+  "project_description": string or null,
+  "referring_partner": string or null,
   "grand_total": number or null,
   "primary_currency": "CAD" | "USD" | null,
   "summary": "string or null",
@@ -447,7 +465,7 @@ OUTPUT FORMAT (JSON ONLY):
 `;
 
 async function classifyVisualMediaIntent(items) {
-  const contentParts = [{ text: "Determine the primary subject of these images. If receipts, extract all financial data." }];
+  const contentParts = [{ text: "Determine the primary subject of these images. If receipts, extract financial data. If email/lead screenshot, extract all contact and project details." }];
 
   for (const item of items) {
     contentParts.push({
@@ -567,6 +585,82 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
     `🧾 *Expense Ref:* ${ticketId} (Dispatched to QuickBooks)`;
 
   await sendWhatsAppMessage(dispatchTarget, receiptCard);
+}
+
+/**
+ * MULTIMODAL COMMERCIAL SALES LEAD INGESTION
+ * Ingests forwarded email screenshots, extracts lead profile & referral metadata,
+ * and logs directly into Daily Assignments as an Open Sales assignment.
+ */
+async function handleCommercialLeadBatch({ items, storageResults, visualTriage, worker, dispatchTarget, fromPhone, callerIdentity }) {
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const leadName = visualTriage.lead_contact_name || 'Inbound Prospect';
+  const company = visualTriage.company_or_club || 'Padel Venue Lead';
+  const phone = visualTriage.phone || 'N/A';
+  const email = visualTriage.email || 'N/A';
+  const address = visualTriage.address || 'N/A';
+  const scope = visualTriage.project_description || visualTriage.summary || 'Court installation / turf replacement request';
+  const partner = visualTriage.referring_partner || 'Direct Intake';
+
+  const title = company !== 'Padel Venue Lead' ? `${company} (${leadName})` : leadName;
+
+  let formattedNotes = `[COMMERCIAL LEAD — ${title}]\n` +
+    `• Contact: ${leadName}\n` +
+    `• Company / Club: ${company}\n` +
+    `• Phone: ${phone}\n` +
+    `• Email: ${email}\n` +
+    `• Address: ${address}\n` +
+    `• Partner Referral: ${partner}\n` +
+    `• Project Scope: ${scope}\n\n` +
+    `INBOUND MEDIA URLS:\n` + storageResults.map(s => `• ${s.signedUrl}`).join('\n');
+
+  const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
+
+  const assignmentPayload = {
+    'Date': todayStr,
+    'Assignment Type': 'Sales',
+    'Task Category': 'Commercial Sales',
+    'Priority': 'High',
+    'Source': 'Email Screenshot Lead Intake',
+    'Status': 'Open',
+    'Notes': formattedNotes,
+    'Attachment(s)': attachmentPayload
+  };
+
+  if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+
+  const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+  const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'LEAD';
+
+  await streamToDarkMatterVault({
+    siteId: null,
+    siteName: company,
+    senderPhone: fromPhone,
+    senderName: workerName,
+    rawText: formattedNotes,
+    category: 'Commercial Sales Lead',
+    distilledContext: `Lead: ${leadName} (${company}) via ${partner} — Scope: ${scope}`,
+    urgency: 'HIGH',
+    gravityScore: 4,
+    actionableFollowup: `Sales Ticket ${ticketId}`
+  });
+
+  let leadCard = `💼 *TITAN OS | COMMERCIAL LEAD LOGGED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `👤 *Prospect:* ${leadName}\n` +
+    `🏟️ *Club / Org:* ${company}\n` +
+    `📞 *Phone:* ${phone}\n` +
+    `✉️ *Email:* ${email}\n` +
+    `📍 *Location:* ${address}\n` +
+    `🤝 *Partner Referral:* ${partner}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *Project Scope:*\n${scope}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎫 *Ticket ${ticketId} Created* (Indexed under Daily Assignments -> Sales)`;
+
+  await sendWhatsAppMessage(dispatchTarget, leadCard);
 }
 
 // ====================================================================
@@ -784,9 +878,6 @@ function isIndoorSite(site) {
   return env.includes('indoor') || name.includes('indoor') || notes.includes('indoor');
 }
 
-/**
- * Direct Google Geocoding API Engine with Coordinate Sanitization
- */
 async function geocodeAddressWithGoogle(addressString) {
   if (!CONFIG.google.apiKey || !addressString) return null;
   try {
@@ -843,7 +934,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     return memoryCache.coordinates.get(rawLocation);
   }
 
-  // 1. Direct Regex Match on "lat, lon"
   if (typeof rawLocation === 'string') {
     const directMatch = rawLocation.trim().match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
     if (directMatch) {
@@ -853,7 +943,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     }
   }
 
-  // 2. Decode Airtable Native Map Cache
   if (cache && typeof cache === 'string') {
     try {
       const decoded = Buffer.from(cache, 'base64').toString('utf8');
@@ -868,7 +957,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     } catch (e) {}
   }
 
-  // 3. Primary Google Maps Geocoding Resolver
   if (typeof rawLocation === 'string' && rawLocation.length > 3) {
     const googleResult = await geocodeAddressWithGoogle(rawLocation);
     if (googleResult) {
@@ -929,10 +1017,6 @@ async function getHyperlocalWeather(lat, lon) {
   }
 }
 
-/**
- * Dedicated Proactive Weather Tripwire Engine
- * Evaluates physical construction constraints (wind, cold temp, condensation, wet turf, heat).
- */
 function evaluateWeatherTripwires(weather, targetGate = null) {
   if (!weather) return { holds: [], warnings: [], nominal: true, summaryText: '' };
 
@@ -940,38 +1024,32 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   const warnings = [];
   const dewDelta = weather.temp - weather.dewPoint;
 
-  // 1. HIGH WIND GUST TRIPWIRE (>20 kts / 37 km/h) -> Glass Seating Hold
   if (weather.windGusts > 37) {
     holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h / >20 kts):* Crane & suction cup glass installation prohibited. High panel sail hazard.`);
   } else if (weather.windGusts > 28) {
     warnings.push(`💨 *WIND WARNING (${weather.windGusts} km/h):* Approach glass seating with caution; verify post anchoring.`);
   }
 
-  // 2. TURF ADHESIVE COLD LOCKOUT (<10°C / 50°F) -> Chemical Cure Failure
   if (weather.temp < 5) {
     holds.push(`❄️ *COLD LOCKOUT (${weather.temp}°C):* Total freeze lockout on polyurethane turf adhesive. Chemical bonding fails below 5°C.`);
   } else if (weather.temp < 10) {
     holds.push(`⚠️ *TURF GLUE CURE HOLD (${weather.temp}°C / <50°F):* Adhesive curing requires >=10°C. Do not glue turf seams until ambient temp rises.`);
   }
 
-  // 3. CONDENSATION & MOISTURE TRIPWIRE (Humidity > 85% or Dew Delta <= 2.5°C)
   if (weather.humidity > 85 || dewDelta <= 2.5) {
     holds.push(`💧 *CONDENSATION HOLD:* Dew delta is ${dewDelta.toFixed(1)}°C (Humidity: ${weather.humidity}%). Pad/carpet surface moisture will ruin adhesive bond.`);
   }
 
-  // 4. PRECIPITATION / RAIN TRIPWIRE (Active Rain or >40% chance in 4h)
   if (weather.isRainingOrStorm || weather.precip > 0) {
     holds.push(`🌧️ *RAIN HOLD:* Active rain/storm detected. Hold all outdoor gluing, glass, and mesh.`);
   } else if (weather.precipProbability4h > 40) {
     warnings.push(`🌦️ *RAIN PROBABILITY (${weather.precipProbability4h}% in 4h):* Keep blue tarps staged over open turf rolls and seaming tape.`);
   }
 
-  // 5. WET SAND INFILL LOCKOUT (Clumps silica sand)
   if (weather.isRainingOrStorm || weather.precip > 0 || weather.humidity > 90) {
     holds.push(`⏳ *SAND INFILL HOLD:* Wet conditions detected. Silica sand must strictly be applied to dry turf to prevent pile clumping.`);
   }
 
-  // 6. EXTREME HEAT FLASH-CURE ALERT (>35°C / 95°F)
   if (weather.temp > 35) {
     warnings.push(`☀️ *HIGH HEAT ALERT (${weather.temp}°C):* Adhesive pot-life drops to <5 minutes. Mandatory crew shade and hydration rest cycles.`);
   }
@@ -1462,7 +1540,6 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
     'Notes': updatedNotes
   }, activeTicket.id);
 
-  // Evaluate if this task was seasonal winterization / shutdown
   const taskCategory = activeTicket.fields['Task Category'] || '';
   const isWinterCloseout = 
     taskCategory === 'Season Closing' ||
@@ -1569,11 +1646,6 @@ async function handleSpokenWeatherQuery(queriedName, fallbackSite, dispatchTarge
   await sendWhatsAppMessage(dispatchTarget, weatherCard);
 }
 
-/**
- * ENTRY #088: Spoken Relational Ticket Cross-Referencing & Fleet Open-Issue Synthesis
- * Traverses memoryCache.sites to memoryCache.assignments to synthesize parent site
- * status with all active physical child work orders and commercial sales inquiries.
- */
 async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget, isTicketOnly = false) {
   let targetSite = null;
   if (queriedName) targetSite = await lookupSite(null, queriedName);
@@ -1591,7 +1663,6 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
   const siteStatus = targetSite.fields['Site Status'] || 'ACTIVE';
   const lastNote = targetSite.fields['Last Note'] || 'No notes logged';
 
-  // 1. Traverse memoryCache.assignments for all open tasks linked to this site
   const allOpenAssignments = await getCachedOpenAssignments();
   const linkedAssignments = allOpenAssignments.filter(record => {
     const s = record.fields['Sites'] || record.fields['Site'] || [];
@@ -1599,14 +1670,12 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
     return siteIds.includes(siteId);
   });
 
-  // 2. Partition physical field work orders from commercial inquiries & expenses
   const fieldTickets = linkedAssignments.filter(a => {
     const type = a.fields['Assignment Type'];
     return type !== 'Sales' && type !== 'Expense';
   });
   const salesLeads = linkedAssignments.filter(a => a.fields['Assignment Type'] === 'Sales');
 
-  // 3. Assemble unified response card
   let responseCard = `🏟️ *${siteName.toUpperCase()} | ${isTicketOnly ? 'ACTIVE WORK ORDERS' : 'STATUS'}*\n━━━━━━━━━━━━━━━━━━━━\n`;
 
   if (!isTicketOnly) {
@@ -1619,7 +1688,6 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
     responseCard += `━━━━━━━━━━━━━━━━━━━━\n`;
   }
 
-  // 4. Synthesize physical field tickets
   if (fieldTickets.length === 0) {
     responseCard += `✅ *Field Tickets:* No open work orders.\n`;
   } else {
@@ -1628,7 +1696,6 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
       const ticketNum = t.fields['Assignment ID'] ? `#${t.fields['Assignment ID']}` : 'WO';
       const priority = t.fields['Priority'] || 'Medium';
       
-      // Resolve assigned workers
       let assignedWorkers = '';
       if (Array.isArray(t.fields['Worker']) && t.fields['Worker'].length > 0) {
         const names = t.fields['Worker'].map(wId => {
@@ -1649,7 +1716,6 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
     });
   }
 
-  // 5. Append commercial leads if present
   if (salesLeads.length > 0) {
     responseCard += `\n💼 *Commercial Leads (${salesLeads.length}):*\n`;
     salesLeads.forEach(s => {
@@ -1692,17 +1758,17 @@ You are the Titan OS Ambient Intelligence Scribe & Operational Dispatcher for Bo
 Classify incoming spoken audio transcripts or text messages.
 
 ROUTING INTENTS:
-1. "LOCATION_QUERY": User is asking for the location, directions, pin, map, or address of a court (e.g. "Can you send the location for Levinsky?", "Where is Don Walker?", "Send me the pin for RCOR").
-2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions (e.g. "What's the weather at Levinsky?", "Is it too windy for glass?").
-3. "STATUS_QUERY": User is asking about general progress, gates, or status of a court (e.g. "What's the status of Mary's court?", "What gate are we on?").
-4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks for a court (e.g. "Are there any open support tickets for Cynamon?", "What tickets are open for RCOR?", "Any chores for David?").
-5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received (e.g. "Is Levinsky ready to mobilize?").
+1. "LOCATION_QUERY": User is asking for the location, directions, pin, map, or address of a court.
+2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions.
+3. "STATUS_QUERY": User is asking about general progress, gates, or status of a court.
+4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks for a court.
+5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
 7. "ACTIONABLE_STATE_CHANGE": Milestones reached, deposit received, concrete pour dates set.
 8. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes).
-9. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
+9. "PURE_NOISE": Casual banter, greetings, emojis.
 
-Extract "queried_court_name": string or null (e.g. "Levinsky", "Don Walker", "Mary", "RCOR", "Cynamon").
+Extract "queried_court_name": string or null.
 
 OUTPUT FORMAT (JSON ONLY):
 {
@@ -1774,7 +1840,6 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   if (triage.intent === 'PURE_NOISE') return;
 
-  // New Site Provisioning Catch via Spoken Voice Memo
   const combinedTranscript = (triage.transcript_en || '').toLowerCase();
   const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
 
@@ -1953,9 +2018,10 @@ async function processMediaBatch(batch) {
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
   const storageResults = await Promise.all(uploadPromises);
 
-  // STAGE 0: RECEIPT TRIAGE
+  // STAGE 0: VISUAL TRIAGE (RECEIPTS VS COMMERCIAL LEADS VS NOISE)
   if (!hasVideo) {
     const visualTriage = await classifyVisualMediaIntent(items);
+
     if (visualTriage.media_category === 'FINANCIAL_RECEIPT') {
       await handleFinancialReceiptBatch({
         items,
@@ -1970,8 +2036,21 @@ async function processMediaBatch(batch) {
       return;
     }
 
+    if (visualTriage.media_category === 'COMMERCIAL_LEAD') {
+      await handleCommercialLeadBatch({
+        items,
+        storageResults,
+        visualTriage,
+        worker,
+        dispatchTarget,
+        fromPhone,
+        callerIdentity
+      });
+      return;
+    }
+
     if (visualTriage.media_category === 'IRRELEVANT_NOISE') {
-      await sendWhatsAppMessage(dispatchTarget, `ℹ️ *TITAN OS | PHOTO LOGGED*\nPhoto saved, but no padel court milestone or receipt detected.`);
+      await sendWhatsAppMessage(dispatchTarget, `ℹ️ *TITAN OS | PHOTO LOGGED*\nPhoto saved, but no padel court milestone, receipt, or sales lead detected.`);
       return;
     }
   }
@@ -2016,7 +2095,6 @@ async function processMediaBatch(batch) {
     activeTicket = await findActiveTicketForSite(targetedSite.id);
   }
 
-  // Proactive Weather Scan
   let weatherTripwires = { summaryText: '' };
   if (targetedSite && !indoorSite) {
     const coords = await resolveCoordinates(targetedSite);
@@ -2028,7 +2106,6 @@ async function processMediaBatch(batch) {
     }
   }
 
-  // PIPELINE A: INSTALLATION MILESTONE ENGINE (8-GATES)
   if (siteMode === 'INSTALLATION' && !explicitTicketId) {
     const highestGate = forensicAudit.highest_gate ||
       (forensicAudit.verified_gates?.length ? Math.max(...forensicAudit.verified_gates) : 0);
@@ -2102,7 +2179,6 @@ async function processMediaBatch(batch) {
     return;
   }
 
-  // PIPELINE B: MAINTENANCE CLOSEOUT
   if (hasVideo && activeTicket) {
     const videoIndex = items.findIndex(item => item.type === 'video');
     const videoStorageUrl = storageResults[videoIndex]?.signedUrl || '';
@@ -2247,15 +2323,8 @@ app.post('/webhook', async (req, res) => {
     }
 
     const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
-    const isAmbientChannel = AMBIENT_CHAT_MODES.includes(currentMode);
-
-    const senderSource = isAuthorizedClient
-      ? 'Joy Cannon (Client)'
-      : (currentMode === 'SPOT_VISIT' ? 'Exec Visit (Bob)' : 'Dispatch');
-
     const indoorSite = isIndoorSite(site);
 
-    // INTERACTIVE BUTTON TAPS
     if (message.type === 'interactive') {
       const selectedId = message.interactive?.button_reply?.id || '';
 
@@ -2288,7 +2357,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // LOCATION PIN-DROP (PROACTIVE ARRIVAL WEATHER SCAN & NEW SITE STAGING)
     if (message.type === 'location') {
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
@@ -2355,13 +2423,11 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // TEXT & SPOKEN CONVERSATIONAL DISPATCH
     if (message.type === 'text') {
       const rawText = message.text.body.trim();
       const [trigger, ...args] = rawText.split(' ');
       const explicitIntent = COMMAND_MAP[trigger.toLowerCase()];
 
-      // New Site Provisioning Catch via Text
       const newSiteMatch = rawText.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
       
       if (newSiteMatch) {
@@ -2434,12 +2500,12 @@ app.post('/webhook', async (req, res) => {
           `  _"What gate is Don Walker on?"_\n` +
           `  _"Any open tickets for Cynamon?"_ (returns active work orders & leads)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
+          `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
           `• Send video walkaround -> Instant milestone progression\n` +
           `• Drop a pin and text _"Create new site Burk"_ -> Auto-provisions in Airtable`);
         return;
       }
 
-      // Natural language conversational text classification
       if (rawText.length > 2) {
         const nlp = await triageSpokenOrTextNLP(rawText, false);
         if (nlp) {
@@ -2492,7 +2558,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // MULTIMODAL INGESTION (IMAGES, VIDEOS, AUDIO)
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
     const isAudio = message.type === 'audio' || message.type === 'voice';
@@ -2533,7 +2598,7 @@ app.post('/webhook', async (req, res) => {
         worker,
         dispatchTarget,
         fromPhone,
-        senderSource,
+        senderSource: 'Dispatch',
         indoorSite,
         callerIdentity
       });
@@ -2634,7 +2699,6 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 
       if (!lat || !lon) continue;
 
-      // Twin-Court Pin Nudging: offset longitude by ~15m if coordinates collide
       const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
       const seenCount = coordTracker.get(coordKey) || 0;
       coordTracker.set(coordKey, seenCount + 1);
@@ -2662,14 +2726,15 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.3.5',
-    engine: 'Titan OS V5.3.5 (Silent Expense Ghost Routing & Resilient Meta Dispatch + ENTRY #088 + Seasonal Closeout)'
+    version: '5.3.6',
+    engine: 'Titan OS V5.3.6 (Commercial Sales Lead Ingestion & ENTRY #088)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.3.5 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.3.6 RUNNING ON PORT ${PORT}`);
+  console.log(`💼 COMMERCIAL LEAD INGESTION: Auto-OCR Screenshots -> Daily Assignments Active`);
   console.log(`🧾 EXPENSE GHOSTING: Auto-Complete & Filtered from Active Dispatch Active`);
   console.log(`📡 RESILIENT DISPATCH: Auto-Retry on Meta Timeout Active`);
   console.log(`📍 ZERO-TOUCH PROVISIONING: Drop a Pin & Say 'Create New Site' Active`);
