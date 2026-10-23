@@ -1,7 +1,7 @@
 /**
  * TITAN OS V5.4.0 — CLOSED-LOOP AUTONOMOUS FACTORY QA BRIDGE & DEFECT BIFURCATION,
  * 1-ON-1 SANDBOX RESILIENCE, DYNAMIC SESSION BINDING, ZERO-FRICTION UPDATES & LEAD INGESTION
- * + SCALE AI LOGISTICS FORK & MISSING PARTS BRIDGE
+ * + SCALE AI LOGISTICS FORK & MULTIMODAL INTENT OVERRIDE
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine): When an install crew
@@ -10,25 +10,23 @@
  * 2. Logistics Missing Parts Bridge: Installers speak missing parts ("need silicone"). Titan OS
  *    creates a ticket and sends an interactive [Claim Delivery] button to the Logistics Hive.
  *    When Rob/Ranjeet claim it, it notifies the installers that parts are en route.
- * 3. 1-on-1 Sandbox & Direct DM Resilience: Optimizes dark matter ingestion for direct 1-on-1 DMs.
- * 4. Orphan Ticket Auto-Healing: Dynamically resolves and binds the parent Site record.
- * 5. Dynamic Session Site Overrides: Eliminates multi-site phone collisions.
- * 6. Zero-Friction Ticket & Lead Updates: Reply directly to lead or chore notifications via WhatsApp.
- * 7. Multimodal Commercial Sales Lead Ingestion: Screenshots of forwarded emails are OCR-extracted.
- * 8. Interactive Field Note Promotion: Field observations trigger 1-tap ticket creation.
- * 9. Dynamic Seasonal Closeout Engine: Sets Site Status to 'WINTERIZED_CLOSED' or 'OPEN_FOR_PLAY'.
- * 10. Silent Expense Ghost Routing: Expenses write to Daily Assignments for QuickBooks sync.
- * 11. Resilient Meta Dispatch with Auto-Retry: Auto-retry with exponential backoff on Meta timeouts.
- * 12. Autonomous Zero-Touch Provisioning: Drop a WhatsApp location pin and reply "create new site".
- * 13. Open For Play & Seasonal Readiness Engine: Evaluates dynamic pre-con bypasses.
+ * 3. Multimodal Intent Override: Prevents visual AI from misclassifying screenshots by 
+ *    evaluating accompanying text captions for explicit commands (e.g., "create a site") first.
+ * 4. 1-on-1 Sandbox & Direct DM Resilience: Optimizes dark matter ingestion for direct 1-on-1 DMs.
+ * 5. Orphan Ticket Auto-Healing: Dynamically resolves and binds the parent Site record.
+ * 6. Dynamic Session Site Overrides: Eliminates multi-site phone collisions.
+ * 7. Zero-Friction Ticket & Lead Updates: Reply directly to lead or chore notifications via WhatsApp.
+ * 8. Multimodal Commercial Sales Lead Ingestion: Screenshots of forwarded emails are OCR-extracted.
+ * 9. Interactive Field Note Promotion: Field observations trigger 1-tap ticket creation.
+ * 10. Dynamic Seasonal Closeout Engine: Sets Site Status to 'WINTERIZED_CLOSED' or 'OPEN_FOR_PLAY'.
+ * 11. Silent Expense Ghost Routing: Expenses write to Daily Assignments for QuickBooks sync.
+ * 12. Resilient Meta Dispatch with Auto-Retry: Auto-retry with exponential backoff on Meta timeouts.
+ * 13. Autonomous Zero-Touch Provisioning: Drop a WhatsApp location pin and reply "create new site".
  * 14. Milestone-Aware Joy Cannon: Evaluates highest_gate advancement directly.
- * 15. E.164 Phone Sanitization: Automatically purges '+' and non-digit characters.
- * 16. Proactive Weather Tripwire Matrix: Wind gust holds, turf adhesive cold cure lockouts.
- * 17. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
- * 18. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal.
- * 19. Google Geo Enterprise Engine: Millimeter geocoding, driving directions, satellite yard inspection.
- * 20. Simplified 8-Gate Field Rubric: Single-Court Evaluation, Agnostic turf color detection.
- * 21. Voice-to-Integer Unstructured Freight Ledger for BOLs and crates.
+ * 15. Proactive Weather Tripwire Matrix: Wind gust holds, turf adhesive cold cure lockouts.
+ * 16. On-Arrival Proactive Scan: Triggers live weather tripwire cards automatically upon 300m GPS arrival.
+ * 17. Conversational Spoken Lookups & Relational Cross-Referencing (ENTRY #088): In-memory traversal.
+ * 18. Voice-to-Integer Unstructured Freight Ledger for BOLs and crates.
  */
 
 process.on('uncaughtException', (err) => {
@@ -282,26 +280,6 @@ async function streamToDarkMatterVault({
     return inserted?.[0] || null;
   } catch (err) {
     return null;
-  }
-}
-
-async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
-  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return [];
-  try {
-    const filter = siteNameOrId.startsWith('rec')
-      ? `site_id=eq.${siteNameOrId}`
-      : `site_name=ilike.*${encodeURIComponent(siteNameOrId.trim())}*`;
-
-    const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?${filter}&order=created_at.desc&limit=${limit}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: getSupabaseHeaders('application/json')
-    });
-
-    if (!res.ok) return [];
-    return await res.json();
-  } catch (err) {
-    return [];
   }
 }
 
@@ -2333,11 +2311,76 @@ async function processMediaBatch(batch) {
     isIndoor: indoorSite
   };
 
+  // Extract any accompanying text/caption sent with the media batch
+  const batchText = items.map(i => i.caption || '').filter(Boolean).join(' ').trim();
+
+  // NEW: INTENT OVERRIDE ARCHITECTURE
+  // If there is an image/video BUT it has a descriptive caption, check the caption for explicit commands first.
+  if (hasVisualMedia && batchText.length > 5) {
+      const triage = await triageSpokenOrTextNLP(batchText, false, []);
+      if (triage) {
+          const combinedTranscript = (triage.transcript_en || '').toLowerCase();
+          const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
+          
+          if (newSiteMatch) {
+              console.log('[Multimodal Override]: Explicit site creation command found accompanying image. Bypassing visual triage.');
+              const newSiteName = newSiteMatch[1].trim();
+              const recentPin = lastDroppedCoordinates.get(fromPhone);
+
+              const newRecordPayload = {
+                'Site Name': newSiteName,
+                'Workflow Mode': 'PLANNING',
+                'Site Status': 'ACTIVE',
+                'Last Note': `[SITE VISIT - Created via Text/Image Combo on ${new Date().toLocaleDateString()}]`,
+                'WhatsApp Group ID': dispatchTarget || fromPhone
+              };
+
+              if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
+                newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+              }
+
+              const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
+              invalidateAirtableCache('sites');
+
+              if (createdSite?.id) {
+                if (fromPhone) userActiveSiteMap.set(fromPhone, createdSite.id);
+                if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, createdSite.id);
+                
+                // Generate the requested maintenance ticket (from the user's prompt context)
+                const assignmentPayload = {
+                  'Date': new Date().toISOString().split('T')[0],
+                  'Assignment Type': 'Service',
+                  'Task Category': 'Maintenance',
+                  'Priority': 'Medium',
+                  'Source': 'Multimodal Text Prompt',
+                  'Status': 'Open',
+                  'Sites': [createdSite.id],
+                  'Notes': `[INITIAL MAINTENANCE INTAKE]\n• Requested By: ${worker?.fields?.['Full Name'] || callerIdentity?.name || 'User'}\n• Context: ${batchText}`
+                };
+                
+                const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+                const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'MAINT';
+
+                await sendWhatsAppMessage(dispatchTarget, `🏟️ *TITAN OS | NEW SITE & TICKET CREATED*\n\n` +
+                  `• *Court:* ${newSiteName}\n` +
+                  (newRecordPayload['Site location'] ? `• *Coordinates:* ${newRecordPayload['Site location']}\n` : '') +
+                  `• *Mode:* PLANNING\n` +
+                  `• *Readiness:* HOLD: PRE-CON BLOCKED 🔴\n\n` +
+                  `🎫 *Ticket ${ticketId} Created for Maintenance.*`);
+              }
+              return; // STOP execution here. Do not process the image as a sales lead.
+          }
+          // Note: Future override handlers (like explicit TICKET_UPDATEs accompanying a photo) can be added here.
+      }
+  }
+
+  // 1. IF NO MEDIA AT ALL, PROCESS AS PURE VOICE/TEXT COMMAND
   if (!hasVisualMedia) {
     await triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity);
     return;
   }
 
+  // 2. STANDARD VISUAL PROCESSING (If no explicit override command was found)
   const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
   const storageResults = await Promise.all(uploadPromises);
 
@@ -3308,6 +3351,7 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
   console.log(`🚚 LOGISTICS FORK: Voice-to-Integer Freight & BOL Triage Active`);
   console.log(`📦 MISSING PARTS BRIDGE: Autonomous Logistics Dispatch & Claiming Active`);
+  console.log(`👁️ MULTIMODAL INTENT OVERRIDE: Screenshot Caption Override Active`);
   console.log(`📱 1-ON-1 SANDBOX RESILIENCE: Active Feedback & Direct DM Logging Active`);
   console.log(`🩹 ORPHAN HEALING: Auto-Link Parent Sites on Ticket Promotion Active`);
   console.log(`🔗 DYNAMIC SESSION BINDING: Auto-Unlink Stale Court Links Active`);
