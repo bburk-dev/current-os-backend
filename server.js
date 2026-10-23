@@ -2153,8 +2153,10 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
+  // --- MODIFIED TICKET_QUERY ROUTING: Check entities and matched sites ---
   if (triage.intent === 'STATUS_QUERY' || triage.intent === 'TICKET_QUERY') {
-    await handleSpokenStatusQuery(triage.queried_court_name, site, dispatchTarget, triage.intent === 'TICKET_QUERY');
+    const targetQuery = triage.queried_court_name || triage.referenced_entity_name || triage.matched_site_name;
+    await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, triage.intent === 'TICKET_QUERY');
     return;
   }
 
@@ -3084,8 +3086,10 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      // --- MODIFIED TICKET_QUERY ROUTING: Check entities and matched sites ---
       if (explicitIntent === 'STATUS' || explicitIntent === 'TICKET_QUERY') {
-        await handleSpokenStatusQuery(args.join(' '), site, dispatchTarget, explicitIntent === 'TICKET_QUERY');
+        const targetQuery = args.join(' ') || site?.fields?.['Site Name'];
+        await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, explicitIntent === 'TICKET_QUERY');
         return;
       }
 
@@ -3121,8 +3125,10 @@ app.post('/webhook', async (req, res) => {
             await handleSpokenWeatherQuery(nlp.queried_court_name, site, dispatchTarget);
             return;
           }
+          // --- MODIFIED TICKET_QUERY ROUTING: Check entities and matched sites ---
           if (nlp.intent === 'STATUS_QUERY' || nlp.intent === 'TICKET_QUERY') {
-            await handleSpokenStatusQuery(nlp.queried_court_name, site, dispatchTarget, nlp.intent === 'TICKET_QUERY');
+            const targetQuery = nlp.queried_court_name || nlp.referenced_entity_name || nlp.matched_site_name;
+            await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, nlp.intent === 'TICKET_QUERY');
             return;
           }
           if (nlp.intent === 'READINESS_QUERY') {
