@@ -1,7 +1,7 @@
 /**
  * TITAN OS V5.4.0 — CLOSED-LOOP AUTONOMOUS FACTORY QA BRIDGE & DEFECT BIFURCATION,
  * 1-ON-1 SANDBOX RESILIENCE, DYNAMIC SESSION BINDING, ZERO-FRICTION UPDATES & LEAD INGESTION
- * + SCALE AI LOGISTICS FORK & MULTIMODAL INTENT OVERRIDE
+ * + SCALE AI LOGISTICS FORK & MULTIMODAL INTENT OVERRIDE (HARDENED)
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine): When an install crew
@@ -10,8 +10,9 @@
  * 2. Logistics Missing Parts Bridge: Installers speak missing parts ("need silicone"). Titan OS
  *    creates a ticket and sends an interactive [Claim Delivery] button to the Logistics Hive.
  *    When Rob/Ranjeet claim it, it notifies the installers that parts are en route.
- * 3. Multimodal Intent Override: Prevents visual AI from misclassifying screenshots by 
- *    evaluating accompanying text captions for explicit commands (e.g., "create a site") first.
+ * 3. Hardened Multimodal Intent Override: Prevents visual AI from misclassifying screenshots by 
+ *    evaluating accompanying text captions for explicit commands (service, repair, maintenance) 
+ *    first, uploading the media, and attaching it to the newly generated Airtable ticket.
  * 4. 1-on-1 Sandbox & Direct DM Resilience: Optimizes dark matter ingestion for direct 1-on-1 DMs.
  * 5. Orphan Ticket Auto-Healing: Dynamically resolves and binds the parent Site record.
  * 6. Dynamic Session Site Overrides: Eliminates multi-site phone collisions.
@@ -280,6 +281,26 @@ async function streamToDarkMatterVault({
     return inserted?.[0] || null;
   } catch (err) {
     return null;
+  }
+}
+
+async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
+  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return [];
+  try {
+    const filter = siteNameOrId.startsWith('rec')
+      ? `site_id=eq.${siteNameOrId}`
+      : `site_name=ilike.*${encodeURIComponent(siteNameOrId.trim())}*`;
+
+    const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?${filter}&order=created_at.desc&limit=${limit}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: getSupabaseHeaders('application/json')
+    });
+
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (err) {
+    return [];
   }
 }
 
@@ -2022,14 +2043,12 @@ async function handleVoiceToIntegerFreight(nlp, site, worker, callerIdentity, di
 
 /**
  * AUTONOMOUS LOGISTICS MISSING PARTS BRIDGE
- * Creates a high-priority ticket and broadcasts an interactive button to the Logistics Hive.
  */
 async function handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTarget, fromPhone) {
   const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
   const siteLabel = site?.fields?.['Site Name'] || nlp.matched_site_name || 'Assigned Court';
   const itemsNeeded = nlp.requested_items || nlp.distilled_context || nlp.transcript_en;
 
-  // 1. Create High-Priority Supply Delivery Ticket
   const assignmentPayload = {
     'Date': new Date().toISOString().split('T')[0],
     'Assignment Type': 'Supply Delivery',
@@ -2046,7 +2065,6 @@ async function handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTa
   const ticketDbId = createdTicket.id;
   const ticketRef = createdTicket?.fields?.['Assignment ID'] ? `#${createdTicket.fields['Assignment ID']}` : 'SUPPLY';
 
-  // 2. Acknowledge directly to the Field Crew (Originator)
   const ackCard = `🛠️ *TITAN OS | SUPPLY REQUEST LOGGED*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `📦 *Missing:* ${itemsNeeded}\n` +
@@ -2055,7 +2073,6 @@ async function handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTa
   
   await sendWhatsAppMessage(dispatchTarget, ackCard);
 
-  // 3. Autonomously Route Interactive Button to Logistics Hive
   const allSites = await getCachedSites();
   const logisticsSite = allSites.find(s => 
     (s.fields['Workflow Mode'] === 'LOGISTICS') || 
@@ -2074,7 +2091,6 @@ async function handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTa
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `Tap below to claim this delivery.`;
     
-    // Pass ticketDbId and siteId in the payload to allow origin-notification upon claiming
     const buttons = [{ id: `CLAIM_SUPPLY_${ticketDbId}_${site?.id || 'none'}`, title: '🚚 Claim Delivery' }];
     await sendWhatsAppButtons(logisticsTarget, logisticsCard, buttons);
   }
@@ -2311,19 +2327,27 @@ async function processMediaBatch(batch) {
     isIndoor: indoorSite
   };
 
-  // Extract any accompanying text/caption sent with the media batch
+  // Extract accompanying text/caption sent with the media batch
   const batchText = items.map(i => i.caption || '').filter(Boolean).join(' ').trim();
 
-  // NEW: INTENT OVERRIDE ARCHITECTURE
-  // If there is an image/video BUT it has a descriptive caption, check the caption for explicit commands first.
-  if (hasVisualMedia && batchText.length > 5) {
+  // ALWAYS UPLOAD MEDIA FIRST: Guarantees Supabase URLs are available for explicit ticket creation
+  let storageResults = [];
+  if (hasVisualMedia || items.some(i => i.type === 'audio' || i.type === 'voice')) {
+    const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
+    storageResults = await Promise.all(uploadPromises);
+  }
+
+  // 1. INTENT OVERRIDE: IF THERE IS A DESCRIPTIVE CAPTION, TRIAGE NLP FIRST
+  if (hasVisualMedia && batchText.length > 3) {
+      console.log(`[Multimodal Override]: Caption detected ("${batchText}"). Bypassing visual triage to evaluate intent.`);
       const triage = await triageSpokenOrTextNLP(batchText, false, []);
+      
       if (triage) {
           const combinedTranscript = (triage.transcript_en || '').toLowerCase();
-          const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
           
+          // A. Site Creation Override
+          const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
           if (newSiteMatch) {
-              console.log('[Multimodal Override]: Explicit site creation command found accompanying image. Bypassing visual triage.');
               const newSiteName = newSiteMatch[1].trim();
               const recentPin = lastDroppedCoordinates.get(fromPhone);
 
@@ -2346,7 +2370,8 @@ async function processMediaBatch(batch) {
                 if (fromPhone) userActiveSiteMap.set(fromPhone, createdSite.id);
                 if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, createdSite.id);
                 
-                // Generate the requested maintenance ticket (from the user's prompt context)
+                // Generate a Service/Maintenance ticket alongside the site creation
+                const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
                 const assignmentPayload = {
                   'Date': new Date().toISOString().split('T')[0],
                   'Assignment Type': 'Service',
@@ -2355,7 +2380,8 @@ async function processMediaBatch(batch) {
                   'Source': 'Multimodal Text Prompt',
                   'Status': 'Open',
                   'Sites': [createdSite.id],
-                  'Notes': `[INITIAL MAINTENANCE INTAKE]\n• Requested By: ${worker?.fields?.['Full Name'] || callerIdentity?.name || 'User'}\n• Context: ${batchText}`
+                  'Notes': `[INITIAL SITE INTAKE]\n• Requested By: ${worker?.fields?.['Full Name'] || callerIdentity?.name || 'User'}\n• Context: ${batchText}`,
+                  'Attachment(s)': attachmentPayload
                 };
                 
                 const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
@@ -2366,25 +2392,59 @@ async function processMediaBatch(batch) {
                   (newRecordPayload['Site location'] ? `• *Coordinates:* ${newRecordPayload['Site location']}\n` : '') +
                   `• *Mode:* PLANNING\n` +
                   `• *Readiness:* HOLD: PRE-CON BLOCKED 🔴\n\n` +
-                  `🎫 *Ticket ${ticketId} Created for Maintenance.*`);
+                  `🎫 *Ticket ${ticketId} Created for Service Request.*`);
               }
-              return; // STOP execution here. Do not process the image as a sales lead.
+              return; // STOP execution here.
           }
-          // Note: Future override handlers (like explicit TICKET_UPDATEs accompanying a photo) can be added here.
+
+          // B. Broadened Task/Ticket Creation Override
+          // Triggers on: 'TICKET_UPDATE', 'TICKET_QUERY', 'SUPPLY_REQUEST', or any physical assignment verb in the text.
+          if (triage.intent === 'TICKET_UPDATE' || triage.intent === 'TICKET_QUERY' || triage.intent === 'SUPPLY_REQUEST' || /(assign|service|maintenance|repair|ticket|task|fix|create)/i.test(combinedTranscript)) {
+              console.log('[Multimodal Override]: Executing generalized text command from caption.');
+              
+              let targetSiteId = site?.id;
+              if (triage.matched_site_name || triage.queried_court_name || triage.referenced_entity_name) {
+                  const matched = await lookupSite(null, triage.matched_site_name || triage.queried_court_name || triage.referenced_entity_name);
+                  if (matched) targetSiteId = matched.id;
+              }
+
+              const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
+
+              const assignmentPayload = {
+                  'Date': new Date().toISOString().split('T')[0],
+                  'Assignment Type': 'Service',
+                  'Task Category': 'Maintenance',
+                  'Priority': 'Medium',
+                  'Source': 'Image Caption Override',
+                  'Status': 'Open',
+                  'Notes': `[FIELD REQUEST - ${worker?.fields?.['Full Name'] || callerIdentity?.name || 'User'}]\n"${batchText}"\n\n(Media attached to Airtable record)`,
+                  'Attachment(s)': attachmentPayload
+              };
+
+              if (targetSiteId) assignmentPayload['Sites'] = [targetSiteId];
+              if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+
+              const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+              const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'TASK';
+              const targetName = triage.matched_site_name || triage.queried_court_name || triage.referenced_entity_name || site?.fields?.['Site Name'] || 'Fleet Operations';
+
+              await sendWhatsAppMessage(dispatchTarget, `📝 *TITAN OS | SERVICE TICKET CREATED*\n\n` +
+                `🎫 *Ticket:* ${ticketId}\n` +
+                `📍 *Assigned To:* ${targetName}\n` +
+                `📋 *Notes:* "${batchText}"\n\n` +
+                `📎 Media successfully attached to Airtable.`);
+              return; // STOP execution here. Do not process the image as a commercial lead.
+          }
       }
   }
 
-  // 1. IF NO MEDIA AT ALL, PROCESS AS PURE VOICE/TEXT COMMAND
+  // 2. IF NO MEDIA AT ALL, PROCESS AS PURE VOICE/TEXT COMMAND
   if (!hasVisualMedia) {
     await triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity);
     return;
   }
 
-  // 2. STANDARD VISUAL PROCESSING (If no explicit override command was found)
-  const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
-  const storageResults = await Promise.all(uploadPromises);
-
-  // STAGE 0: VISUAL TRIAGE (RECEIPTS VS COMMERCIAL LEADS VS FREIGHT VS NOISE)
+  // 3. STANDARD VISUAL PROCESSING (If no explicit override command was found)
   if (!hasVideo) {
     const visualTriage = await classifyVisualMediaIntent(items);
 
@@ -3351,7 +3411,7 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
   console.log(`🚚 LOGISTICS FORK: Voice-to-Integer Freight & BOL Triage Active`);
   console.log(`📦 MISSING PARTS BRIDGE: Autonomous Logistics Dispatch & Claiming Active`);
-  console.log(`👁️ MULTIMODAL INTENT OVERRIDE: Screenshot Caption Override Active`);
+  console.log(`👁️ MULTIMODAL INTENT OVERRIDE: Hardened Screenshot Caption Override Active`);
   console.log(`📱 1-ON-1 SANDBOX RESILIENCE: Active Feedback & Direct DM Logging Active`);
   console.log(`🩹 ORPHAN HEALING: Auto-Link Parent Sites on Ticket Promotion Active`);
   console.log(`🔗 DYNAMIC SESSION BINDING: Auto-Unlink Stale Court Links Active`);
