@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.4.0 — CLOSED-LOOP AUTONOMOUS FACTORY QA BRIDGE & DEFECT BIFURCATION,
+ * TITAN OS V5.4.1 — CLOSED-LOOP AUTONOMOUS FACTORY QA BRIDGE & DEFECT BIFURCATION,
  * 1-ON-1 SANDBOX RESILIENCE, DYNAMIC SESSION BINDING, ZERO-FRICTION UPDATES & LEAD INGESTION
  * + SCALE AI LOGISTICS FORK & MULTIMODAL INTENT OVERRIDE (HARDENED)
  * 
@@ -11,8 +11,7 @@
  *    creates a ticket and sends an interactive [Claim Delivery] button to the Logistics Hive.
  *    When Rob/Ranjeet claim it, it notifies the installers that parts are en route.
  * 3. Hardened Multimodal Intent Override: Prevents visual AI from misclassifying screenshots by 
- *    evaluating accompanying text captions for explicit commands (service, repair, maintenance) 
- *    first, uploading the media, and attaching it to the newly generated Airtable ticket.
+ *    evaluating accompanying text captions (or trailing text messages) for explicit commands.
  * 4. 1-on-1 Sandbox & Direct DM Resilience: Optimizes dark matter ingestion for direct 1-on-1 DMs.
  * 5. Orphan Ticket Auto-Healing: Dynamically resolves and binds the parent Site record.
  * 6. Dynamic Session Site Overrides: Eliminates multi-site phone collisions.
@@ -1921,6 +1920,7 @@ ROUTING INTENTS:
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies (e.g., missing base plates, need more silicone, out of screws).
 12. "FREIGHT_UPDATE": Driver, freight logistics coordinator, or warehouse staff providing transit updates, crate counts, or BOL arrivals.
+13. "HISTORICAL_REFERENCE": User is sharing an old photo, throwback, or past memory (e.g. "last week", "throwback"). Disregard physical evaluation.
 
 Extract:
 "queried_court_name": string or null,
@@ -1934,7 +1934,7 @@ Extract:
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
@@ -2105,7 +2105,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   console.log('[Voice Intent]:', { intent: triage.intent, querySite: triage.queried_court_name });
 
-  if (triage.intent === 'PURE_NOISE') return;
+  if (triage.intent === 'PURE_NOISE' || triage.intent === 'HISTORICAL_REFERENCE') return;
 
   const combinedTranscript = (triage.transcript_en || '').toLowerCase();
   const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
@@ -2124,6 +2124,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
     if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
       newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+      lastDroppedCoordinates.delete(fromPhone); // FIX 3: Delete stale pin
     }
 
     const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
@@ -2153,7 +2154,6 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
-  // --- MODIFIED TICKET_QUERY ROUTING: Check entities and matched sites ---
   if (triage.intent === 'STATUS_QUERY' || triage.intent === 'TICKET_QUERY') {
     const targetQuery = triage.queried_court_name || triage.referenced_entity_name || triage.matched_site_name;
     await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, triage.intent === 'TICKET_QUERY');
@@ -2329,8 +2329,8 @@ async function processMediaBatch(batch) {
     isIndoor: indoorSite
   };
 
-  // Extract accompanying text/caption sent with the media batch
-  const batchText = items.map(i => i.caption || '').filter(Boolean).join(' ').trim();
+  // FIX 1: Extract captions AND trailing text messages sent sequentially into the debounce batch
+  const batchText = items.map(i => i.caption || i.rawMessage?.text?.body || '').filter(Boolean).join(' ').trim();
 
   // ALWAYS UPLOAD MEDIA FIRST: Guarantees Supabase URLs are available for explicit ticket creation
   let storageResults = [];
@@ -2339,12 +2339,19 @@ async function processMediaBatch(batch) {
     storageResults = await Promise.all(uploadPromises);
   }
 
-  // 1. INTENT OVERRIDE: IF THERE IS A DESCRIPTIVE CAPTION, TRIAGE NLP FIRST
+  // 1. INTENT OVERRIDE: IF THERE IS A DESCRIPTIVE CAPTION OR TEXT, TRIAGE NLP FIRST
   if (hasVisualMedia && batchText.length > 3) {
       console.log(`[Multimodal Override]: Caption detected ("${batchText}"). Bypassing visual triage to evaluate intent.`);
       const triage = await triageSpokenOrTextNLP(batchText, false, []);
       
       if (triage) {
+          // FIX 4: Catch throwback photos before they hit the physical scanner
+          if (triage.intent === 'HISTORICAL_REFERENCE') {
+              console.log('[Multimodal Override]: Historical reference detected. Skipping 8-Gate audit.');
+              await sendWhatsAppMessage(dispatchTarget, `🕰️ *TITAN OS | HISTORICAL MEDIA LOGGED*\nSaved to vault. Bypassing live 8-Gate physical audit.`);
+              return; // STOP execution
+          }
+
           const combinedTranscript = (triage.transcript_en || '').toLowerCase();
           
           // A. Site Creation Override
@@ -2363,6 +2370,7 @@ async function processMediaBatch(batch) {
 
               if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
                 newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+                lastDroppedCoordinates.delete(fromPhone); // FIX 3: Delete stale pin
               }
 
               const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
@@ -2400,7 +2408,6 @@ async function processMediaBatch(batch) {
           }
 
           // B. Broadened Task/Ticket Creation Override
-          // Triggers on: 'TICKET_UPDATE', 'TICKET_QUERY', 'SUPPLY_REQUEST', or any physical assignment verb in the text.
           if (triage.intent === 'TICKET_UPDATE' || triage.intent === 'TICKET_QUERY' || triage.intent === 'SUPPLY_REQUEST' || /(assign|service|maintenance|repair|ticket|task|fix|create)/i.test(combinedTranscript)) {
               console.log('[Multimodal Override]: Executing generalized text command from caption.');
               
@@ -2912,6 +2919,12 @@ app.post('/webhook', async (req, res) => {
         const openAssignments = await getCachedOpenAssignments();
         const ticket = openAssignments.find(a => a.id === ticketDbId);
         if (ticket) {
+            // FIX 2: Ghost Button Double-Claim Check
+            const currentStatus = ticket.fields['Status'];
+            if (currentStatus === 'In Progress' || currentStatus === 'Complete') {
+                await dispatchReply(`⚠️ *Delivery Already Claimed*\nThis supply request is already being handled.`);
+                return;
+            }
             updatePayload['Notes'] = (ticket.fields['Notes'] || '') + `\n\n[CLAIMED by ${claimerName} at ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}]`;
         }
 
@@ -2960,6 +2973,9 @@ app.post('/webhook', async (req, res) => {
       const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
       if (distanceMeters <= 300) {
+        // FIX 3: Delete stale pin after using it for check-in
+        lastDroppedCoordinates.delete(fromPhone);
+
         await airtableWriteWithAutoDrop('Sites', {
           'Last Note': `Arrival verified for ${workerName} at ${timestamp} (${Math.round(distanceMeters)}m).`,
           'Last Intent': 'PRESENCE_VERIFIED'
@@ -3004,6 +3020,22 @@ app.post('/webhook', async (req, res) => {
       const rawText = message.text.body.trim();
       const [trigger, ...args] = rawText.split(' ');
       const explicitIntent = COMMAND_MAP[trigger.toLowerCase()];
+      const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
+
+      // FIX 1: Catch trailing text messages into an active media debounce batch
+      if (mediaDebounceQueues.has(queueKey)) {
+        console.log(`[Debouncer] Catching trailing text message into active media batch.`);
+        const queue = mediaDebounceQueues.get(queueKey);
+        queue.items.push({
+          buffer: null,
+          mimeType: 'text/plain',
+          messageId: messageId,
+          caption: rawText,
+          type: 'text',
+          rawMessage: message
+        });
+        return;
+      }
 
       const newSiteMatch = rawText.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
       
@@ -3021,6 +3053,7 @@ app.post('/webhook', async (req, res) => {
 
         if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
           newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+          lastDroppedCoordinates.delete(fromPhone); // FIX 3: Delete stale pin
         }
 
         const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
@@ -3086,7 +3119,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // --- MODIFIED TICKET_QUERY ROUTING: Check entities and matched sites ---
       if (explicitIntent === 'STATUS' || explicitIntent === 'TICKET_QUERY') {
         const targetQuery = args.join(' ') || site?.fields?.['Site Name'];
         await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, explicitIntent === 'TICKET_QUERY');
@@ -3125,7 +3157,6 @@ app.post('/webhook', async (req, res) => {
             await handleSpokenWeatherQuery(nlp.queried_court_name, site, dispatchTarget);
             return;
           }
-          // --- MODIFIED TICKET_QUERY ROUTING: Check entities and matched sites ---
           if (nlp.intent === 'STATUS_QUERY' || nlp.intent === 'TICKET_QUERY') {
             const targetQuery = nlp.queried_court_name || nlp.referenced_entity_name || nlp.matched_site_name;
             await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, nlp.intent === 'TICKET_QUERY');
@@ -3406,14 +3437,14 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.4.0',
-    engine: 'Titan OS V5.4.0 (Autonomous Closed-Loop QA Bridge, Freight Ledger & Missing Parts Bridge)'
+    version: '5.4.1',
+    engine: 'Titan OS V5.4.1 (Autonomous Closed-Loop QA Bridge, Freight Ledger & Missing Parts Bridge)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.4.0 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.4.1 RUNNING ON PORT ${PORT}`);
   console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
   console.log(`🚚 LOGISTICS FORK: Voice-to-Integer Freight & BOL Triage Active`);
   console.log(`📦 MISSING PARTS BRIDGE: Autonomous Logistics Dispatch & Claiming Active`);
