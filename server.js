@@ -223,6 +223,104 @@ function invalidateAirtableCache(entity = 'all') {
 }
 
 // ====================================================================
+// 2A. DATABASE WRITE & AUTO-HEALER (AIRTABLE) + MEDIA UPLOAD (SUPABASE)
+// ====================================================================
+
+async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, retries = 2) {
+  const url = recordId 
+    ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}/${recordId}`
+    : `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}`;
+    
+  const method = recordId ? 'PATCH' : 'POST';
+  let currentPayload = { fields: { ...payload } };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Authorization': `Bearer ${CONFIG.airtable.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(currentPayload)
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        const errorMsg = errorData?.error?.message || '';
+        
+        if (res.status === 422) {
+          // The Universal Schema Auto-Healer (Entry #049 & #069)
+          const match = errorMsg.match(/field\s*["'\\]+([^"'\\]+)["'\\]+/i) || errorMsg.match(/Unknown field name\s*["'\\]+([^"'\\]+)["'\\]+/i);
+          if (match && match[1]) {
+            const badField = match[1];
+            console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}"`);
+            delete currentPayload.fields[badField];
+            continue; // Retry without the bad field
+          }
+        }
+        throw new Error(`HTTP ${res.status}: ${errorMsg}`);
+      }
+      return await res.json();
+    } catch (err) {
+      if (attempt === retries) {
+        console.error(`[Airtable Write Error] Table: ${tableName} |`, err.message);
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+async function uploadToSupabase(buffer, mimeType) {
+  if (!buffer || !CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return { storagePath: null, signedUrl: null };
+  
+  const extMap = {
+    'image/jpeg': 'jpg', 'image/png': 'png',
+    'video/mp4': 'mp4', 'video/quicktime': 'mov',
+    'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3'
+  };
+  const ext = extMap[mimeType] || 'bin';
+  
+  const now = new Date();
+  const folder = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const filename = `${folder}/${crypto.randomUUID()}.${ext}`;
+  
+  const uploadUrl = `${CONFIG.supabase.url}/storage/v1/object/${CONFIG.supabase.bucket}/${filename}`;
+  
+  try {
+    const res = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CONFIG.supabase.serviceRoleKey}`,
+        'Content-Type': mimeType,
+        'x-upsert': 'true'
+      },
+      body: buffer
+    });
+    
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    
+    // Asymmetric Storage Validation Layer (Entry #061)
+    const signUrl = `${CONFIG.supabase.url}/storage/v1/object/sign/${CONFIG.supabase.bucket}/${filename}`;
+    const signRes = await fetch(signUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CONFIG.supabase.serviceRoleKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ expiresIn: 604800 }) // 7-day signed token
+    });
+    
+    const signData = await signRes.json();
+    return { storagePath: filename, signedUrl: signData.signedURL || null };
+  } catch (err) {
+    console.error('[Supabase Upload Error]:', err.message);
+    return { storagePath: null, signedUrl: null };
+  }
+}
+
+// ====================================================================
 // 2B. QUICKBOOKS ONLINE REST API WRAPPER
 // ====================================================================
 
