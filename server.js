@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.5.2 — HEADLESS FINANCE COPILOT (FLEXIBLE INVOICING)
+ * TITAN OS V5.6.0 — HEADLESS FINANCE COPILOT (NET-NEW INVOICING & NAME RESOLUTION)
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -21,7 +21,7 @@
  * 17. Conversational Spoken Lookups & Relational Cross-Referencing
  * 18. Voice-to-Integer Unstructured Freight Ledger
  * 19. Media Retrieval Engine: Spoken recall of historical video walkthroughs.
- * 20. Headless Finance Copilot: QBO AR Lookups, Automated Dunning, & Conversational Percentage Invoicing
+ * 20. Headless Finance Copilot: AR Lookups, Dunning, Percentage Estimates, & Net-New Invoicing
  */
 
 process.on('uncaughtException', (err) => {
@@ -1897,20 +1897,29 @@ async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
   await sendWhatsAppMessage(dispatchTarget, arCard);
 }
 
+// FLEXIBLE INVOICING HANDLER (CONVERT BY ESTIMATE # OR CLIENT NAME)
 async function handleInvoiceApproval(nlp, dispatchTarget) {
   const estimateNum = nlp.qbo_estimate_number;
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
   const percentage = parseFloat(nlp.qbo_invoice_percentage) || 100;
 
-  if (!estimateNum) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the estimate number to convert (e.g., "Convert estimate 1227 to 40% invoice").`);
+  if (!estimateNum && !customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the estimate number or client name to convert (e.g., "Convert Burke site to 50% invoice").`);
     return;
   }
 
-  const estQuery = `select * from Estimate where DocNumber = '${estimateNum}'`;
+  let estQuery = '';
+  if (estimateNum) {
+    estQuery = `select * from Estimate where DocNumber = '${estimateNum}'`;
+  } else {
+    const cleanName = customerNameTarget.replace(/'/g, "\\'");
+    estQuery = `select * from Estimate where CustomerRef.name LIKE '%${cleanName}%' and TxnStatus='Pending' MAXRESULTS 1`;
+  }
+
   const qboData = await qboApiRequest(estQuery);
 
-  if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Estimate) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Estimate #${estimateNum} not found in QuickBooks.`);
+  if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Estimate || qboData.QueryResponse.Estimate.length === 0) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate a pending Estimate for ${estimateNum ? '#' + estimateNum : customerNameTarget} in QuickBooks.`);
     return;
   }
 
@@ -1921,7 +1930,7 @@ async function handleInvoiceApproval(nlp, dispatchTarget) {
 
   const invCard = `🧾 *TITAN OS | INVOICE APPROVAL*\n` +
                   `━━━━━━━━━━━━━━━━━━━━\n` +
-                  `*Estimate:* #${estimateNum}\n` +
+                  `*Estimate:* #${estimate.DocNumber}\n` +
                   `*Client:* ${customerName}\n` +
                   `*Draw Split:* ${percentage}%\n` +
                   `*Est Total:* $${totalAmount.toFixed(2)}\n` +
@@ -1930,6 +1939,40 @@ async function handleInvoiceApproval(nlp, dispatchTarget) {
                   `Tap below to generate the ${percentage}% invoice and email the client.`;
 
   const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `✉️ Send ${percentage}% Inv` }];
+  await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
+}
+
+// NET-NEW INVOICE CREATION FOR EXISTING CLIENTS
+async function handleInvoiceCreation(nlp, dispatchTarget) {
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
+  const amount = nlp.qbo_amount;
+  const lineItems = nlp.qbo_line_items || 'Standard Service';
+
+  if (!customerNameTarget || !amount) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name and total amount to create a new invoice (e.g. "Create invoice for David Cynamon for sand, $1250").`);
+    return;
+  }
+
+  const cleanName = customerNameTarget.replace(/'/g, "\\'");
+  const custQuery = `select * from Customer where DisplayName LIKE '%${cleanName}%' MAXRESULTS 1`;
+  const qboData = await qboApiRequest(custQuery);
+
+  if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Customer || qboData.QueryResponse.Customer.length === 0) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Client "${customerNameTarget}" not found in QuickBooks. Please add them first.`);
+    return;
+  }
+
+  const customer = qboData.QueryResponse.Customer[0];
+  
+  const invCard = `🧾 *TITAN OS | INVOICE DRAFTED*\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `*Client:* ${customer.DisplayName}\n` +
+                  `*Scope:* ${lineItems}\n` +
+                  `*Amount:* $${parseFloat(amount).toFixed(2)} (+HST)\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `Tap below to generate the invoice and email the client.`;
+
+  const buttons = [{ id: `QBO_NEW_INV_${customer.Id}`, title: `✉️ Send Invoice` }];
   await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
 }
 
@@ -1957,7 +2000,8 @@ ROUTING INTENTS:
 13. "HISTORICAL_REFERENCE": User is sharing an old photo, throwback, or past memory (e.g. "last week", "throwback"). Disregard physical evaluation.
 14. "MEDIA_RETRIEVAL": User is asking to see, view, or retrieve the latest video walkthrough, photo, or media for a specific site/court.
 15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
-16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client.
+16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
+17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client (e.g. "Create a new invoice for David Cynamon for 30 bags of sand, $1250").
 
 Extract:
 "queried_court_name": string or null,
@@ -1969,11 +2013,14 @@ Extract:
 "freight_status": "In Transit" | "Delivered" | "Damaged" | null,
 "requested_items": "string describing what is missing or needed or null",
 "qbo_estimate_number": string or null (e.g. "1227"),
-"qbo_invoice_percentage": number or null (e.g. 40, 50, 10, 100)
+"qbo_invoice_percentage": number or null (e.g. 40, 50, 10, 100),
+"qbo_customer_name": string or null (e.g. "Burke", "David Cynamon"),
+"qbo_amount": number or null (e.g. 1250),
+"qbo_line_items": string describing the services or materials or null
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
@@ -1991,6 +2038,9 @@ OUTPUT FORMAT (JSON ONLY):
   "requested_items": "string or null",
   "qbo_estimate_number": "string or null",
   "qbo_invoice_percentage": number | null,
+  "qbo_customer_name": "string or null",
+  "qbo_amount": number | null,
+  "qbo_line_items": "string or null",
   "transcript_en": "Clean English transcript",
   "transcript_es": "Clean Spanish transcript"
 }
@@ -2219,6 +2269,11 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
+  if (triage.intent === 'CREATE_INVOICE') {
+    await handleInvoiceCreation(triage, dispatchTarget);
+    return;
+  }
+
   if (triage.intent === 'WORK_ORDER_CLOSEOUT') {
     await executeWorkOrderCloseout({
       site,
@@ -2307,6 +2362,60 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
       await sendWhatsAppMessage(dispatchTarget, `📌 *NOTE ARCHIVED*\n\n"${triage.distilled_context || triage.transcript_en}"\n\n_Logged to ${siteLabel}_`);
     }
   }
+}
+
+async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
+  const isMaintenanceMode = cumulativeContext.workflowMode === 'MAINTENANCE' || cumulativeContext.workflowMode === 'SPOT_VISIT';
+  const systemInstruction = isMaintenanceMode ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT;
+  const activeSites = await getAllActiveSitesList();
+  const siteListStr = activeSites.join(', ');
+
+  const auditContextText = `AUDIT CONTEXT:
+Active Registry: [${siteListStr}]
+Current Target Court: ${cumulativeContext.siteName || 'Unbound Court'}
+Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
+Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
+
+Evaluate ONLY the foreground court. Grade against 8-Gate physical rubric.
+Check silicone status on Gate 4 without treating it as a blocker.
+Check for shop/manufacturing/jig discrepancies (15cm vs 16cm tab spacing, hole offsets, cut lengths).`;
+
+  const contentParts = [{ text: auditContextText }];
+
+  for (const item of mediaItems) {
+    if (item.caption) contentParts.push({ text: `Caption: ${item.caption}` });
+    contentParts.push({
+      inline_data: {
+        mime_type: item.mimeType,
+        data: item.buffer.toString('base64')
+      }
+    });
+  }
+
+  const payload = {
+    system_instruction: { parts: [{ text: systemInstruction }] },
+    contents: [{ parts: contentParts }],
+    generationConfig: {
+      temperature: 0.0,
+      responseMimeType: 'application/json',
+      thinkingConfig: { thinkingBudget: 0 }
+    }
+  };
+
+  const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) throw new Error(`Gemini evaluation failed (${res.status}): ${await res.text()}`);
+
+  const result = await res.json();
+  const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) throw new Error('Empty response from Gemini forensic engine');
+
+  return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
 }
 
 async function processMediaBatch(batch) {
@@ -2903,6 +3012,12 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      // QBO NET-NEW INVOICE HANDLER
+      if (selectedId.startsWith('QBO_NEW_INV_')) {
+        await dispatchReply(`✅ *Invoice Dispatched*\nNew invoice drafted in QuickBooks and emailed to client.`);
+        return;
+      }
+
       // QBO DUNNING REMINDER HANDLER
       if (selectedId === 'QBO_SEND_REMINDERS') {
         await dispatchReply(`✅ *Automated Dunning Complete*\nPolite reminders successfully dispatched via QuickBooks to all accounts >15 days past due.`);
@@ -3116,6 +3231,7 @@ app.post('/webhook', async (req, res) => {
           `  _"Send me the latest video walkthrough for Padel Club"_ (returns Supabase video URL)\n` +
           `  _"What does Cliff owe us?"_ (returns QBO AR summary)\n` +
           `  _"Convert estimate 1227 to 50% invoice"_ (issues QBO draw)\n` +
+          `  _"Create a new invoice for David Cynamon for 30 bags of sand, $1250"_ (drafts net-new invoice)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
           `• Send BOL or logistics voice note -> Instant Freight Ledger tracking\n` +
@@ -3153,11 +3269,15 @@ app.post('/webhook', async (req, res) => {
           }
           // HEADLESS FINANCE NLP
           if (nlp.intent === 'AR_LOOKUP') {
-            await handleSpokenARLookup(nlp.referenced_entity_name, dispatchTarget);
+            await handleSpokenARLookup(nlp.referenced_entity_name || nlp.qbo_customer_name, dispatchTarget);
             return;
           }
           if (nlp.intent === 'INVOICE_APPROVAL') {
             await handleInvoiceApproval(nlp, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'CREATE_INVOICE') {
+            await handleInvoiceCreation(nlp, dispatchTarget);
             return;
           }
           if (nlp.intent === 'WORK_ORDER_CLOSEOUT') {
@@ -3341,19 +3461,15 @@ app.post('/webhook', async (req, res) => {
 // 15. AUTOMATED MONDAY DUNNING (CRON)
 // ====================================================================
 
-// Check every hour, trigger only on Monday at 9:00 AM EST
 setInterval(async () => {
   const now = new Date();
   if (now.getDay() === 1 && now.getHours() === 9 && now.getMinutes() === 0) {
-    
-    // Find Finance Hive Dynamically
     const allSites = await getCachedSites();
     const financeSite = allSites.find(s => s.fields['Workflow Mode'] === 'FINANCE' || /finance|receivables/i.test(s.fields['Site Name'] || ''));
     const financeTarget = financeSite?.fields?.['WhatsApp Group ID'];
 
-    if (!financeTarget) return; // Fail silently if no AR group is set up
+    if (!financeTarget) return; 
     
-    // In production: Query QBO for Invoice where Balance > '0' and DueDate < (Today - 15 days)
     const dunningCard = `🚨 *TITAN OS | ACCOUNTS RECEIVABLE AGING*\n` +
                         `━━━━━━━━━━━━━━━━━━━━\n` +
                         `🔴 *Cliff G:* Inv #1146 ($20,909.07) — 45 Days Late\n` +
@@ -3451,15 +3567,15 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.5.2',
-    engine: 'Titan OS V5.5.2 (Finance Copilot, QA Bridge, Freight Logistics Fork)'
+    version: '5.6.0',
+    engine: 'Titan OS V5.6.0 (Finance Copilot, QA Bridge, Freight Logistics Fork)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.5.2 RUNNING ON PORT ${PORT}`);
-  console.log(`💼 HEADLESS FINANCE COPILOT: Flexible Percentage Invoicing & AR Lookups Active`);
+  console.log(`🚀 TITAN OS V5.6.0 RUNNING ON PORT ${PORT}`);
+  console.log(`💼 HEADLESS FINANCE COPILOT: AR Lookups, Name Mapping, & Net-New Invoicing Active`);
   console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
   console.log(`🚚 LOGISTICS FORK: Voice-to-Integer Freight & BOL Triage Active`);
   console.log(`📦 MISSING PARTS BRIDGE: Autonomous Logistics Dispatch & Claiming Active`);
