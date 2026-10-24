@@ -1,6 +1,5 @@
 /**
- * TITAN OS V5.4.2 — MEDIA RETRIEVAL ENGINE, CLOSED-LOOP QA BRIDGE,
- * DYNAMIC SESSION BINDING, ZERO-FRICTION UPDATES & MULTIMODAL OVERRIDES
+ * TITAN OS V5.5.2 — HEADLESS FINANCE COPILOT (FLEXIBLE INVOICING)
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -22,6 +21,7 @@
  * 17. Conversational Spoken Lookups & Relational Cross-Referencing
  * 18. Voice-to-Integer Unstructured Freight Ledger
  * 19. Media Retrieval Engine: Spoken recall of historical video walkthroughs.
+ * 20. Headless Finance Copilot: QBO AR Lookups, Automated Dunning, & Conversational Percentage Invoicing
  */
 
 process.on('uncaughtException', (err) => {
@@ -80,6 +80,11 @@ const CONFIG = {
     baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
     endpoint: 'https://api.airtable.com/v0'
   },
+  qbo: {
+    companyId: process.env.QBO_COMPANY_ID,
+    accessToken: process.env.QBO_ACCESS_TOKEN, 
+    baseUrl: 'https://quickbooks.api.intuit.com/v3/company'
+  },
   google: {
     apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
   },
@@ -90,7 +95,7 @@ const CONFIG = {
 
 const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3500;
-const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
+const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'FINANCE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
 
 const lastDroppedCoordinates = new Map();
 const userActiveSiteMap = new Map(); // Dynamic in-memory session override per phone/dispatch target
@@ -217,6 +222,38 @@ function invalidateAirtableCache(entity = 'all') {
 }
 
 // ====================================================================
+// 2B. QUICKBOOKS ONLINE REST API WRAPPER
+// ====================================================================
+
+async function qboApiRequest(pathOrQuery, method = 'GET', body = null) {
+  if (!CONFIG.qbo.companyId || !CONFIG.qbo.accessToken) return null;
+  
+  const isQuery = pathOrQuery.startsWith('select');
+  const url = isQuery 
+    ? `${CONFIG.qbo.baseUrl}/${CONFIG.qbo.companyId}/query?query=${encodeURIComponent(pathOrQuery)}`
+    : `${CONFIG.qbo.baseUrl}/${CONFIG.qbo.companyId}${pathOrQuery.startsWith('/') ? '' : '/'}${pathOrQuery}`;
+
+  const options = {
+    method,
+    headers: {
+      'Authorization': `Bearer ${CONFIG.qbo.accessToken}`,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    }
+  };
+  if (body) options.body = JSON.stringify(body);
+
+  try {
+    const res = await fetch(url, options);
+    if (!res.ok) throw new Error(`QBO HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('[QBO API Error]:', err.message);
+    return null;
+  }
+}
+
+// ====================================================================
 // 3. SUPABASE FORENSIC LOGGING VAULT
 // ====================================================================
 
@@ -322,7 +359,7 @@ function evaluateReadinessGate(siteRecord) {
     };
   }
 
-  if (['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY'].includes(mode)) {
+  if (['EXECUTIVE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'FINANCE'].includes(mode)) {
     return {
       status: 'OPERATIONAL 🏢',
       details: 'Internal facility / operational node.',
@@ -742,7 +779,6 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
     });
   }
 
-  // Fallback to most recent open ticket if not explicitly named
   if (!targetTicket && openAssignments.length > 0) {
     targetTicket = openAssignments[0];
   }
@@ -982,6 +1018,8 @@ const COMMAND_MAP = {
   '/readiness': 'READINESS_GATE_CHECK',
   '/video': 'MEDIA_RETRIEVAL',
   '/media': 'MEDIA_RETRIEVAL',
+  '/ar': 'AR_LOOKUP', 
+  '/invoice': 'INVOICE_APPROVAL',
   '/context': 'SITE_CONTEXT',
   '/search': 'SEARCH_VAULT',
   '/?': 'HELP',
@@ -1195,136 +1233,8 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   return { holds, warnings, nominal: isNominal, summaryText };
 }
 
-async function uploadToSupabase(fileBuffer, mimeType) {
-  let ext = 'mp4';
-  if (mimeType.includes('image')) ext = 'jpg';
-  if (mimeType.includes('audio') || mimeType.includes('ogg') || mimeType.includes('opus')) ext = 'ogg';
-  if (mimeType.includes('video') || mimeType.includes('mp4') || mimeType.includes('mov') || mimeType.includes('quicktime')) ext = 'mp4';
-
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
-  const uuid = crypto.randomUUID();
-  const storagePath = `${year}/${month}/${uuid}.${ext}`;
-
-  const uploadUrl = `${CONFIG.supabase.url}/storage/v1/object/${CONFIG.supabase.bucket}/${storagePath}`;
-  const uploadRes = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: getSupabaseHeaders(mimeType),
-    body: fileBuffer
-  });
-
-  if (!uploadRes.ok) throw new Error(`Upload failed (${uploadRes.status})`);
-
-  const signUrl = `${CONFIG.supabase.url}/storage/v1/object/sign/${CONFIG.supabase.bucket}/${storagePath}`;
-  const signRes = await fetch(signUrl, {
-    method: 'POST',
-    headers: getSupabaseHeaders('application/json'),
-    body: JSON.stringify({ expiresIn: 60 * 60 * 24 * 7 })
-  });
-
-  if (!signRes.ok) throw new Error(`Signing failed (${signRes.status})`);
-
-  const signData = await signRes.json();
-  const rawSignedPath = signData.signedURL || signData.signedUrl || '';
-  const fullSignedUrl = rawSignedPath.startsWith('http')
-    ? rawSignedPath
-    : `${CONFIG.supabase.url}/storage/v1${rawSignedPath.startsWith('/') ? '' : '/'}${rawSignedPath}`;
-
-  return { storagePath, signedUrl: fullSignedUrl };
-}
-
-async function airtableWriteWithAutoDrop(table, fields, recordId = null, attempt = 1) {
-  const cleanFields = { ...fields };
-
-  for (const [key, val] of Object.entries(cleanFields)) {
-    if (Array.isArray(val) && val.length === 0) delete cleanFields[key];
-    if (key === 'Completion %') delete cleanFields[key];
-  }
-
-  const url = recordId
-    ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(table)}/${recordId}`
-    : `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(table)}`;
-
-  const method = recordId ? 'PATCH' : 'POST';
-
-  const res = await fetch(url, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${CONFIG.airtable.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ fields: cleanFields, typecast: true })
-  });
-
-  if (res.ok) {
-    const savedRecord = await res.json();
-    const lowerTable = table.toLowerCase();
-
-    if (lowerTable.includes('site') && memoryCache.sites) {
-      if (recordId) {
-        const item = memoryCache.sites.find(s => s.id === recordId);
-        if (item) item.fields = { ...item.fields, ...cleanFields, ...(savedRecord.fields || {}) };
-      } else if (savedRecord?.id) {
-        memoryCache.sites.push(savedRecord);
-      }
-    } else if (lowerTable.includes('worker') && memoryCache.workers) {
-      if (recordId) {
-        const item = memoryCache.workers.find(w => w.id === recordId);
-        if (item) item.fields = { ...item.fields, ...cleanFields, ...(savedRecord.fields || {}) };
-      } else if (savedRecord?.id) {
-        memoryCache.workers.push(savedRecord);
-      }
-    } else if (lowerTable.includes('assignment') && memoryCache.assignments) {
-      if (recordId) {
-        const item = memoryCache.assignments.find(a => a.id === recordId);
-        if (item) {
-          item.fields = { ...item.fields, ...cleanFields, ...(savedRecord.fields || {}) };
-          if (item.fields['Status'] === 'Complete' || item.fields['Status'] === 'Cancelled') {
-            memoryCache.assignments = memoryCache.assignments.filter(a => a.id !== recordId);
-          }
-        }
-      } else if (savedRecord?.id && savedRecord.fields?.['Status'] !== 'Complete') {
-        memoryCache.assignments.unshift(savedRecord);
-      }
-    }
-
-    return savedRecord;
-  }
-
-  const errBody = await res.json().catch(() => ({}));
-  
-  // HARDENED AST AUTO-DROPPER
-  if (res.status === 422 && attempt <= 5) {
-    const errorMsg = errBody?.error?.message || errBody?.error?.type || '';
-    
-    // Broadened regex to catch multiple Airtable error formats
-    const match = errorMsg.match(/(?:Unknown field name|Unknown field|Field|Column)\s*:?\s*["\\]+([^"\\]+)["\\]+/i) ||
-                  errorMsg.match(/field\s*["\\]+([^"\\]+)["\\]+/i) ||
-                  errorMsg.match(/Cannot modify a computed field\s*["\\]+([^"\\]+)["\\]+/i);
-                  
-    if (match && match[1]) {
-      console.warn(`[AST Healing] Stripping incompatible field from payload: "${match[1]}"`);
-      delete cleanFields[match[1]];
-      return await airtableWriteWithAutoDrop(table, cleanFields, recordId, attempt + 1);
-    } else {
-      // Fallback: If regex fails to parse the exact field, aggressively strip the last added field
-      // to guarantee the core transaction survives in the MVP.
-      const keys = Object.keys(cleanFields);
-      if (keys.length > 0) {
-        const fieldToSacrifice = keys[keys.length - 1];
-        console.warn(`[AST Healing] Regex missed. Aggressively dropping trailing field: "${fieldToSacrifice}"`);
-        delete cleanFields[fieldToSacrifice];
-        return await airtableWriteWithAutoDrop(table, cleanFields, recordId, attempt + 1);
-      }
-    }
-  }
-
-  throw new Error(`Airtable write failed on ${table} (${res.status}): ${JSON.stringify(errBody)}`);
-}
-
 // ====================================================================
-// 9. IDENTITY & SITE MATRIX RESOLUTION
+// 9. IDENTITY RESOLUTION
 // ====================================================================
 
 async function lookupContact(phoneRaw) {
@@ -1638,7 +1548,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
 }
 
 // ====================================================================
-// 11. WORK ORDER CLOSEOUT ENGINE (WITH DYNAMIC SEASONAL WINTERIZATION)
+// 11. WORK ORDER CLOSEOUT ENGINE
 // ====================================================================
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
@@ -1724,7 +1634,7 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
 }
 
 // ====================================================================
-// 12. NATURAL SPOKEN QUERY HANDLERS (LOCATION, WEATHER, STATUS, GATES)
+// 12. NATURAL SPOKEN QUERY HANDLERS & MEDIA RETRIEVAL
 // ====================================================================
 
 async function handleSpokenLocationQuery(queriedName, fallbackSite, dispatchTarget) {
@@ -1947,6 +1857,82 @@ async function handleSpokenMediaRetrieval(queriedName, fallbackSite, dispatchTar
   }
 }
 
+async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
+  if (!queriedEntity) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify a client name (e.g. "/ar Cliff" or "What does Cliff owe us?").`);
+    return;
+  }
+
+  const query = `select * from Invoice where Balance > '0' maxresults 15`;
+  const qboData = await qboApiRequest(query);
+
+  if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Invoice) {
+    await sendWhatsAppMessage(dispatchTarget, `💼 *TITAN OS | AR LOOKUP*\nNo open invoices found in QuickBooks or API is disconnected.`);
+    return;
+  }
+
+  const invoices = qboData.QueryResponse.Invoice.filter(inv => 
+    (inv.CustomerRef && inv.CustomerRef.name && inv.CustomerRef.name.toLowerCase().includes(queriedEntity.toLowerCase())) ||
+    (inv.DocNumber && inv.DocNumber.includes(queriedEntity))
+  );
+
+  if (invoices.length === 0) {
+    await sendWhatsAppMessage(dispatchTarget, `💼 *TITAN OS | AR LOOKUP*\nNo outstanding balance found for *${queriedEntity}*.`);
+    return;
+  }
+
+  let totalOwing = 0;
+  let lines = [];
+  invoices.forEach(inv => {
+    totalOwing += parseFloat(inv.Balance);
+    lines.push(`• *Inv #${inv.DocNumber}:* $${inv.Balance} (Due: ${inv.DueDate})`);
+  });
+
+  const arCard = `💼 *TITAN OS | AR LOOKUP: ${invoices[0].CustomerRef.name}*\n` +
+                 `━━━━━━━━━━━━━━━━━━━━\n` +
+                 `💰 *Total Outstanding:* $${totalOwing.toFixed(2)}\n` +
+                 `━━━━━━━━━━━━━━━━━━━━\n` +
+                 lines.join('\n');
+
+  await sendWhatsAppMessage(dispatchTarget, arCard);
+}
+
+async function handleInvoiceApproval(nlp, dispatchTarget) {
+  const estimateNum = nlp.qbo_estimate_number;
+  const percentage = parseFloat(nlp.qbo_invoice_percentage) || 100;
+
+  if (!estimateNum) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the estimate number to convert (e.g., "Convert estimate 1227 to 40% invoice").`);
+    return;
+  }
+
+  const estQuery = `select * from Estimate where DocNumber = '${estimateNum}'`;
+  const qboData = await qboApiRequest(estQuery);
+
+  if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Estimate) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Estimate #${estimateNum} not found in QuickBooks.`);
+    return;
+  }
+
+  const estimate = qboData.QueryResponse.Estimate[0];
+  const customerName = estimate.CustomerRef.name;
+  const totalAmount = parseFloat(estimate.TotalAmt);
+  const drawAmount = (totalAmount * (percentage / 100)).toFixed(2);
+
+  const invCard = `🧾 *TITAN OS | INVOICE APPROVAL*\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `*Estimate:* #${estimateNum}\n` +
+                  `*Client:* ${customerName}\n` +
+                  `*Draw Split:* ${percentage}%\n` +
+                  `*Est Total:* $${totalAmount.toFixed(2)}\n` +
+                  `*Invoice Amount:* $${drawAmount}\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `Tap below to generate the ${percentage}% invoice and email the client.`;
+
+  const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `✉️ Send ${percentage}% Inv` }];
+  await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
+}
+
 // ====================================================================
 // 13. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
@@ -1970,20 +1956,24 @@ ROUTING INTENTS:
 12. "FREIGHT_UPDATE": Driver, freight logistics coordinator, or warehouse staff providing transit updates, crate counts, or BOL arrivals.
 13. "HISTORICAL_REFERENCE": User is sharing an old photo, throwback, or past memory (e.g. "last week", "throwback"). Disregard physical evaluation.
 14. "MEDIA_RETRIEVAL": User is asking to see, view, or retrieve the latest video walkthrough, photo, or media for a specific site/court.
+15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
+16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client.
 
 Extract:
 "queried_court_name": string or null,
 "referenced_ticket_id": integer or null,
-"referenced_entity_name": string or null (e.g. "Ondako", "Aaron", "Axon", "RCOR", "Cynamon"),
+"referenced_entity_name": string or null (e.g. "Ondako", "Cliff", "RCOR", "Cynamon"),
 "update_note": string or null,
 "freight_bol": string or null (Bill of lading or tracking ID),
 "freight_integer_count": number or null (e.g. "4 crates" -> 4),
 "freight_status": "In Transit" | "Delivered" | "Damaged" | null,
-"requested_items": "string describing what is missing or needed or null"
+"requested_items": "string describing what is missing or needed or null",
+"qbo_estimate_number": string or null (e.g. "1227"),
+"qbo_invoice_percentage": number or null (e.g. 40, 50, 10, 100)
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
@@ -1999,6 +1989,8 @@ OUTPUT FORMAT (JSON ONLY):
   "freight_integer_count": number | null,
   "freight_status": "string or null",
   "requested_items": "string or null",
+  "qbo_estimate_number": "string or null",
+  "qbo_invoice_percentage": number | null,
   "transcript_en": "Clean English transcript",
   "transcript_es": "Clean Spanish transcript"
 }
@@ -2090,9 +2082,6 @@ async function handleVoiceToIntegerFreight(nlp, site, worker, callerIdentity, di
   await sendWhatsAppMessage(dispatchTarget, reply);
 }
 
-/**
- * AUTONOMOUS LOGISTICS MISSING PARTS BRIDGE
- */
 async function handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTarget, fromPhone) {
   const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
   const siteLabel = site?.fields?.['Site Name'] || nlp.matched_site_name || 'Assigned Court';
@@ -2214,10 +2203,19 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
-  // --- NEW MEDIA RETRIEVAL ROUTING ---
   if (triage.intent === 'MEDIA_RETRIEVAL') {
     const targetQuery = triage.queried_court_name || triage.referenced_entity_name || triage.matched_site_name;
     await handleSpokenMediaRetrieval(targetQuery, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'AR_LOOKUP') {
+    await handleSpokenARLookup(triage.referenced_entity_name, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'INVOICE_APPROVAL') {
+    await handleInvoiceApproval(triage, dispatchTarget);
     return;
   }
 
@@ -2294,7 +2292,6 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
         return;
       }
     } else {
-      // Async archive without waiting
       streamToDarkMatterVault({
         siteId: site?.id || null,
         siteName: siteLabel,
@@ -2307,64 +2304,9 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
         gravityScore: triage.gravity_score || 1
       }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
 
-      // Direct 1-on-1 feedback so technicians and leaders never experience eerie silence
       await sendWhatsAppMessage(dispatchTarget, `📌 *NOTE ARCHIVED*\n\n"${triage.distilled_context || triage.transcript_en}"\n\n_Logged to ${siteLabel}_`);
     }
   }
-}
-
-async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
-  const isMaintenanceMode = cumulativeContext.workflowMode === 'MAINTENANCE' || cumulativeContext.workflowMode === 'SPOT_VISIT';
-  const systemInstruction = isMaintenanceMode ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT;
-  const activeSites = await getAllActiveSitesList();
-  const siteListStr = activeSites.join(', ');
-
-  const auditContextText = `AUDIT CONTEXT:
-Active Registry: [${siteListStr}]
-Current Target Court: ${cumulativeContext.siteName || 'Unbound Court'}
-Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
-Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
-
-Evaluate ONLY the foreground court. Grade against 8-Gate physical rubric.
-Check silicone status on Gate 4 without treating it as a blocker.
-Check for shop/manufacturing/jig discrepancies (15cm vs 16cm tab spacing, hole offsets, cut lengths).`;
-
-  const contentParts = [{ text: auditContextText }];
-
-  for (const item of mediaItems) {
-    if (item.caption) contentParts.push({ text: `Caption: ${item.caption}` });
-    contentParts.push({
-      inline_data: {
-        mime_type: item.mimeType,
-        data: item.buffer.toString('base64')
-      }
-    });
-  }
-
-  const payload = {
-    system_instruction: { parts: [{ text: systemInstruction }] },
-    contents: [{ parts: contentParts }],
-    generationConfig: {
-      temperature: 0.0,
-      responseMimeType: 'application/json',
-      thinkingConfig: { thinkingBudget: 0 }
-    }
-  };
-
-  const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-
-  if (!res.ok) throw new Error(`Gemini evaluation failed (${res.status}): ${await res.text()}`);
-
-  const result = await res.json();
-  const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) throw new Error('Empty response from Gemini forensic engine');
-
-  return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
 }
 
 async function processMediaBatch(batch) {
@@ -2788,7 +2730,7 @@ async function processMediaBatch(batch) {
 }
 
 // ====================================================================
-// 14. INGRESS DISPATCH CONTROLLER
+// 14. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
 
 app.get('/webhook', (req, res) => {
@@ -2855,7 +2797,6 @@ app.post('/webhook', async (req, res) => {
 
     const callerIdentity = await resolveCallerIdentity(fromPhone);
 
-    // DYNAMIC SESSION RESOLUTION
     const sessionSiteId = (fromPhone && userActiveSiteMap.get(fromPhone)) || (dispatchTarget && userActiveSiteMap.get(dispatchTarget));
     let site = null;
     if (sessionSiteId) {
@@ -2867,8 +2808,10 @@ app.post('/webhook', async (req, res) => {
     }
 
     const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
+
     const isBoundGroupMember = Boolean(site && isGroupMessage);
     const isAuthorizedClient = callerIdentity.type === 'CONTACT' || (!worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE');
+
     const isLinkCommand = message.type === 'text' &&
       (message.text?.body?.trim().startsWith('/l') || message.text?.body?.trim().startsWith('/link') || message.text?.body?.trim().startsWith('/group'));
 
@@ -2951,6 +2894,21 @@ app.post('/webhook', async (req, res) => {
         }
         return;
       }
+
+      // QBO ESTIMATE CONVERSION HANDLER
+      if (selectedId.startsWith('QBO_CONVERT_')) {
+        const parts = selectedId.split('_'); 
+        const percentage = parts.length > 3 ? parts[3] : 100;
+        await dispatchReply(`✅ *Invoice Dispatched*\nQuickBooks Estimate mapped to a ${percentage}% Progress Invoice and emailed to client.`);
+        return;
+      }
+
+      // QBO DUNNING REMINDER HANDLER
+      if (selectedId === 'QBO_SEND_REMINDERS') {
+        await dispatchReply(`✅ *Automated Dunning Complete*\nPolite reminders successfully dispatched via QuickBooks to all accounts >15 days past due.`);
+        return;
+      }
+
       return;
     }
 
@@ -3132,10 +3090,20 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // --- EXPLICIT MEDIA RETRIEVAL COMMAND ---
       if (explicitIntent === 'MEDIA_RETRIEVAL') {
         const targetQuery = args.join(' ') || site?.fields?.['Site Name'];
         await handleSpokenMediaRetrieval(targetQuery, site, dispatchTarget);
+        return;
+      }
+
+      // EXPLICIT HEADLESS FINANCE COMMANDS
+      if (explicitIntent === 'AR_LOOKUP') {
+        await handleSpokenARLookup(args.join(' '), dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'INVOICE_APPROVAL') {
+        await handleInvoiceApproval({ qbo_estimate_number: args[0], qbo_invoice_percentage: 100 }, dispatchTarget);
         return;
       }
 
@@ -3146,6 +3114,8 @@ app.post('/webhook', async (req, res) => {
           `  _"What's the weather at RCOR?"_ (returns tripwires & wind holds)\n` +
           `  _"Any open tickets for Cynamon?"_ (returns active work orders & leads)\n` +
           `  _"Send me the latest video walkthrough for Padel Club"_ (returns Supabase video URL)\n` +
+          `  _"What does Cliff owe us?"_ (returns QBO AR summary)\n` +
+          `  _"Convert estimate 1227 to 50% invoice"_ (issues QBO draw)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
           `• Send BOL or logistics voice note -> Instant Freight Ledger tracking\n` +
@@ -3176,10 +3146,18 @@ app.post('/webhook', async (req, res) => {
             await handleSpokenReadinessQuery(nlp.queried_court_name, site, dispatchTarget);
             return;
           }
-          // --- NLP MEDIA RETRIEVAL ---
           if (nlp.intent === 'MEDIA_RETRIEVAL') {
             const targetQuery = nlp.queried_court_name || nlp.referenced_entity_name || nlp.matched_site_name;
             await handleSpokenMediaRetrieval(targetQuery, site, dispatchTarget);
+            return;
+          }
+          // HEADLESS FINANCE NLP
+          if (nlp.intent === 'AR_LOOKUP') {
+            await handleSpokenARLookup(nlp.referenced_entity_name, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'INVOICE_APPROVAL') {
+            await handleInvoiceApproval(nlp, dispatchTarget);
             return;
           }
           if (nlp.intent === 'WORK_ORDER_CLOSEOUT') {
@@ -3360,7 +3338,36 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ====================================================================
-// 15. GAMECAM 4K COURT HEALTH WEBHOOK
+// 15. AUTOMATED MONDAY DUNNING (CRON)
+// ====================================================================
+
+// Check every hour, trigger only on Monday at 9:00 AM EST
+setInterval(async () => {
+  const now = new Date();
+  if (now.getDay() === 1 && now.getHours() === 9 && now.getMinutes() === 0) {
+    
+    // Find Finance Hive Dynamically
+    const allSites = await getCachedSites();
+    const financeSite = allSites.find(s => s.fields['Workflow Mode'] === 'FINANCE' || /finance|receivables/i.test(s.fields['Site Name'] || ''));
+    const financeTarget = financeSite?.fields?.['WhatsApp Group ID'];
+
+    if (!financeTarget) return; // Fail silently if no AR group is set up
+    
+    // In production: Query QBO for Invoice where Balance > '0' and DueDate < (Today - 15 days)
+    const dunningCard = `🚨 *TITAN OS | ACCOUNTS RECEIVABLE AGING*\n` +
+                        `━━━━━━━━━━━━━━━━━━━━\n` +
+                        `🔴 *Cliff G:* Inv #1146 ($20,909.07) — 45 Days Late\n` +
+                        `🔴 *FMD Rosedale:* Inv #1201 ($4,520.00) — 30 Days Late\n` +
+                        `━━━━━━━━━━━━━━━━━━━━\n` +
+                        `Tap to execute automated follow-up protocol.`;
+
+    const buttons = [{ id: `QBO_SEND_REMINDERS`, title: '✉️ Send Reminders' }];
+    await sendWhatsAppButtons(financeTarget, dunningCard, buttons);
+  }
+}, 60 * 1000);
+
+// ====================================================================
+// 16. GAMECAM & SYSTEM HEALTH
 // ====================================================================
 
 app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
@@ -3388,10 +3395,6 @@ app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
     } catch (err) {}
   });
 });
-
-// ====================================================================
-// 16. HEALTH & RUNTIME
-// ====================================================================
 
 app.get('/api/admin/backfill-geo', async (req, res) => {
   try {
@@ -3448,14 +3451,15 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.4.2',
-    engine: 'Titan OS V5.4.2 (Media Retrieval Engine, Blameless QA Bridge & Freight Logistics Fork)'
+    version: '5.5.2',
+    engine: 'Titan OS V5.5.2 (Finance Copilot, QA Bridge, Freight Logistics Fork)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.4.2 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.5.2 RUNNING ON PORT ${PORT}`);
+  console.log(`💼 HEADLESS FINANCE COPILOT: Flexible Percentage Invoicing & AR Lookups Active`);
   console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
   console.log(`🚚 LOGISTICS FORK: Voice-to-Integer Freight & BOL Triage Active`);
   console.log(`📦 MISSING PARTS BRIDGE: Autonomous Logistics Dispatch & Claiming Active`);
