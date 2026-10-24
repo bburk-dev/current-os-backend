@@ -1957,12 +1957,8 @@ async function handleSpokenMediaRetrieval(queriedName, fallbackSite, dispatchTar
 }
 
 async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
-  if (!queriedEntity) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify a client name (e.g. "/ar Cliff" or "What does Cliff owe us?").`);
-    return;
-  }
-
-  const query = `select * from Invoice where Balance > '0' maxresults 15`;
+  // Increased maxresults to 50 to capture the whole fleet for generic aging queries
+  const query = `select * from Invoice where Balance > '0' maxresults 50`;
   const qboData = await qboApiRequest(query);
 
   if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Invoice) {
@@ -1970,24 +1966,53 @@ async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
     return;
   }
 
-  const invoices = qboData.QueryResponse.Invoice.filter(inv => 
-    (inv.CustomerRef && inv.CustomerRef.name && inv.CustomerRef.name.toLowerCase().includes(queriedEntity.toLowerCase())) ||
-    (inv.DocNumber && inv.DocNumber.includes(queriedEntity))
-  );
+  let invoices = qboData.QueryResponse.Invoice;
+  const isGenericAgingQuery = !queriedEntity || /all|aging|30|total|current/i.test(queriedEntity);
+
+  // If a specific client is requested, filter the results. Otherwise, process all open invoices.
+  if (!isGenericAgingQuery) {
+    invoices = invoices.filter(inv => 
+      (inv.CustomerRef && inv.CustomerRef.name && inv.CustomerRef.name.toLowerCase().includes(queriedEntity.toLowerCase())) ||
+      (inv.DocNumber && inv.DocNumber.includes(queriedEntity))
+    );
+  }
 
   if (invoices.length === 0) {
-    await sendWhatsAppMessage(dispatchTarget, `💼 *TITAN OS | AR LOOKUP*\nNo outstanding balance found for *${queriedEntity}*.`);
+    await sendWhatsAppMessage(dispatchTarget, `💼 *TITAN OS | AR LOOKUP*\nNo outstanding balance found${!isGenericAgingQuery ? ` for *${queriedEntity}*` : ''}.`);
     return;
   }
 
   let totalOwing = 0;
   let lines = [];
+  const now = new Date();
+
   invoices.forEach(inv => {
-    totalOwing += parseFloat(inv.Balance);
-    lines.push(`• *Inv #${inv.DocNumber}:* $${inv.Balance} (Due: ${inv.DueDate})`);
+    const balance = parseFloat(inv.Balance);
+    totalOwing += balance;
+    
+    let daysLate = 0;
+    if (inv.DueDate) {
+        const dueDate = new Date(inv.DueDate);
+        daysLate = Math.floor((now - dueDate) / (1000 * 60 * 60 * 24));
+    }
+    
+    // Sort into 30+ days late vs current
+    const lateString = daysLate > 30 ? ` — *${daysLate} Days Late* 🔴` : (daysLate > 0 ? ` — *${daysLate} Days Late* 🟡` : ' — Current 🟢');
+    
+    // Only add to the list if they asked for 30+ days and it fits, or if they asked for a general report
+    if (!queriedEntity || !queriedEntity.includes('30') || daysLate > 30) {
+        lines.push(`• *${inv.CustomerRef.name}* (Inv #${inv.DocNumber}): $${balance.toFixed(2)}${lateString}`);
+    }
   });
 
-  const arCard = `💼 *TITAN OS | AR LOOKUP: ${invoices[0].CustomerRef.name}*\n` +
+  if (lines.length === 0) {
+      await sendWhatsAppMessage(dispatchTarget, `💼 *TITAN OS | AR LOOKUP*\nNo invoices found matching that aging criteria.`);
+      return;
+  }
+
+  const headerTitle = isGenericAgingQuery ? 'FLEET AGING REPORT' : invoices[0].CustomerRef.name.toUpperCase();
+
+  const arCard = `💼 *TITAN OS | AR LOOKUP: ${headerTitle}*\n` +
                  `━━━━━━━━━━━━━━━━━━━━\n` +
                  `💰 *Total Outstanding:* $${totalOwing.toFixed(2)}\n` +
                  `━━━━━━━━━━━━━━━━━━━━\n` +
