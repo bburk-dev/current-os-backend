@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.0 — HEADLESS FINANCE COPILOT (NET-NEW INVOICING & NAME RESOLUTION)
+ * TITAN OS V5.6.1 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -22,6 +22,7 @@
  * 18. Voice-to-Integer Unstructured Freight Ledger
  * 19. Media Retrieval Engine: Spoken recall of historical video walkthroughs.
  * 20. Headless Finance Copilot: AR Lookups, Dunning, Percentage Estimates, & Net-New Invoicing
+ * 21. Actionable State Handler: Conversational Airtable Database Admin (Zero-UI Dropdown Mapping)
  */
 
 process.on('uncaughtException', (err) => {
@@ -1976,6 +1977,58 @@ async function handleInvoiceCreation(nlp, dispatchTarget) {
   await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
 }
 
+// ACTIONABLE STATE CHANGER (HEADLESS DATABASE ADMIN)
+async function handleActionableStateChange(nlp, site, worker, callerIdentity, dispatchTarget) {
+  let targetSiteId = site?.id;
+  let targetSiteName = site?.fields?.['Site Name'] || 'Assigned Court';
+
+  if (nlp.matched_site_name || nlp.queried_court_name || nlp.referenced_entity_name) {
+    const matched = await lookupSite(null, nlp.matched_site_name || nlp.queried_court_name || nlp.referenced_entity_name);
+    if (matched) {
+      targetSiteId = matched.id;
+      targetSiteName = matched.fields['Site Name'];
+    }
+  }
+
+  if (!targetSiteId) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate a specific site to update. Please specify the court name.`);
+    return;
+  }
+
+  const updatePayload = {};
+  const updateNotes = [];
+
+  if (nlp.workflow_mode) { updatePayload['Workflow Mode'] = nlp.workflow_mode; updateNotes.push(`Workflow Mode: ${nlp.workflow_mode}`); }
+  if (nlp.site_status_update) { updatePayload['Site Status'] = nlp.site_status_update; updateNotes.push(`Site Status: ${nlp.site_status_update}`); }
+  if (nlp.deposit_status) { updatePayload['Deposit Status'] = nlp.deposit_status; updateNotes.push(`Deposit: ${nlp.deposit_status}`); }
+  if (nlp.foundation_type) { updatePayload['Foundation Type'] = nlp.foundation_type; updateNotes.push(`Foundation: ${nlp.foundation_type}`); }
+  if (nlp.slab_pour_date) { updatePayload['Slab Pour Date'] = nlp.slab_pour_date; updateNotes.push(`Slab Poured: ${nlp.slab_pour_date}`); }
+  if (nlp.assigned_crew) { updatePayload['Assigned Crew'] = nlp.assigned_crew; updateNotes.push(`Crew: ${nlp.assigned_crew}`); }
+  if (nlp.manufacturer) { updatePayload['Manufacturer'] = nlp.manufacturer; updateNotes.push(`Manufacturer: ${nlp.manufacturer}`); }
+
+  if (Object.keys(updatePayload).length === 0) {
+     await sendWhatsAppMessage(dispatchTarget, `⚠️ Heard your update for ${targetSiteName}, but no specific database dropdown fields were detected.`);
+     return;
+  }
+
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'HQ Admin';
+  updatePayload['Last Note'] = `[DATABASE OVERRIDE - ${workerName}]: ${updateNotes.join(', ')}`;
+  updatePayload['Last Intent'] = 'ACTIONABLE_STATE_CHANGE';
+
+  await airtableWriteWithAutoDrop('Sites', updatePayload, targetSiteId);
+  invalidateAirtableCache('sites');
+
+  const confirmCard = `🎛️ *TITAN OS | SITE LEDGER UPDATED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🏟️ *Court:* ${targetSiteName}\n` +
+    `👤 *Updated By:* ${workerName}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `✅ *Database Fields Modified:* \n• ${updateNotes.join('\n• ')}\n\n` +
+    `_Airtable synced. No login required._`;
+
+  await sendWhatsAppMessage(dispatchTarget, confirmCard);
+}
+
 // ====================================================================
 // 13. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
@@ -1992,16 +2045,16 @@ ROUTING INTENTS:
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
 7. "TICKET_UPDATE": User is providing a status update, outreach log, or follow-up note on an open ticket, lead, client, or chore.
-8. "ACTIONABLE_STATE_CHANGE": Milestones reached, deposit received, concrete pour dates set.
+8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields (deposit status, slab dates, crews, site status, foundation type).
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
-11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies (e.g., missing base plates, need more silicone, out of screws).
-12. "FREIGHT_UPDATE": Driver, freight logistics coordinator, or warehouse staff providing transit updates, crate counts, or BOL arrivals.
-13. "HISTORICAL_REFERENCE": User is sharing an old photo, throwback, or past memory (e.g. "last week", "throwback"). Disregard physical evaluation.
+11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies.
+12. "FREIGHT_UPDATE": Driver or warehouse staff providing transit updates, crate counts, or BOL arrivals.
+13. "HISTORICAL_REFERENCE": User is sharing an old photo, throwback, or past memory. Disregard physical evaluation.
 14. "MEDIA_RETRIEVAL": User is asking to see, view, or retrieve the latest video walkthrough, photo, or media for a specific site/court.
 15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
 16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
-17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client (e.g. "Create a new invoice for David Cynamon for 30 bags of sand, $1250").
+17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
 
 Extract:
 "queried_court_name": string or null,
@@ -2016,7 +2069,16 @@ Extract:
 "qbo_invoice_percentage": number or null (e.g. 40, 50, 10, 100),
 "qbo_customer_name": string or null (e.g. "Burke", "David Cynamon"),
 "qbo_amount": number or null (e.g. 1250),
-"qbo_line_items": string describing the services or materials or null
+"qbo_line_items": string describing the services or materials or null,
+
+DATABASE FIELD MAPPING OVERRIDES (Must exactly match these strings if present in the prompt):
+"workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT" | "EXECUTIVE" | "PRODUCTION" | "LOGISTICS" | "INVENTORY" | "PLANNING" | null
+"site_status_update": "PLANNING" | "ACTIVE" | "PAUSED" | "COMPLETE" | "BLOCKED_WEATHER" | "BLOCKED_PARTS" | "END_OF_DAY" | "OPEN_FOR_PLAY" | "WINTERIZED_CLOSED" | "UNDER_MAINTENANCE" | "IN_CONSTRUCTION" | null
+"deposit_status": "Pending Deposit" | "50% Deposit Received" | "Paid in Full" | null
+"foundation_type": "Poured Concrete Slab" | "Existing Tennis Conversion" | "Indoor Commercial Slab" | "Post-Tensioned Slab" | null
+"slab_pour_date": "YYYY-MM-DD" | null
+"assigned_crew": "Team Alpha" | "Team Beta" | "Logistics" | "Unassigned" | null
+"manufacturer": "BPC" | "Mejor Set" | "AFP" | "Chinese" | "Padel Tech" | "Spanish" | null
 
 OUTPUT FORMAT (JSON ONLY):
 {
@@ -2041,6 +2103,13 @@ OUTPUT FORMAT (JSON ONLY):
   "qbo_customer_name": "string or null",
   "qbo_amount": number | null,
   "qbo_line_items": "string or null",
+  "workflow_mode": "string or null",
+  "site_status_update": "string or null",
+  "deposit_status": "string or null",
+  "foundation_type": "string or null",
+  "slab_pour_date": "string or null",
+  "assigned_crew": "string or null",
+  "manufacturer": "string or null",
   "transcript_en": "Clean English transcript",
   "transcript_es": "Clean Spanish transcript"
 }
@@ -2271,6 +2340,11 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   if (triage.intent === 'CREATE_INVOICE') {
     await handleInvoiceCreation(triage, dispatchTarget);
+    return;
+  }
+  
+  if (triage.intent === 'ACTIONABLE_STATE_CHANGE') {
+    await handleActionableStateChange(triage, site, worker, callerIdentity, dispatchTarget);
     return;
   }
 
@@ -3232,6 +3306,7 @@ app.post('/webhook', async (req, res) => {
           `  _"What does Cliff owe us?"_ (returns QBO AR summary)\n` +
           `  _"Convert estimate 1227 to 50% invoice"_ (issues QBO draw)\n` +
           `  _"Create a new invoice for David Cynamon for 30 bags of sand, $1250"_ (drafts net-new invoice)\n` +
+          `  _"Update Aurora John to Paid in Full and change status to PLANNING"_ (modifies database fields)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
           `• Send BOL or logistics voice note -> Instant Freight Ledger tracking\n` +
@@ -3278,6 +3353,10 @@ app.post('/webhook', async (req, res) => {
           }
           if (nlp.intent === 'CREATE_INVOICE') {
             await handleInvoiceCreation(nlp, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'ACTIONABLE_STATE_CHANGE') {
+            await handleActionableStateChange(nlp, site, worker, callerIdentity, dispatchTarget);
             return;
           }
           if (nlp.intent === 'WORK_ORDER_CLOSEOUT') {
@@ -3567,14 +3646,15 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.0',
-    engine: 'Titan OS V5.6.0 (Finance Copilot, QA Bridge, Freight Logistics Fork)'
+    version: '5.6.1',
+    engine: 'Titan OS V5.6.1 (Conversational Database Admin, Finance Copilot)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.0 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.1 RUNNING ON PORT ${PORT}`);
+  console.log(`🎛️ ACTIONABLE STATE HANDLER: Conversational Airtable Admin Active`);
   console.log(`💼 HEADLESS FINANCE COPILOT: AR Lookups, Name Mapping, & Net-New Invoicing Active`);
   console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
   console.log(`🚚 LOGISTICS FORK: Voice-to-Integer Freight & BOL Triage Active`);
