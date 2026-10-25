@@ -347,7 +347,9 @@ async function refreshQboToken() {
 
 async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry = false) {
   if (!CONFIG.qbo.companyId) return null;
-  const url = pathOrQuery.startsWith('select') 
+  
+  const isQuery = pathOrQuery.startsWith('select');
+  const url = isQuery 
     ? `${CONFIG.qbo.baseUrl}/${CONFIG.qbo.companyId}/query?query=${encodeURIComponent(pathOrQuery)}`
     : `${CONFIG.qbo.baseUrl}/${CONFIG.qbo.companyId}${pathOrQuery.startsWith('/') ? '' : '/'}${pathOrQuery}`;
 
@@ -357,9 +359,9 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
       'Authorization': `Bearer ${CONFIG.qbo.accessToken}`,
       'Accept': 'application/json',
       'Content-Type': 'application/json'
-    },
-    body: body ? JSON.stringify(body) : null
+    }
   };
+  if (body) options.body = JSON.stringify(body);
 
   try {
     const res = await fetch(url, options);
@@ -367,7 +369,7 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
       const refreshed = await refreshQboToken();
       if (refreshed) return await qboApiRequest(pathOrQuery, method, body, true);
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`QBO HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
     console.error('[QBO API Error]:', err.message);
@@ -3850,4 +3852,3 @@ app.listen(PORT, '0.0.0.0', async () => {
     await getCachedOpenAssignments();
   } catch (err) {}
 });
-```<FollowUp>Are there any other specific QBO parameters or custom fields (like HST rates or item classes) you need me to map into the net-new invoice function before you push this live?</FollowUp>
