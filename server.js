@@ -389,7 +389,7 @@ async function streamToDarkMatterVault({
     category: category || 'General Logistics',
     distilled_context: distilledContext || rawText.slice(0, 150),
     urgency,
-    gravity_score: gravityScore,
+    gravityScore,
     actionable_followup: actionableFollowup,
     status: 'ARCHIVED',
     created_at: new Date().toISOString()
@@ -659,9 +659,10 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
     formattedNotes += `Single Expense Batch — Total: $${grandTotal} ${currency}\n`;
   }
 
-  formattedNotes += `\nRECEIPT MEDIA URLS:\n` + storageResults.map(s => `• ${s.signedUrl}`).join('\n');
+  const validStorage = storageResults.filter(s => s && s.signedUrl);
+  const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
 
-  const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
+  formattedNotes += `\nRECEIPT MEDIA URLS:\n` + validStorage.map(s => `• ${s.signedUrl}`).join('\n');
 
   const assignmentPayload = {
     'Date': todayStr,
@@ -670,10 +671,10 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
     'Priority': 'Low',
     'Source': 'WhatsApp Receipt Intake',
     'Status': 'Complete',
-    'Notes': formattedNotes,
-    'Attachment(s)': attachmentPayload
+    'Notes': formattedNotes
   };
 
+  if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
   if (site?.id) assignmentPayload['Sites'] = [site.id];
 
@@ -732,6 +733,9 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
 
   const title = company !== 'Padel Venue Lead' ? `${company} (${leadName})` : leadName;
 
+  const validStorage = storageResults.filter(s => s && s.signedUrl);
+  const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
+
   let formattedNotes = `[COMMERCIAL LEAD — ${title}]\n` +
     `• Contact: ${leadName}\n` +
     `• Company / Club: ${company}\n` +
@@ -740,9 +744,7 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
     `• Address: ${address}\n` +
     `• Partner Referral: ${partner}\n` +
     `• Project Scope: ${scope}\n\n` +
-    `INBOUND MEDIA URLS:\n` + storageResults.map(s => `• ${s.signedUrl}`).join('\n');
-
-  const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
+    `INBOUND MEDIA URLS:\n` + validStorage.map(s => `• ${s.signedUrl}`).join('\n');
 
   const assignmentPayload = {
     'Date': todayStr,
@@ -751,10 +753,10 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
     'Priority': 'High',
     'Source': 'Email Screenshot Lead Intake',
     'Status': 'Open',
-    'Notes': formattedNotes,
-    'Attachment(s)': attachmentPayload
+    'Notes': formattedNotes
   };
 
+  if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
 
   const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
@@ -801,14 +803,15 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
   const contents = visualTriage.freight_contents || visualTriage.summary || 'Unspecified freight items';
   const status = visualTriage.delivery_status || 'In Transit';
 
+  const validStorage = storageResults.filter(s => s && s.signedUrl);
+  const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
+
   let formattedNotes = `[FREIGHT LOGISTICS INTAKE — ${carrier}]\n` +
     `• BOL / Tracking: ${bol}\n` +
     `• Status: ${status}\n` +
     `• Contents: ${contents}\n` +
     `• Logged By: ${workerName}\n\n` +
-    `MEDIA URLS:\n` + storageResults.map(s => `• ${s.signedUrl}`).join('\n');
-
-  const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
+    `MEDIA URLS:\n` + validStorage.map(s => `• ${s.signedUrl}`).join('\n');
 
   const assignmentPayload = {
     'Date': todayStr,
@@ -817,10 +820,10 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
     'Priority': 'Medium',
     'Source': 'Freight Media Intake',
     'Status': status.toLowerCase().includes('deliver') ? 'Complete' : 'In Progress',
-    'Notes': formattedNotes,
-    'Attachment(s)': attachmentPayload
+    'Notes': formattedNotes
   };
 
+  if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
   if (site?.id) assignmentPayload['Sites'] = [site.id];
 
@@ -2645,6 +2648,8 @@ async function processMediaBatch(batch) {
     storageResults = await Promise.all(uploadPromises);
   }
 
+  let targetedSiteOverride = null;
+
   if (hasVisualMedia && batchText.length > 3) {
       console.log(`[Multimodal Override]: Caption detected ("${batchText}"). Bypassing visual triage to evaluate intent.`);
       const triage = await triageSpokenOrTextNLP(batchText, false, []);
@@ -2683,7 +2688,9 @@ async function processMediaBatch(batch) {
                 if (fromPhone) userActiveSiteMap.set(fromPhone, createdSite.id);
                 if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, createdSite.id);
                 
-                const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
+                const validStorage = storageResults.filter(s => s && s.signedUrl);
+                const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
+                
                 const assignmentPayload = {
                   'Date': new Date().toISOString().split('T')[0],
                   'Assignment Type': 'Service',
@@ -2692,9 +2699,9 @@ async function processMediaBatch(batch) {
                   'Source': 'Multimodal Text Prompt',
                   'Status': 'Open',
                   'Sites': [createdSite.id],
-                  'Notes': `[INITIAL SITE INTAKE]\n• Requested By: ${worker?.fields?.['Full Name'] || callerIdentity?.name || 'User'}\n• Context: ${batchText}`,
-                  'Attachment(s)': attachmentPayload
+                  'Notes': `[INITIAL SITE INTAKE]\n• Requested By: ${worker?.fields?.['Full Name'] || callerIdentity?.name || 'User'}\n• Context: ${batchText}`
                 };
+                if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
                 
                 const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
                 const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'MAINT';
@@ -2709,16 +2716,26 @@ async function processMediaBatch(batch) {
               return; 
           }
 
-          if (triage.intent === 'TICKET_UPDATE' || triage.intent === 'TICKET_QUERY' || triage.intent === 'SUPPLY_REQUEST' || /(assign|service|maintenance|repair|ticket|task|fix|create)/i.test(combinedTranscript)) {
+          // DYNAMIC SITE ROUTING: Extract target site from caption
+          const targetName = triage.matched_site_name || triage.queried_court_name || triage.referenced_entity_name;
+          if (targetName) {
+              const matched = await lookupSite(null, targetName);
+              if (matched) {
+                  targetedSiteOverride = matched;
+                  cumulativeContext.siteName = matched.fields['Site Name'];
+                  cumulativeContext.workflowMode = matched.fields['Workflow Mode'] || 'INSTALLATION';
+                  console.log(`[Multimodal Override]: Rerouting media batch to ${cumulativeContext.siteName}`);
+              }
+          }
+
+          // HIJACK CHECK: Only skip to text ticket if it's explicitly a repair/task OR it's just photos.
+          const isExplicitTask = /(assign|service|maintenance|repair|task|fix|create)/i.test(combinedTranscript);
+          
+          if (isExplicitTask || (!hasVideo && triage.intent === 'TICKET_UPDATE')) {
               console.log('[Multimodal Override]: Executing generalized text command from caption.');
               
-              let targetSiteId = site?.id;
-              if (triage.matched_site_name || triage.queried_court_name || triage.referenced_entity_name) {
-                  const matched = await lookupSite(null, triage.matched_site_name || triage.queried_court_name || triage.referenced_entity_name);
-                  if (matched) targetSiteId = matched.id;
-              }
-
-              const attachmentPayload = storageResults.map(s => ({ url: s.signedUrl }));
+              const validStorage = storageResults.filter(s => s && s.signedUrl);
+              const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
 
               const assignmentPayload = {
                   'Date': new Date().toISOString().split('T')[0],
@@ -2727,22 +2744,24 @@ async function processMediaBatch(batch) {
                   'Priority': 'Medium',
                   'Source': 'Image Caption Override',
                   'Status': 'Open',
-                  'Notes': `[FIELD REQUEST - ${worker?.fields?.['Full Name'] || callerIdentity?.name || 'User'}]\n"${batchText}"\n\n(Media attached to Airtable record)`,
-                  'Attachment(s)': attachmentPayload
+                  'Notes': `[FIELD REQUEST - ${worker?.fields?.['Full Name'] || callerIdentity?.name || 'User'}]\n"${batchText}"` + (attachmentPayload.length > 0 ? `\n\n(Media attached to Airtable record)` : `\n\n(Media upload failed/bypassed)`)
               };
 
-              if (targetSiteId) assignmentPayload['Sites'] = [targetSiteId];
+              if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
+
+              let finalSiteId = targetedSiteOverride?.id || site?.id;
+              if (finalSiteId) assignmentPayload['Sites'] = [finalSiteId];
               if (worker?.id) assignmentPayload['Worker'] = [worker.id];
 
               const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
               const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'TASK';
-              const targetName = triage.matched_site_name || triage.queried_court_name || triage.referenced_entity_name || site?.fields?.['Site Name'] || 'Fleet Operations';
+              const targetNameDisplay = targetedSiteOverride?.fields?.['Site Name'] || site?.fields?.['Site Name'] || 'Fleet Operations';
 
               await sendWhatsAppMessage(dispatchTarget, `📝 *TITAN OS | SERVICE TICKET CREATED*\n\n` +
                 `🎫 *Ticket:* ${ticketId}\n` +
-                `📍 *Assigned To:* ${targetName}\n` +
+                `📍 *Assigned To:* ${targetNameDisplay}\n` +
                 `📋 *Notes:* "${batchText}"\n\n` +
-                `📎 Media successfully attached to Airtable.`);
+                (attachmentPayload.length > 0 ? `📎 Media successfully attached to Airtable.` : `⚠️ Media failed to upload to Supabase.`));
               return; 
           }
       }
@@ -2805,7 +2824,7 @@ async function processMediaBatch(batch) {
   // STAGE 2: MULTIMODAL INGESTION
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
 
-  let targetedSite = site;
+  let targetedSite = targetedSiteOverride || site;
   if (forensicAudit.spoken_court_name) {
     const spokenSite = await lookupSite(null, forensicAudit.spoken_court_name);
     if (spokenSite) targetedSite = spokenSite;
@@ -2924,7 +2943,7 @@ async function processMediaBatch(batch) {
     // AUTONOMOUS CLOSED-LOOP QA FORK
     if (hasBlockers && isFabricationDefect) {
       try {
-        const primaryMediaUrl = storageResults.find(s => s.storagePath.includes('.mp4') || s.storagePath.includes('.mov'))?.signedUrl || storageResults[0]?.signedUrl || '';
+        const primaryMediaUrl = storageResults.find(s => s && s.storagePath && (s.storagePath.includes('.mp4') || s.storagePath.includes('.mov')))?.signedUrl || storageResults.filter(s => s && s.signedUrl)[0]?.signedUrl || '';
         const defectText = forensicAudit.blockers_detected?.join(' • ') || cleanSummary;
         const componentLabel = forensicAudit.qa_component || 'Steel Framing / Tab Jig';
 
