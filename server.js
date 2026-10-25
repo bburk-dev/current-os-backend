@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.1 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.2 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -8,7 +8,7 @@
  * 4. 1-on-1 Sandbox & Direct DM Resilience
  * 5. Orphan Ticket Auto-Healing
  * 6. Dynamic Session Site Overrides
- * 7. Zero-Friction Ticket & Lead Updates
+ * 7. Relational Ticket & Lead Reassignment Engine (Foreign Key Auto-Linker)
  * 8. Multimodal Commercial Sales Lead Ingestion
  * 9. Interactive Field Note Promotion
  * 10. Dynamic Seasonal Closeout Engine
@@ -16,14 +16,15 @@
  * 12. Resilient Meta Dispatch with Auto-Retry
  * 13. Autonomous Zero-Touch Provisioning
  * 14. Milestone-Aware Joy Cannon
- * 15. Proactive Weather Tripwire Matrix
+ * 15. Proactive Weather Tripwire Matrix (Crane-Free)
  * 16. On-Arrival Proactive Scan
  * 17. Conversational Spoken Lookups & Relational Cross-Referencing
  * 18. Voice-to-Integer Unstructured Freight Ledger
- * 19. Media Retrieval Engine: Spoken recall of historical video walkthroughs.
+ * 19. Media Retrieval Engine: Spoken recall of historical video walkthroughs
  * 20. Headless Finance Copilot: AR Lookups, Dunning, Percentage Estimates, & Net-New Invoicing
- * 21. Actionable State Handler: Conversational Airtable Database Admin (Zero-UI Dropdown Mapping)
- * 22. Autonomous Milestone Velocity Tracking & Smart Punch-List Extraction
+ * 21. Actionable State Handler: Conversational Airtable Database Admin
+ * 22. Autonomous Milestone Velocity Tracking (Gate 1 to Gate 8)
+ * 23. Technical Specs & Border Clearance Copilot (CBSA C13MM / PAPS BOWB)
  */
 
 process.on('uncaughtException', (err) => {
@@ -100,7 +101,7 @@ const DEBOUNCE_DELAY_MS = 3500;
 const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'FINANCE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
 
 const lastDroppedCoordinates = new Map();
-const userActiveSiteMap = new Map(); // Dynamic in-memory session override per phone/dispatch target
+const userActiveSiteMap = new Map(); 
 
 // ====================================================================
 // 2. IN-MEMORY CACHE-ASIDE ENGINE
@@ -251,13 +252,12 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
         const errorMsg = errorData?.error?.message || '';
         
         if (res.status === 422) {
-          // The Universal Schema Auto-Healer (Entry #049 & #069)
           const match = errorMsg.match(/field\s*["'\\]+([^"'\\]+)["'\\]+/i) || errorMsg.match(/Unknown field name\s*["'\\]+([^"'\\]+)["'\\]+/i);
           if (match && match[1]) {
             const badField = match[1];
             console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}"`);
             delete currentPayload.fields[badField];
-            continue; // Retry without the bad field
+            continue; 
           }
         }
         throw new Error(`HTTP ${res.status}: ${errorMsg}`);
@@ -302,7 +302,6 @@ async function uploadToSupabase(buffer, mimeType) {
     
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
     
-    // Asymmetric Storage Validation Layer (Entry #061)
     const signUrl = `${CONFIG.supabase.url}/storage/v1/object/sign/${CONFIG.supabase.bucket}/${filename}`;
     const signRes = await fetch(signUrl, {
       method: 'POST',
@@ -310,7 +309,7 @@ async function uploadToSupabase(buffer, mimeType) {
         'Authorization': `Bearer ${CONFIG.supabase.serviceRoleKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ expiresIn: 604800 }) // 7-day signed token
+      body: JSON.stringify({ expiresIn: 604800 }) 
     });
     
     const signData = await signRes.json();
@@ -322,7 +321,7 @@ async function uploadToSupabase(buffer, mimeType) {
 }
 
 // ====================================================================
-// 2B. QUICKBOOKS ONLINE REST API WRAPPER
+// 2B. QUICKBOOKS ONLINE REST API WRAPPER WITH TOKEN ROTATION
 // ====================================================================
 
 async function refreshQboToken() {
@@ -340,6 +339,9 @@ async function refreshQboToken() {
     const data = await res.json();
     if (data.access_token) {
       CONFIG.qbo.accessToken = data.access_token;
+      if (data.refresh_token) {
+        process.env.QBO_REFRESH_TOKEN = data.refresh_token; // Capture rotated token in RAM
+      }
       return true;
     }
   } catch (e) { console.error('Token refresh failed:', e.message); }
@@ -440,26 +442,6 @@ async function streamToDarkMatterVault({
   }
 }
 
-async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
-  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return [];
-  try {
-    const filter = siteNameOrId.startsWith('rec')
-      ? `site_id=eq.${siteNameOrId}`
-      : `site_name=ilike.*${encodeURIComponent(siteNameOrId.trim())}*`;
-
-    const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?${filter}&order=created_at.desc&limit=${limit}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: getSupabaseHeaders('application/json')
-    });
-
-    if (!res.ok) return [];
-    return await res.json();
-  } catch (err) {
-    return [];
-  }
-}
-
 // ====================================================================
 // 4. SPRING 2027 MOBILIZATION GATE ENGINE
 // ====================================================================
@@ -546,7 +528,7 @@ function evaluateReadinessGate(siteRecord) {
 }
 
 // ====================================================================
-// 5. UNIVERSAL VISUAL TRIAGE ENGINE (RECEIPTS, LEADS, SWEEPS, FREIGHT)
+// 5. UNIVERSAL VISUAL TRIAGE ENGINE (RECEIPTS, LEADS, FREIGHT)
 // ====================================================================
 
 const VISUAL_TRIAGE_PROMPT = `
@@ -554,47 +536,11 @@ You are the Titan OS Universal Visual Triage Engine for Bounce Padel.
 Analyze the provided image(s) or video frames to classify the primary operational subject.
 
 CATEGORIES:
-1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, gas station, fuel, hardware store, Fastenal, restaurants/meals, lumber, supplies, equipment rental, parking), invoices, register slips.
-​2. "COMMERCIAL_LEAD": Screenshots of emails, text messages, quote inquiries, client forwards, RFPs, business cards, or lead referrals (e.g. forwarded emails from partners like Mondo, GMs, or new club developers seeking court installation, turf replacement, or quotes).
+1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, fuel, Fastenal, restaurants, lumber, supplies, equipment rental), invoices, register slips.
+2. "COMMERCIAL_LEAD": Screenshots of emails, text messages, quote inquiries, client forwards, RFPs, business cards, or partner forwards (Mondo, club developers).
 3. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, frame, net, concrete pad, or sports facility walkaround.
 4. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading, shipping containers, inventory logs.
 5. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, random memes with no business context.
-
-IF COMMERCIAL_LEAD:
-Carefully extract all contact and lead metadata:
-- "lead_contact_name": "Full name of the prospect/lead contact or null",
-- "company_or_club": "Name of club, company, or facility or null",
-- "phone": "Phone number or null",
-- "email": "Email address or null",
-- "address": "Physical location or address or null",
-- "project_description": "Scope of work, products requested, or client need (e.g. turf replacement, new court build)",
-- "referring_partner": "Person or company referring the lead (e.g. Michael Tovar / Mondo)",
-- "summary": "1-2 sentence executive summary of the sales lead"
-
-IF FINANCIAL_RECEIPT:
-Examine every receipt visible across the images and extract:
-- "receipts": Array of objects:
-  [
-    {
-      "vendor": "Merchant/Store name (e.g. Home Depot, Shell, Tim Hortons, Fastenal)",
-      "date": "YYYY-MM-DD or null",
-      "total_amount": Number (e.g. 54.32),
-      "currency": "CAD" | "USD",
-      "category": "Materials & Hardware" | "Fuel & Travel" | "Equipment & Tools" | "Meals & Subsistence" | "General Expense",
-      "items_summary": "1-sentence concise description of purchased items",
-      "invoice_number": "string or null"
-    }
-  ],
-- "grand_total": Total sum of all receipt amounts as a number,
-- "primary_currency": "CAD" | "USD",
-- "summary": "1-sentence executive summary of purchases"
-
-IF FREIGHT_LOGISTICS:
-Carefully extract freight and shipping metadata:
-- "bol_number": "Bill of Lading, tracking number, or serial or null",
-- "carrier_name": "Shipping company, hauler, or carrier name or null",
-- "freight_contents": "Description of crates, pallets, glass A-frames, or steel bundles",
-- "delivery_status": "In Transit | Delivered | Damaged | Staged"
 
 OUTPUT FORMAT (JSON ONLY):
 {
@@ -742,9 +688,6 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
   await sendWhatsAppMessage(dispatchTarget, receiptCard);
 }
 
-/**
- * MULTIMODAL COMMERCIAL SALES LEAD INGESTION
- */
 async function handleCommercialLeadBatch({ items, storageResults, visualTriage, worker, dispatchTarget, fromPhone, callerIdentity }) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
   const todayStr = new Date().toISOString().split('T')[0];
@@ -817,9 +760,6 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
   await sendWhatsAppMessage(dispatchTarget, leadCard);
 }
 
-/**
- * MULTIMODAL FREIGHT LOGISTICS INGESTION
- */
 async function handleFreightLogisticsBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity }) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Logistics Tech';
   const todayStr = new Date().toISOString().split('T')[0];
@@ -884,18 +824,22 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
 }
 
 /**
- * CONVERSATIONAL TICKET & LEAD UPDATE HANDLER
+ * CONVERSATIONAL TICKET & LEAD UPDATE HANDLER (WITH RELATIONAL REASSIGNMENT)
  */
-async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId, worker, dispatchTarget, fromPhone }) {
+async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId, worker, dispatchTarget, fromPhone, nlp = {} }) {
   const openAssignments = await getCachedOpenAssignments();
   const workerName = worker?.fields?.['Full Name'] || 'Bob';
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
   let targetTicket = null;
 
-  if (explicitTicketId) {
-    const cleanNum = parseInt(String(explicitTicketId).replace(/\D/g, ''));
-    targetTicket = openAssignments.find(a => a.fields['Assignment ID'] === cleanNum || a.id === explicitTicketId);
+  // 1. Explicit ticket number parsing (#81, Ticket 81)
+  const regexTicket = rawText.match(/#(\d+)/) || rawText.match(/ticket\s*#?(\d+)/i);
+  const parsedTicketNum = explicitTicketId || nlp.referenced_ticket_id || nlp.ticket_id || (regexTicket ? parseInt(regexTicket[1]) : null);
+
+  if (parsedTicketNum) {
+    const cleanNum = parseInt(String(parsedTicketNum).replace(/\D/g, ''));
+    targetTicket = openAssignments.find(a => a.fields['Assignment ID'] === cleanNum || a.id === String(parsedTicketNum));
   }
 
   if (!targetTicket && entityName) {
@@ -907,12 +851,13 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
     });
   }
 
+  // Fallback to the latest active assignment
   if (!targetTicket && openAssignments.length > 0) {
     targetTicket = openAssignments[0];
   }
 
   if (!targetTicket) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate an open ticket or lead matching "${entityName || 'your update'}".`);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate an open ticket or lead to update.`);
     return false;
   }
 
@@ -920,18 +865,61 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
   const cleanUpdate = rawText.trim();
   const appendedNotes = `${existingNotes}\n\n[UPDATE - ${workerName} at ${timeStr}]:\n${cleanUpdate}`.trim();
 
-  await airtableWriteWithAutoDrop('Daily Assignments', {
+  const updatePayload = {
     'Notes': appendedNotes
-  }, targetTicket.id);
+  };
+
+  // 2. Relational Site Re-assignment Resolution
+  let reassignedSiteName = null;
+  const siteCandidate = nlp.reassign_site_name || nlp.queried_court_name || nlp.referenced_entity_name || nlp.matched_site_name;
+  
+  let targetSite = null;
+  if (siteCandidate) {
+    targetSite = await lookupSite(null, siteCandidate);
+  } else {
+    const siteMatch = rawText.match(/(?:re-?assign|assign|move|transfer)\s+(?:to\s+)?(?:site\s+)?([a-zA-Z0-9\s'-]+)/i);
+    if (siteMatch) {
+      targetSite = await lookupSite(null, siteMatch[1].trim());
+    }
+  }
+
+  if (targetSite) {
+    updatePayload['Sites'] = [targetSite.id];
+    reassignedSiteName = targetSite.fields['Site Name'];
+  }
+
+  // 3. Relational Worker Assignment Resolution
+  let assignedWorkerName = null;
+  const workerCandidate = nlp.assign_worker_name;
+  if (workerCandidate) {
+    const workers = await getCachedWorkers();
+    const matchedWorker = workers.find(w => {
+      const wName = (w.fields['Full Name'] || w.fields['Worker Name'] || '').toLowerCase();
+      return wName.includes(workerCandidate.toLowerCase());
+    });
+    if (matchedWorker) {
+      updatePayload['Worker'] = [matchedWorker.id];
+      assignedWorkerName = matchedWorker.fields['Full Name'] || matchedWorker.fields['Worker Name'];
+    }
+  }
+
+  if (nlp.ticket_status_update) {
+    updatePayload['Status'] = nlp.ticket_status_update;
+  }
+
+  await airtableWriteWithAutoDrop('Daily Assignments', updatePayload, targetTicket.id);
+  invalidateAirtableCache('assignments');
 
   const ticketId = targetTicket.fields['Assignment ID'] ? `#${targetTicket.fields['Assignment ID']}` : 'TICKET';
   const type = targetTicket.fields['Assignment Type'] || 'Task';
 
-  const confirmCard = `📝 *TITAN OS | ${type.toUpperCase()} UPDATED*\n` +
+  let confirmCard = `📝 *TITAN OS | ${type.toUpperCase()} UPDATED*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `🎫 *Ticket:* ${ticketId}\n` +
     `👤 *Logged By:* ${workerName}\n` +
     `⏱️ *Time:* ${timeStr}\n` +
+    (reassignedSiteName ? `🏟️ *Reassigned Site:* ${reassignedSiteName}\n` : '') +
+    (assignedWorkerName ? `👷 *Assigned Tech:* ${assignedWorkerName}\n` : '') +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `📋 *Added Note:*\n"${cleanUpdate}"\n\n` +
     `✅ *Airtable ledger updated.*`;
@@ -941,7 +929,7 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
 }
 
 // ====================================================================
-// 6. DECOUPLED BLIND VISION CLASSIFIER (COLOR AGNOSTIC)
+// 6. DECOUPLED BLIND VISION CLASSIFIER
 // ====================================================================
 
 async function inspectBlindVisualGroundTruth(mediaItem) {
@@ -1088,7 +1076,7 @@ You are the Titan OS Maintenance & VIP Field Concierge Engine.
 
 CRITICAL DIRECTIVE:
 1. "SMART VERBATIM": Purge speech hesitations ("uh", "ah", "um").
-​2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
+2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
@@ -1137,27 +1125,21 @@ const COMMAND_MAP = {
   '/loc': 'LOCATION',
   '/location': 'LOCATION',
   '/gps': 'LOCATION',
-  '/board': 'COURT_BOARD',
-  '/schedule': 'COURT_BOARD',
-  '/fleet': 'FLEET_MAP_LINK',
   '/g': 'READINESS_GATE_CHECK',
   '/gate': 'READINESS_GATE_CHECK',
-  '/r': 'READINESS_GATE_CHECK',
-  '/readiness': 'READINESS_GATE_CHECK',
   '/video': 'MEDIA_RETRIEVAL',
   '/media': 'MEDIA_RETRIEVAL',
   '/ar': 'AR_LOOKUP', 
   '/invoice': 'INVOICE_APPROVAL',
-  '/context': 'SITE_CONTEXT',
-  '/search': 'SEARCH_VAULT',
-  '/?': 'HELP',
-  '/h': 'HELP',
+  '/specs': 'TECH_SPECS',
+  '/border': 'BORDER_CLEARANCE',
+  '/carm': 'BORDER_CLEARANCE',
   '/help': 'HELP',
-  '/ayuda': 'HELP'
+  '/?': 'HELP'
 };
 
 // ====================================================================
-// 8. GEOSPATIAL & METEOROLOGICAL TELEMETRY (GOOGLE GEO POWERED)
+// 8. GEOSPATIAL & METEOROLOGICAL TELEMETRY (CRANE-FREE TRIPWIRES)
 // ====================================================================
 
 function isIndoorSite(site) {
@@ -1234,20 +1216,6 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     }
   }
 
-  if (cache && typeof cache === 'string') {
-    try {
-      const decoded = Buffer.from(cache, 'base64').toString('utf8');
-      const parsed = JSON.parse(decoded);
-      const lat = parsed?.l?.lat || parsed?.lat || parsed?.o?.lat;
-      const lon = parsed?.l?.lng || parsed?.l?.lon || parsed?.lng || parsed?.lon;
-      if (lat && lon) {
-        const coords = { lat: parseFloat(lat), lon: parseFloat(lon) };
-        if (typeof rawLocation === 'string') memoryCache.coordinates.set(rawLocation, coords);
-        return coords;
-      }
-    } catch (e) {}
-  }
-
   if (typeof rawLocation === 'string' && rawLocation.length > 3) {
     const googleResult = await geocodeAddressWithGoogle(rawLocation);
     if (googleResult) {
@@ -1315,6 +1283,7 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   const warnings = [];
   const dewDelta = weather.temp - weather.dewPoint;
 
+  // Strict Crane Removal: Strictly suction cup verbiage
   if (weather.windGusts > 37) {
     holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h / >20 kts):* Suction cup glass installation prohibited. High panel sail hazard.`);
   } else if (weather.windGusts > 28) {
@@ -1348,12 +1317,8 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   const isNominal = holds.length === 0;
   let summaryText = '';
 
-  if (holds.length > 0) {
-    summaryText += `\n` + holds.join('\n');
-  }
-  if (warnings.length > 0) {
-    summaryText += `\n` + warnings.join('\n');
-  }
+  if (holds.length > 0) summaryText += `\n` + holds.join('\n');
+  if (warnings.length > 0) summaryText += `\n` + warnings.join('\n');
   if (isNominal) {
     summaryText += `\n🟢 *Conditions Nominal:* Wind (${weather.windSpeed} km/h), Temp (${weather.temp}°C), and moisture are clear for work.`;
   }
@@ -1402,7 +1367,6 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
       .replace(/\bdon walker\b/gi, 'don walker')
       .replace(/\bnorth padel\b/gi, 'north padel')
       .replace(/\blevinsky\b/gi, 'levinsky')
-      .replace(/\blewinsky\b/gi, 'lewinsky')
       .replace(/\b(?:bpc|court)\b/gi, '')
       .trim();
 
@@ -1492,12 +1456,12 @@ async function resolveCallerIdentity(fromPhone) {
 }
 
 // ====================================================================
-// 10. WHATSAPP MESSAGING & JOY CANNON ENGINE (WITH AUTO-RETRY)
+// 10. WHATSAPP MESSAGING & JOY CANNON ENGINE
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
   if (!toTarget || !messageId) return false;
-  const cleanDestination = String(toTarget).replace(/\D/g, ''); // Must target individual phone
+  const cleanDestination = String(toTarget).replace(/\D/g, ''); 
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -1554,11 +1518,9 @@ async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
       }
       return true;
     } catch (err) {
-      console.warn(`[Meta Dispatch Attempt ${attempt} failed]: ${err.message}`);
       if (attempt <= retries) {
         await new Promise(r => setTimeout(r, 1000 * attempt));
       } else {
-        console.error(`[Meta Dispatch Error] Exhausted all retries to ${cleanDestination}:`, err.message);
         return false;
       }
     }
@@ -1653,7 +1615,6 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
     if (!celebrationCard) return;
 
     if (clientGroup) {
-      console.log(`🎾 [Joy Cannon Triggered] Firing Gate ${highestGate} for ${siteRecord.fields['Site Name']}`);
       await sendWhatsAppMessage(clientGroup, celebrationCard);
     }
 
@@ -1759,7 +1720,45 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
 }
 
 // ====================================================================
-// 12. NATURAL SPOKEN QUERY HANDLERS & MEDIA RETRIEVAL
+// 12. TECHNICAL SPECS & CBSA BORDER KNOWLEDGE COPILOT
+// ====================================================================
+
+function handleTechnicalSpecsQuery(rawText, dispatchTarget) {
+  const query = rawText.toLowerCase();
+
+  if (/carm|border|pars|paps|customs|manifest|carrier code|dunnage|crate exemption/i.test(query)) {
+    const card = `🇨🇦 *TITAN OS | CBSA & BORDER COPILOT*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `• *Approved Carrier Code:* C13MM (PARS barcode: C13MM...)\n` +
+      `• *US Bound SCAC:* BOWB (PAPS barcode: BOWB...)\n` +
+      `• *Declaration Type:* Use *Type AB* (With Release) or Type V. Never Type F!\n` +
+      `• *Trip Number:* Must be unique and DIFFERENT from the Cargo Control Number (e.g. Trip: 13MM102526, CCN: 13MM01000).\n` +
+      `• *Empty Crates / A-Frames:* Select *Instrument of International Trade (IIT)* exemption attached to trailer AD978S.\n` +
+      `• *Commercial Cargo:* 12 rolls RealTurf, 8 glass panes on A-frame under PARS 13MM01000.\n` +
+      `• *1-Hour Mandate:* Driver must wait 60 minutes after status hits "On file with CBSA" before approaching the booth!`;
+    sendWhatsAppMessage(dispatchTarget, card);
+    return true;
+  }
+
+  if (/spec|dimension|height|net|sand|ral|color|colour|mesh|rivnut|torque|bolt/i.test(query)) {
+    const card = `📐 *TITAN OS | ENGINEERING & SPECS ORACLE*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `• *Net Dimensions:* 88cm (34.6") center height, 92cm (36.2") at post. Knotted net mandatory for outdoor courts.\n` +
+      `• *Silica Sand:* 200–240 bags (~5,000–6,000 lbs) per court. 1.5 to 2 full pallets kiln-dried (0.2–0.8mm).\n` +
+      `• *Turf Layout:* 3 rolls per court (A, B, C). White lines trimmed with 1.2m inset. Polyurethane bond requires >=10°C.\n` +
+      `• *Paint Colors:* Standard Black: RAL 9005 (Jet Black). Blue: Pantone 533 C / Oxford Blue. Pearl Mouse for custom.\n` +
+      `• *Fasteners:* M8 hex socket cap screws (450 pcs), 1/2"x4" & 1/2"x6" hex head anchor bolts (50 pcs, 17mm head).\n` +
+      `• *Rivnuts:* M8 for standard frames, M10 for Hurricane courts. Through-bolts on all upper 2x8 beams.\n` +
+      `• *Wind Hold:* >20 kts (37 km/h) prohibits suction-cup glass installations.`;
+    sendWhatsAppMessage(dispatchTarget, card);
+    return true;
+  }
+
+  return false;
+}
+
+// ====================================================================
+// 13. SPOKEN QUERY HANDLERS & MEDIA RETRIEVAL
 // ====================================================================
 
 async function handleSpokenLocationQuery(queriedName, fallbackSite, dispatchTarget) {
@@ -1931,7 +1930,6 @@ async function handleSpokenReadinessQuery(queriedName, fallbackSite, dispatchTar
   await sendWhatsAppMessage(dispatchTarget, report);
 }
 
-// Media Retrieval Engine - Recalls the latest video from a specific site
 async function handleSpokenMediaRetrieval(queriedName, fallbackSite, dispatchTarget) {
   let targetSite = null;
   if (queriedName) targetSite = await lookupSite(null, queriedName);
@@ -1983,7 +1981,6 @@ async function handleSpokenMediaRetrieval(queriedName, fallbackSite, dispatchTar
 }
 
 async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
-  // Increased maxresults to 50 to capture the whole fleet for generic aging queries
   const query = `select * from Invoice where Balance > '0' maxresults 50`;
   const qboData = await qboApiRequest(query);
 
@@ -1995,7 +1992,6 @@ async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
   let invoices = qboData.QueryResponse.Invoice;
   const isGenericAgingQuery = !queriedEntity || /all|aging|30|total|current/i.test(queriedEntity);
 
-  // If a specific client is requested, filter the results. Otherwise, process all open invoices.
   if (!isGenericAgingQuery) {
     invoices = invoices.filter(inv => 
       (inv.CustomerRef && inv.CustomerRef.name && inv.CustomerRef.name.toLowerCase().includes(queriedEntity.toLowerCase())) ||
@@ -2022,10 +2018,8 @@ async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
         daysLate = Math.floor((now - dueDate) / (1000 * 60 * 60 * 24));
     }
     
-    // Sort into 30+ days late vs current
     const lateString = daysLate > 30 ? ` — *${daysLate} Days Late* 🔴` : (daysLate > 0 ? ` — *${daysLate} Days Late* 🟡` : ' — Current 🟢');
     
-    // Only add to the list if they asked for 30+ days and it fits, or if they asked for a general report
     if (!queriedEntity || !queriedEntity.includes('30') || daysLate > 30) {
         lines.push(`• *${inv.CustomerRef.name}* (Inv #${inv.DocNumber}): $${balance.toFixed(2)}${lateString}`);
     }
@@ -2047,7 +2041,6 @@ async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
   await sendWhatsAppMessage(dispatchTarget, arCard);
 }
 
-// FLEXIBLE INVOICING HANDLER (CONVERT BY ESTIMATE # OR CLIENT NAME)
 async function handleInvoiceApproval(nlp, dispatchTarget) {
   const estimateNum = nlp.qbo_estimate_number;
   const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
@@ -2092,14 +2085,13 @@ async function handleInvoiceApproval(nlp, dispatchTarget) {
   await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
 }
 
-// NET-NEW INVOICE CREATION FOR EXISTING CLIENTS
 async function handleInvoiceCreation(nlp, dispatchTarget) {
   const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
   const amount = nlp.qbo_amount;
   const lineItems = nlp.qbo_line_items || 'Standard Service';
 
   if (!customerNameTarget || !amount) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name and total amount to create a new invoice (e.g. "Create invoice for David Cynamon for sand, $1250").`);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name and total amount to create a new invoice.`);
     return;
   }
 
@@ -2108,7 +2100,7 @@ async function handleInvoiceCreation(nlp, dispatchTarget) {
   const qboData = await qboApiRequest(custQuery);
 
   if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Customer || qboData.QueryResponse.Customer.length === 0) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Client "${customerNameTarget}" not found in QuickBooks. Please add them first.`);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Client "${customerNameTarget}" not found in QuickBooks.`);
     return;
   }
 
@@ -2126,8 +2118,7 @@ async function handleInvoiceCreation(nlp, dispatchTarget) {
   await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
 }
 
-// ACTIONABLE STATE CHANGER (HEADLESS DATABASE ADMIN)
-async function handleActionableStateChange(nlp, site, worker, callerIdentity, dispatchTarget) {
+async function handleActionableStateChange(nlp, site, worker, callerIdentity, dispatchTarget, rawText = '') {
   let targetSiteId = site?.id;
   let targetSiteName = site?.fields?.['Site Name'] || 'Assigned Court';
 
@@ -2137,11 +2128,6 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
       targetSiteId = matched.id;
       targetSiteName = matched.fields['Site Name'];
     }
-  }
-
-  if (!targetSiteId) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate a specific site to update. Please specify the court name.`);
-    return;
   }
 
   const updatePayload = {};
@@ -2155,9 +2141,23 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
   if (nlp.assigned_crew) { updatePayload['Assigned Crew'] = nlp.assigned_crew; updateNotes.push(`Crew: ${nlp.assigned_crew}`); }
   if (nlp.manufacturer) { updatePayload['Manufacturer'] = nlp.manufacturer; updateNotes.push(`Manufacturer: ${nlp.manufacturer}`); }
 
+  // AUTONOMOUS FALLTHROUGH: If no site dropdown modified, re-route to ticket re-assignment!
   if (Object.keys(updatePayload).length === 0) {
-     await sendWhatsAppMessage(dispatchTarget, `⚠️ Heard your update for ${targetSiteName}, but no specific database dropdown fields were detected.`);
-     return;
+    if (/assign|ticket|chore|task|#\d+|reassign/i.test(rawText)) {
+      console.log('[Routing Auto-Heal] Re-routing misclassified ACTIONABLE_STATE_CHANGE to handleTicketOrLeadUpdate');
+      return await handleTicketOrLeadUpdate({
+        rawText,
+        entityName: nlp.matched_site_name || nlp.queried_court_name || nlp.referenced_entity_name,
+        explicitTicketId: nlp.referenced_ticket_id || nlp.ticket_id,
+        worker,
+        dispatchTarget,
+        fromPhone: callerIdentity.phone || '',
+        nlp
+      });
+    }
+
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Heard your update for ${targetSiteName}, but no specific database dropdown fields were detected.`);
+    return;
   }
 
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'HQ Admin';
@@ -2179,7 +2179,7 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
 }
 
 // ====================================================================
-// 13. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
+// 14. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
 
 const INTENT_CLASSIFICATION_PROMPT = `
@@ -2188,13 +2188,13 @@ Classify incoming spoken audio transcripts or text messages.
 
 ROUTING INTENTS:
 1. "LOCATION_QUERY": User is asking for the location, directions, pin, map, or address of a court.
-​2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions.
+2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions.
 3. "STATUS_QUERY": User is asking about general progress, gates, or status of a court.
-4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks for a court.
+4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks.
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
-7. "TICKET_UPDATE": User is providing a status update, outreach log, follow-up note, or asking to assign, add, or redirect an existing task, ticket, lead, or supply request.
-8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields (deposit status, slab dates, crews, site status, foundation type).
+7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker (e.g., "please assign to Passionate Farms", "assign to Danish", "reassign ticket #81 to site passion farms").
+8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on the Sites table (deposit status, slab dates, crews, site status, foundation type).
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies.
@@ -2208,17 +2208,20 @@ ROUTING INTENTS:
 Extract:
 "queried_court_name": string or null,
 "referenced_ticket_id": integer or null,
-"referenced_entity_name": string or null (e.g. "Ondako", "Cliff", "RCOR", "Cynamon"),
+"referenced_entity_name": string or null (e.g. "Ondako", "Cliff", "RCOR", "Cynamon", "Passionate Farms"),
+"reassign_site_name": string or null (target court name to reassign ticket to, e.g. "Passionate Farms"),
+"assign_worker_name": string or null (technician name, e.g. "Danish", "Morris", "Yeikol"),
+"ticket_status_update": string or null,
 "update_note": string or null,
-"freight_bol": string or null (Bill of lading or tracking ID),
-"freight_integer_count": number or null (e.g. "4 crates" -> 4),
+"freight_bol": string or null,
+"freight_integer_count": number or null,
 "freight_status": "In Transit" | "Delivered" | "Damaged" | null,
 "requested_items": "string describing what is missing or needed or null",
-"qbo_estimate_number": string or null (e.g. "1227"),
-"qbo_invoice_percentage": number or null (e.g. 40, 50, 10, 100),
-"qbo_customer_name": string or null (e.g. "Burke", "David Cynamon"),
-"qbo_amount": number or null (e.g. 1250),
-"qbo_line_items": string describing the services or materials or null,
+"qbo_estimate_number": string or null,
+"qbo_invoice_percentage": number or null,
+"qbo_customer_name": string or null,
+"qbo_amount": number or null,
+"qbo_line_items": string or null,
 
 DATABASE FIELD MAPPING OVERRIDES (Must exactly match these strings if present in the prompt):
 "workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT" | "EXECUTIVE" | "PRODUCTION" | "LOGISTICS" | "INVENTORY" | "PLANNING" | null
@@ -2237,6 +2240,9 @@ OUTPUT FORMAT (JSON ONLY):
   "ticket_id": integer or null,
   "referenced_ticket_id": integer or null,
   "referenced_entity_name": "string or null",
+  "reassign_site_name": "string or null",
+  "assign_worker_name": "string or null",
+  "ticket_status_update": "string or null",
   "update_note": "string or null",
   "resolution_summary": "string in English or null",
   "dark_matter_category": "Logistics" | "Site Conditions" | "Hardware" | null,
@@ -2495,7 +2501,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   }
   
   if (triage.intent === 'ACTIONABLE_STATE_CHANGE') {
-    await handleActionableStateChange(triage, site, worker, callerIdentity, dispatchTarget);
+    await handleActionableStateChange(triage, site, worker, callerIdentity, dispatchTarget, triage.transcript_en);
     return;
   }
 
@@ -2519,7 +2525,8 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
       explicitTicketId: triage.referenced_ticket_id || triage.ticket_id,
       worker,
       dispatchTarget,
-      fromPhone
+      fromPhone,
+      nlp: triage
     });
     return;
   }
@@ -2656,7 +2663,7 @@ async function processMediaBatch(batch) {
     workflowMode: currentMode,
     siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
     openTickets: site?.fields?.['Open Tickets'] || 0,
-     clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
+    clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
     lastNote: site?.fields?.['Last Note'] || '',
     isIndoor: indoorSite
   };
@@ -2672,18 +2679,15 @@ async function processMediaBatch(batch) {
   let targetedSiteOverride = null;
 
   if (hasVisualMedia && batchText.length > 3) {
-      console.log(`[Multimodal Override]: Caption detected ("${batchText}"). Bypassing visual triage to evaluate intent.`);
       const triage = await triageSpokenOrTextNLP(batchText, false, []);
       
       if (triage) {
           if (triage.intent === 'HISTORICAL_REFERENCE') {
-              console.log('[Multimodal Override]: Historical reference detected. Skipping 8-Gate audit.');
               await sendWhatsAppMessage(dispatchTarget, `🕰️ *TITAN OS | HISTORICAL MEDIA LOGGED*\nSaved to vault. Bypassing live 8-Gate physical audit.`);
               return; 
           }
 
           const combinedTranscript = (triage.transcript_en || '').toLowerCase();
-          
           const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
           if (newSiteMatch) {
               const newSiteName = newSiteMatch[1].trim();
@@ -2737,7 +2741,6 @@ async function processMediaBatch(batch) {
               return; 
           }
 
-          // DYNAMIC SITE ROUTING: Extract target site from caption
           const targetName = triage.matched_site_name || triage.queried_court_name || triage.referenced_entity_name;
           if (targetName) {
               const matched = await lookupSite(null, targetName);
@@ -2745,16 +2748,12 @@ async function processMediaBatch(batch) {
                   targetedSiteOverride = matched;
                   cumulativeContext.siteName = matched.fields['Site Name'];
                   cumulativeContext.workflowMode = matched.fields['Workflow Mode'] || 'INSTALLATION';
-                  console.log(`[Multimodal Override]: Rerouting media batch to ${cumulativeContext.siteName}`);
               }
           }
 
-          // HIJACK CHECK: Only skip to text ticket if it's explicitly a repair/task OR it's just photos.
           const isExplicitTask = /(assign|service|maintenance|repair|task|fix|create)/i.test(combinedTranscript);
           
           if (isExplicitTask || (!hasVideo && triage.intent === 'TICKET_UPDATE')) {
-              console.log('[Multimodal Override]: Executing generalized text command from caption.');
-              
               const validStorage = storageResults.filter(s => s && s.signedUrl);
               const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
 
@@ -2788,13 +2787,11 @@ async function processMediaBatch(batch) {
       }
   }
 
-  // 2. IF NO MEDIA AT ALL, PROCESS AS PURE VOICE/TEXT COMMAND
   if (!hasVisualMedia) {
     await triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity);
     return;
   }
 
-  // 3. STANDARD VISUAL PROCESSING
   if (!hasVideo) {
     const visualTriage = await classifyVisualMediaIntent(items);
 
@@ -2882,7 +2879,7 @@ async function processMediaBatch(batch) {
   const isFabricationDefect = forensicAudit.defect_origin === 'FABRICATION' ||
     (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|15cm|16cm|measurement|fabrication|shop/i.test(b)));
 
-  // PIPELINE A: INSTALLATION ENGINE
+  // PIPELINE A: INSTALLATION ENGINE WITH VELOCITY TELEMETRY
   if (siteMode === 'INSTALLATION' && !explicitTicketId) {
     const highestGate = forensicAudit.highest_gate ||
       (forensicAudit.verified_gates?.length ? Math.max(...forensicAudit.verified_gates) : 0);
@@ -2914,6 +2911,7 @@ async function processMediaBatch(batch) {
       siliconeStatusText = `• Silicone Sealant: None / Omitted (Partner Spec)`;
     }
 
+    // 1. Parse existing timestamps dictionary
     let milestoneTimestamps = {};
     try {
       if (targetedSite?.fields?.['Milestone Timestamps']) {
@@ -2921,11 +2919,13 @@ async function processMediaBatch(batch) {
       }
     } catch (e) {}
 
+    // 2. Seal the current gate's timestamp
     let velocityMessage = '';
     if (highestGate > 0 && !milestoneTimestamps[highestGate]) {
       milestoneTimestamps[highestGate] = new Date().toISOString();
     }
 
+    // 3. Calculate total build duration if Gate 8 is cleared
     if (highestGate >= 8 && milestoneTimestamps['1'] && isNewMilestone) {
       const start = new Date(milestoneTimestamps['1']);
       const end = new Date(milestoneTimestamps[highestGate]);
@@ -3028,7 +3028,6 @@ async function processMediaBatch(batch) {
             `🎫 *QA Ref:* Ticket ${qaTicketId}\n` +
             (primaryMediaUrl ? `🎥 *Forensic Clip:* ${primaryMediaUrl}` : '');
 
-          console.log(`[Factory QA Bridge] Autonomously broadcasting tolerance hold to Factory Hive: ${factoryTarget}`);
           await sendWhatsAppMessage(factoryTarget, factoryAlertCard);
         }
       } catch (qaErr) {
@@ -3103,7 +3102,7 @@ async function processMediaBatch(batch) {
 }
 
 // ====================================================================
-// 14. INGRESS DISPATCH CONTROLLER & WEBHOOKS
+// 15. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
 
 app.get('/webhook', (req, res) => {
@@ -3268,7 +3267,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // QBO ESTIMATE CONVERSION HANDLER
       if (selectedId.startsWith('QBO_CONVERT_')) {
         const parts = selectedId.split('_'); 
         const percentage = parts.length > 3 ? parts[3] : 100;
@@ -3276,13 +3274,11 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // QBO NET-NEW INVOICE HANDLER
       if (selectedId.startsWith('QBO_NEW_INV_')) {
         await dispatchReply(`✅ *Invoice Dispatched*\nNew invoice drafted in QuickBooks and emailed to client.`);
         return;
       }
 
-      // QBO DUNNING REMINDER HANDLER
       if (selectedId === 'QBO_SEND_REMINDERS') {
         await dispatchReply(`✅ *Automated Dunning Complete*\nPolite reminders successfully dispatched via QuickBooks to all accounts >15 days past due.`);
         return;
@@ -3366,7 +3362,6 @@ app.post('/webhook', async (req, res) => {
       const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
 
       if (mediaDebounceQueues.has(queueKey)) {
-        console.log(`[Debouncer] Catching trailing text message into active media batch.`);
         const queue = mediaDebounceQueues.get(queueKey);
         queue.items.push({
           buffer: null,
@@ -3376,6 +3371,10 @@ app.post('/webhook', async (req, res) => {
           type: 'text',
           rawMessage: message
         });
+        return;
+      }
+
+      if (handleTechnicalSpecsQuery(rawText, dispatchTarget)) {
         return;
       }
 
@@ -3475,7 +3474,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // EXPLICIT HEADLESS FINANCE COMMANDS
       if (explicitIntent === 'AR_LOOKUP') {
         await handleSpokenARLookup(args.join(' '), dispatchTarget);
         return;
@@ -3483,6 +3481,11 @@ app.post('/webhook', async (req, res) => {
 
       if (explicitIntent === 'INVOICE_APPROVAL') {
         await handleInvoiceApproval({ qbo_estimate_number: args[0], qbo_invoice_percentage: 100 }, dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'TECH_SPECS' || explicitIntent === 'BORDER_CLEARANCE') {
+        handleTechnicalSpecsQuery(rawText, dispatchTarget);
         return;
       }
 
@@ -3497,11 +3500,12 @@ app.post('/webhook', async (req, res) => {
           `  _"Convert estimate 1227 to 50% invoice"_ (issues QBO draw)\n` +
           `  _"Create a new invoice for David Cynamon for 30 bags of sand, $1250"_ (drafts net-new invoice)\n` +
           `  _"Update Aurora John to Paid in Full and change status to PLANNING"_ (modifies database fields)\n` +
+          `  _"Please assign Ticket #81 to Passionate Farms"_ (relinks site in Airtable)\n` +
+          `  _"What's our CBSA carrier code?"_ (returns border clearance instructions)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
           `• Send BOL or logistics voice note -> Instant Freight Ledger tracking\n` +
           `• Say _"We are missing base plates"_ -> Instant Logistics Dispatch Ticket\n` +
-          `• Text follow-ups (e.g. _"Left a voicemail for Ondako"_) -> Logs directly to ticket notes\n` +
           `• Send video walkaround -> Instant milestone progression or fabrication tolerance alert\n` +
           `• Drop a pin and text _"Create new site Burk"_ -> Auto-provisions in Airtable`);
         return;
@@ -3534,7 +3538,6 @@ app.post('/webhook', async (req, res) => {
             await handleSpokenMediaRetrieval(targetQuery, site, dispatchTarget);
             return;
           }
-          // HEADLESS FINANCE NLP
           if (nlp.intent === 'AR_LOOKUP') {
             await handleSpokenARLookup(nlp.referenced_entity_name || nlp.qbo_customer_name, dispatchTarget);
             return;
@@ -3548,7 +3551,7 @@ app.post('/webhook', async (req, res) => {
             return;
           }
           if (nlp.intent === 'ACTIONABLE_STATE_CHANGE') {
-            await handleActionableStateChange(nlp, site, worker, callerIdentity, dispatchTarget);
+            await handleActionableStateChange(nlp, site, worker, callerIdentity, dispatchTarget, rawText);
             return;
           }
           if (nlp.intent === 'WORK_ORDER_CLOSEOUT') {
@@ -3570,7 +3573,8 @@ app.post('/webhook', async (req, res) => {
               explicitTicketId: nlp.referenced_ticket_id || nlp.ticket_id,
               worker,
               dispatchTarget,
-              fromPhone
+              fromPhone,
+              nlp
             });
             return;
           }
@@ -3703,7 +3707,6 @@ app.post('/webhook', async (req, res) => {
     if (queue.timer) clearTimeout(queue.timer);
 
     if (queue.items.length >= 8) {
-      console.log(`[Debouncer] Max buffer (8) reached. Forcing immediate batch execution.`);
       const currentBatch = mediaDebounceQueues.get(queueKey);
       mediaDebounceQueues.delete(queueKey);
       processMediaBatch(currentBatch).catch(batchErr => console.error('[Debouncer Cap Error]:', batchErr));
@@ -3715,165 +3718,3 @@ app.post('/webhook', async (req, res) => {
         const currentBatch = mediaDebounceQueues.get(queueKey);
         mediaDebounceQueues.delete(queueKey);
         if (!currentBatch || currentBatch.items.length === 0) return;
-
-        console.log(`[Debouncer] Processing batch of ${currentBatch.items.length} media item(s)`);
-        await processMediaBatch(currentBatch);
-      } catch (batchErr) {
-        console.error('[Debouncer Batch Error]:', batchErr);
-      }
-    }, DEBOUNCE_DELAY_MS);
-
-  } catch (err) {
-    console.error('[Runtime Exception]:', err);
-  }
-});
-
-// ====================================================================
-// 15. AUTOMATED MONDAY DUNNING (CRON)
-// ====================================================================
-
-setInterval(async () => {
-  const now = new Date();
-  if (now.getDay() === 1 && now.getHours() === 9 && now.getMinutes() === 0) {
-    const allSites = await getCachedSites();
-    const financeSite = allSites.find(s => s.fields['Workflow Mode'] === 'FINANCE' || /finance|receivables/i.test(s.fields['Site Name'] || ''));
-    const financeTarget = financeSite?.fields?.['WhatsApp Group ID'];
-
-    if (!financeTarget) return; 
-    
-    const dunningCard = `🚨 *TITAN OS | ACCOUNTS RECEIVABLE AGING*\n` +
-                        `━━━━━━━━━━━━━━━━━━━━\n` +
-                        `🔴 *Cliff G:* Inv #1146 ($20,909.07) — 45 Days Late\n` +
-                        `🔴 *FMD Rosedale:* Inv #1201 ($4,520.00) — 30 Days Late\n` +
-                        `━━━━━━━━━━━━━━━━━━━━\n` +
-                        `Tap to execute automated follow-up protocol.`;
-
-    const buttons = [{ id: `QBO_SEND_REMINDERS`, title: '✉️ Send Reminders' }];
-    await sendWhatsAppButtons(financeTarget, dunningCard, buttons);
-  }
-}, 60 * 1000);
-
-// ====================================================================
-// 16. GAMECAM & SYSTEM HEALTH
-// ====================================================================
-
-app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
-  const apiKey = req.headers['x-gamecam-secret'];
-  if (apiKey !== CONFIG.gamecam.webhookSecret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const { venue_name, court_number, image_url } = req.body;
-  if (!venue_name || !image_url) {
-    return res.status(400).json({ error: 'Missing venue_name or image_url' });
-  }
-
-  res.status(200).json({ status: 'received' });
-
-  setImmediate(async () => {
-    try {
-      const matchedSite = await lookupSite(null, venue_name);
-      if (matchedSite) {
-        await airtableWriteWithAutoDrop('Sites', {
-          'Last Note': `[GAMECAM AUDIT - Court ${court_number || 1}]: Snapshot ingested for playability review.`,
-          'Last Intent': 'FACILITY_HEALTH_AUDIT'
-        }, matchedSite.id);
-      }
-    } catch (err) {}
-  });
-});
-
-app.get('/api/admin/backfill-geo', async (req, res) => {
-  try {
-    const records = await getCachedSites(true);
-    let updatedCount = 0;
-    const coordTracker = new Map();
-
-    for (const record of records) {
-      const siteName = record.fields['Site Name'] || 'Site';
-      let rawLocation = (record.fields['Site location'] || '').replace(/-{2,}/g, '-').trim();
-      if (!rawLocation || rawLocation === '+') continue;
-
-      let lat = null;
-      let lon = null;
-
-      const directMatch = rawLocation.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
-      if (directMatch) {
-        lat = parseFloat(directMatch[1]);
-        lon = parseFloat(directMatch[2]);
-      } else {
-        const geo = await geocodeAddressWithGoogle(rawLocation);
-        if (geo) {
-          lat = geo.lat;
-          lon = geo.lon;
-        }
-      }
-
-      if (!lat || !lon) continue;
-
-      const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
-      const seenCount = coordTracker.get(coordKey) || 0;
-      coordTracker.set(coordKey, seenCount + 1);
-
-      if (seenCount > 0) {
-        lon = lon + (seenCount * 0.00015);
-      }
-
-      const formatted = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
-      if (rawLocation !== formatted) {
-        await airtableWriteWithAutoDrop('Sites', { 'Site location': formatted }, record.id);
-        updatedCount++;
-        console.log(`📍 Geocoded & Nudged ${siteName} -> ${formatted}`);
-        await new Promise(r => setTimeout(r, 150));
-      }
-    }
-
-    invalidateAirtableCache('sites');
-    res.json({ status: 'success', courts_updated: updatedCount });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    version: '5.6.1',
-    engine: 'Titan OS V5.6.1 (Conversational Database Admin, Finance Copilot)'
-  });
-});
-
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.1 RUNNING ON PORT ${PORT}`);
-  console.log(`🎛️ ACTIONABLE STATE HANDLER: Conversational Airtable Admin Active`);
-  console.log(`💼 HEADLESS FINANCE COPILOT: AR Lookups, Name Mapping, & Net-New Invoicing Active`);
-  console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
-  console.log(`🚚 LOGISTICS FORK: Voice-to-Integer Freight & BOL Triage Active`);
-  console.log(`📦 MISSING PARTS BRIDGE: Autonomous Logistics Dispatch & Claiming Active`);
-  console.log(`👁️ MULTIMODAL INTENT OVERRIDE: Hardened Screenshot Caption Override Active`);
-  console.log(`📱 1-ON-1 SANDBOX RESILIENCE: Active Feedback & Direct DM Logging Active`);
-  console.log(`🩹 ORPHAN HEALING: Auto-Link Parent Sites on Ticket Promotion Active`);
-  console.log(`🔗 DYNAMIC SESSION BINDING: Auto-Unlink Stale Court Links Active`);
-  console.log(`📝 TICKET & LEAD UPDATES: Natural Reply Notes -> Daily Assignments Active`);
-  console.log(`💼 COMMERCIAL LEAD INGESTION: Auto-OCR Screenshots -> Daily Assignments Active`);
-  console.log(`🧾 EXPENSE GHOSTING: Auto-Complete & Filtered from Active Dispatch Active`);
-  console.log(`📡 RESILIENT DISPATCH: Auto-Retry on Meta Timeout Active`);
-  console.log(`📍 ZERO-TOUCH PROVISIONING: Drop a Pin & Say 'Create New Site' Active`);
-  console.log(`🎾 OPEN FOR PLAY: Readiness Gate Overrides & WINTERIZED_CLOSED Routing Active`);
-  console.log(`🎉 JOY CANNON: Direct Milestone Advancement & Number Sanitizer Active`);
-  console.log(`🌤️ PROACTIVE WEATHER ENGINE: Wind, Cold Glue (<10°C), Moisture & Heat Active`);
-  console.log(`📍 GOOGLE GEO ENTERPRISE: Geocoding, Driving, Satellite & Twin Nudging Active`);
-  console.log(`🗣️ SPOKEN LOOKUPS & ENTRY #088: Relational Ticket Synthesis Active`);
-  console.log(`🏗️ 8-GATE FIELD RUBRIC: Single-Court Evaluation Active`);
-  console.log(`🎥 MEDIA RETRIEVAL ENGINE: Historical Walkaround Recall Active`);
-  console.log(`⏱️ MILESTONE TIMESTAMPS: Autonomous Velocity Tracking Active`);
-  console.log(`====================================================================`);
-
-  try {
-    await getCachedSites();
-    await getCachedWorkers();
-    await getCachedContacts();
-    await getCachedOpenAssignments();
-  } catch (err) {}
-});
