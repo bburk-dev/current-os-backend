@@ -23,6 +23,7 @@
  * 19. Media Retrieval Engine: Spoken recall of historical video walkthroughs.
  * 20. Headless Finance Copilot: AR Lookups, Dunning, Percentage Estimates, & Net-New Invoicing
  * 21. Actionable State Handler: Conversational Airtable Database Admin (Zero-UI Dropdown Mapping)
+ * 22. Autonomous Milestone Velocity Tracking & Smart Punch-List Extraction
  */
 
 process.on('uncaughtException', (err) => {
@@ -1315,7 +1316,7 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   const dewDelta = weather.temp - weather.dewPoint;
 
   if (weather.windGusts > 37) {
-    holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h / >20 kts):* Crane & suction cup glass installation prohibited. High panel sail hazard.`);
+    holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h / >20 kts):* Suction cup glass installation prohibited. High panel sail hazard.`);
   } else if (weather.windGusts > 28) {
     warnings.push(`💨 *WIND WARNING (${weather.windGusts} km/h):* Approach glass seating with caution; verify post anchoring.`);
   }
@@ -2192,7 +2193,7 @@ ROUTING INTENTS:
 4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks for a court.
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
-7. "TICKET_UPDATE": User is providing a status update, outreach log, or follow-up note on an open ticket, lead, client, or chore.
+7. "TICKET_UPDATE": User is providing a status update, outreach log, follow-up note, or asking to assign, add, or redirect an existing task, ticket, lead, or supply request.
 8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields (deposit status, slab dates, crews, site status, foundation type).
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
@@ -2913,12 +2914,34 @@ async function processMediaBatch(batch) {
       siliconeStatusText = `• Silicone Sealant: None / Omitted (Partner Spec)`;
     }
 
+    let milestoneTimestamps = {};
+    try {
+      if (targetedSite?.fields?.['Milestone Timestamps']) {
+        milestoneTimestamps = JSON.parse(targetedSite.fields['Milestone Timestamps']);
+      }
+    } catch (e) {}
+
+    let velocityMessage = '';
+    if (highestGate > 0 && !milestoneTimestamps[highestGate]) {
+      milestoneTimestamps[highestGate] = new Date().toISOString();
+    }
+
+    if (highestGate >= 8 && milestoneTimestamps['1'] && isNewMilestone) {
+      const start = new Date(milestoneTimestamps['1']);
+      const end = new Date(milestoneTimestamps[highestGate]);
+      const diffHrs = Math.abs(end - start) / 36e5;
+      const days = Math.floor(diffHrs / 24);
+      const hours = Math.round(diffHrs % 24);
+      velocityMessage = `\n⏱️ *Build Velocity:* ${days} Days, ${hours} Hours (Gate 1 to Gate 8)`;
+    }
+
     if (targetedSite) {
       const allCleared = Array.from(new Set([...previouslyCleared, ...newlyVerifiedGates]));
 
       const updatePayload = {
         'Cleared Milestones': allCleared,
         'Current Gate': compactGateStatus,
+        'Milestone Timestamps': JSON.stringify(milestoneTimestamps),
         'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${cleanSummary}${siliconeStatusText ? `\n${siliconeStatusText}` : ''}`,
         'Last Intent': hasBlockers ? 'ACTION_REQUIRED' : 'MILESTONE_PROGRESS'
       };
@@ -2948,7 +2971,8 @@ async function processMediaBatch(batch) {
       `━━━━━━━━━━━━━━━━━━━━\n` +
       (hasBlockers && forensicAudit.blockers_detected?.length ? `🚨 *Blocker Detected:*\n${forensicAudit.blockers_detected.join('\n')}\n\n` : '') +
       `👁️ *Observation:*\n${cleanSummary}\n` +
-      (siliconeStatusText ? `${siliconeStatusText}\n` : '');
+      (siliconeStatusText ? `${siliconeStatusText}\n` : '') +
+      velocityMessage;
 
     if (weatherTripwires.summaryText) {
       installCard += `\n📋 *Weather Telemetry:*${weatherTripwires.summaryText}\n`;
@@ -3843,6 +3867,7 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`🗣️ SPOKEN LOOKUPS & ENTRY #088: Relational Ticket Synthesis Active`);
   console.log(`🏗️ 8-GATE FIELD RUBRIC: Single-Court Evaluation Active`);
   console.log(`🎥 MEDIA RETRIEVAL ENGINE: Historical Walkaround Recall Active`);
+  console.log(`⏱️ MILESTONE TIMESTAMPS: Autonomous Velocity Tracking Active`);
   console.log(`====================================================================`);
 
   try {
