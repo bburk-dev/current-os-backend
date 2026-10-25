@@ -1379,6 +1379,7 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
 
     let match = sites.find(s => {
       const sName = String(s.fields['Site Name'] || '').toLowerCase();
+      if (!sName) return false;
       return sName.includes(normalized) || normalized.includes(sName);
     });
     if (match) return match;
@@ -1387,6 +1388,7 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
     if (searchTokens.length > 0) {
       match = sites.find(s => {
         const sName = String(s.fields['Site Name'] || '').toLowerCase();
+        if (!sName) return false;
         return searchTokens.every(token => sName.includes(token));
       });
       if (match) return match;
@@ -1774,7 +1776,7 @@ async function handleSpokenWeatherQuery(queriedName, fallbackSite, dispatchTarge
     return;
   }
 
-  const siteName = targetSite.fields['Site Name'];
+  const siteName = targetSite.fields['Site Name'] || queriedName || 'your assigned court';
   const coords = await resolveCoordinates(targetSite);
   if (!coords) {
     await sendWhatsAppMessage(dispatchTarget, `📍 No coordinates locked for *${siteName}* to check weather.`);
@@ -2425,12 +2427,14 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   }
 
   if (triage.intent === 'LOCATION_QUERY') {
-    await handleSpokenLocationQuery(triage.queried_court_name, site, dispatchTarget);
+    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+    await handleSpokenLocationQuery(targetQuery, site, dispatchTarget);
     return;
   }
 
   if (triage.intent === 'WEATHER_QUERY') {
-    await handleSpokenWeatherQuery(triage.queried_court_name, site, dispatchTarget);
+    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+    await handleSpokenWeatherQuery(targetQuery, site, dispatchTarget);
     return;
   }
 
@@ -3444,11 +3448,13 @@ app.post('/webhook', async (req, res) => {
         const nlp = await triageSpokenOrTextNLP(rawText, false);
         if (nlp) {
           if (nlp.intent === 'LOCATION_QUERY') {
-            await handleSpokenLocationQuery(nlp.queried_court_name, site, dispatchTarget);
+            const targetQuery = nlp.queried_court_name || nlp.matched_site_name || nlp.referenced_entity_name;
+            await handleSpokenLocationQuery(targetQuery, site, dispatchTarget);
             return;
           }
           if (nlp.intent === 'WEATHER_QUERY') {
-            await handleSpokenWeatherQuery(nlp.queried_court_name, site, dispatchTarget);
+            const targetQuery = nlp.queried_court_name || nlp.matched_site_name || nlp.referenced_entity_name;
+            await handleSpokenWeatherQuery(targetQuery, site, dispatchTarget);
             return;
           }
           if (nlp.intent === 'STATUS_QUERY' || nlp.intent === 'TICKET_QUERY') {
