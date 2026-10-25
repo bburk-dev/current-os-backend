@@ -324,11 +324,30 @@ async function uploadToSupabase(buffer, mimeType) {
 // 2B. QUICKBOOKS ONLINE REST API WRAPPER
 // ====================================================================
 
-async function qboApiRequest(pathOrQuery, method = 'GET', body = null) {
-  if (!CONFIG.qbo.companyId || !CONFIG.qbo.accessToken) return null;
-  
-  const isQuery = pathOrQuery.startsWith('select');
-  const url = isQuery 
+async function refreshQboToken() {
+  const auth = Buffer.from(`${process.env.QBO_CLIENT_ID}:${process.env.QBO_CLIENT_SECRET}`).toString('base64');
+  try {
+    const res = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${auth}`
+      },
+      body: `grant_type=refresh_token&refresh_token=${process.env.QBO_REFRESH_TOKEN}`
+    });
+    const data = await res.json();
+    if (data.access_token) {
+      CONFIG.qbo.accessToken = data.access_token;
+      return true;
+    }
+  } catch (e) { console.error('Token refresh failed:', e.message); }
+  return false;
+}
+
+async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry = false) {
+  if (!CONFIG.qbo.companyId) return null;
+  const url = pathOrQuery.startsWith('select') 
     ? `${CONFIG.qbo.baseUrl}/${CONFIG.qbo.companyId}/query?query=${encodeURIComponent(pathOrQuery)}`
     : `${CONFIG.qbo.baseUrl}/${CONFIG.qbo.companyId}${pathOrQuery.startsWith('/') ? '' : '/'}${pathOrQuery}`;
 
@@ -338,13 +357,17 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null) {
       'Authorization': `Bearer ${CONFIG.qbo.accessToken}`,
       'Accept': 'application/json',
       'Content-Type': 'application/json'
-    }
+    },
+    body: body ? JSON.stringify(body) : null
   };
-  if (body) options.body = JSON.stringify(body);
 
   try {
     const res = await fetch(url, options);
-    if (!res.ok) throw new Error(`QBO HTTP ${res.status}`);
+    if (res.status === 401 && !isRetry) {
+      const refreshed = await refreshQboToken();
+      if (refreshed) return await qboApiRequest(pathOrQuery, method, body, true);
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
     console.error('[QBO API Error]:', err.message);
@@ -529,7 +552,7 @@ Analyze the provided image(s) or video frames to classify the primary operationa
 
 CATEGORIES:
 1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, gas station, fuel, hardware store, Fastenal, restaurants/meals, lumber, supplies, equipment rental, parking), invoices, register slips.
-2. "COMMERCIAL_LEAD": Screenshots of emails, text messages, quote inquiries, client forwards, RFPs, business cards, or lead referrals (e.g. forwarded emails from partners like Mondo, GMs, or new club developers seeking court installation, turf replacement, or quotes).
+​2. "COMMERCIAL_LEAD": Screenshots of emails, text messages, quote inquiries, client forwards, RFPs, business cards, or lead referrals (e.g. forwarded emails from partners like Mondo, GMs, or new club developers seeking court installation, turf replacement, or quotes).
 3. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, frame, net, concrete pad, or sports facility walkaround.
 4. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading, shipping containers, inventory logs.
 5. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, random memes with no business context.
@@ -1062,7 +1085,7 @@ You are the Titan OS Maintenance & VIP Field Concierge Engine.
 
 CRITICAL DIRECTIVE:
 1. "SMART VERBATIM": Purge speech hesitations ("uh", "ah", "um").
-2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
+​2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
 
 OUTPUT SPECIFICATION (JSON ONLY):
 {
@@ -1471,21 +1494,18 @@ async function resolveCallerIdentity(fromPhone) {
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
   if (!toTarget || !messageId) return false;
-  const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
-  const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
+  const cleanDestination = String(toTarget).replace(/\D/g, ''); // Must target individual phone
 
   const payload = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to: cleanDestination,
     type: 'reaction',
     reaction: { message_id: messageId, emoji: emoji }
   };
 
-  if (!isGroup) payload.recipient_type = 'individual';
-
-  const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`;
   try {
-    await fetch(url, {
+    await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${CONFIG.meta.accessToken}`,
@@ -1494,9 +1514,7 @@ async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
       body: JSON.stringify(payload)
     });
     return true;
-  } catch (err) {
-    return false;
-  }
+  } catch (err) { return false; }
 }
 
 async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
@@ -2083,7 +2101,7 @@ async function handleInvoiceCreation(nlp, dispatchTarget) {
   }
 
   const cleanName = customerNameTarget.replace(/'/g, "\\'");
-  const custQuery = `select * from Customer where DisplayName LIKE '%${cleanName}%' MAXRESULTS 1`;
+  const custQuery = `select * from Customer where DisplayName LIKE '${cleanName}%' MAXRESULTS 1`;
   const qboData = await qboApiRequest(custQuery);
 
   if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Customer || qboData.QueryResponse.Customer.length === 0) {
@@ -2167,7 +2185,7 @@ Classify incoming spoken audio transcripts or text messages.
 
 ROUTING INTENTS:
 1. "LOCATION_QUERY": User is asking for the location, directions, pin, map, or address of a court.
-2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions.
+​2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions.
 3. "STATUS_QUERY": User is asking about general progress, gates, or status of a court.
 4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks for a court.
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
@@ -2635,7 +2653,7 @@ async function processMediaBatch(batch) {
     workflowMode: currentMode,
     siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
     openTickets: site?.fields?.['Open Tickets'] || 0,
-    clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
+     clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
     lastNote: site?.fields?.['Last Note'] || '',
     isIndoor: indoorSite
   };
@@ -3608,7 +3626,7 @@ app.post('/webhook', async (req, res) => {
     const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
     const caption = mediaObj.caption || '';
 
-    sendWhatsAppReaction(dispatchTarget, messageId, isAudio ? '🎧' : (isVideo ? '🎥' : '🧾')).catch(() => {});
+    sendWhatsAppReaction(fromPhone, messageId, isAudio ? '🎧' : (isVideo ? '🎥' : '🧾')).catch(() => {});
 
     const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
@@ -3832,3 +3850,4 @@ app.listen(PORT, '0.0.0.0', async () => {
     await getCachedOpenAssignments();
   } catch (err) {}
 });
+```<FollowUp>Are there any other specific QBO parameters or custom fields (like HST rates or item classes) you need me to map into the net-new invoice function before you push this live?</FollowUp>
