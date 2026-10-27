@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.2 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.4 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -25,6 +25,7 @@
  * 21. Actionable State Handler: Conversational Airtable Database Admin
  * 22. Autonomous Milestone Velocity Tracking (Gate 1 to Gate 8)
  * 23. Technical Specs & Border Clearance Copilot (CBSA C13MM / PAPS BOWB)
+ * 24. Asset Specification Tracking: Steel, Turf, Warranty Year, Model Type, and Glass Thickness
  */
 
 process.on('uncaughtException', (err) => {
@@ -340,7 +341,7 @@ async function refreshQboToken() {
     if (data.access_token) {
       CONFIG.qbo.accessToken = data.access_token;
       if (data.refresh_token) {
-        process.env.QBO_REFRESH_TOKEN = data.refresh_token; // Capture rotated token in RAM
+        process.env.QBO_REFRESH_TOKEN = data.refresh_token;
       }
       return true;
     }
@@ -417,7 +418,7 @@ async function streamToDarkMatterVault({
     category: category || 'General Logistics',
     distilled_context: distilledContext || rawText.slice(0, 150),
     urgency,
-    gravityScore,
+    gravity_score: gravityScore,
     actionable_followup: actionableFollowup,
     status: 'ARCHIVED',
     created_at: new Date().toISOString()
@@ -439,6 +440,26 @@ async function streamToDarkMatterVault({
     return inserted?.[0] || null;
   } catch (err) {
     return null;
+  }
+}
+
+async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
+  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return [];
+  try {
+    const filter = siteNameOrId.startsWith('rec')
+      ? `site_id=eq.${siteNameOrId}`
+      : `site_name=ilike.*${encodeURIComponent(siteNameOrId.trim())}*`;
+
+    const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?${filter}&order=created_at.desc&limit=${limit}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: getSupabaseHeaders('application/json')
+    });
+
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (err) {
+    return [];
   }
 }
 
@@ -833,7 +854,6 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
 
   let targetTicket = null;
 
-  // 1. Explicit ticket number parsing (#81, Ticket 81)
   const regexTicket = rawText.match(/#(\d+)/) || rawText.match(/ticket\s*#?(\d+)/i);
   const parsedTicketNum = explicitTicketId || nlp.referenced_ticket_id || nlp.ticket_id || (regexTicket ? parseInt(regexTicket[1]) : null);
 
@@ -851,7 +871,6 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
     });
   }
 
-  // Fallback to the latest active assignment
   if (!targetTicket && openAssignments.length > 0) {
     targetTicket = openAssignments[0];
   }
@@ -869,7 +888,6 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
     'Notes': appendedNotes
   };
 
-  // 2. Relational Site Re-assignment Resolution
   let reassignedSiteName = null;
   const siteCandidate = nlp.reassign_site_name || nlp.queried_court_name || nlp.referenced_entity_name || nlp.matched_site_name;
   
@@ -888,7 +906,6 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
     reassignedSiteName = targetSite.fields['Site Name'];
   }
 
-  // 3. Relational Worker Assignment Resolution
   let assignedWorkerName = null;
   const workerCandidate = nlp.assign_worker_name;
   if (workerCandidate) {
@@ -1127,6 +1144,8 @@ const COMMAND_MAP = {
   '/gps': 'LOCATION',
   '/g': 'READINESS_GATE_CHECK',
   '/gate': 'READINESS_GATE_CHECK',
+  '/r': 'READINESS_GATE_CHECK',
+  '/readiness': 'READINESS_GATE_CHECK',
   '/video': 'MEDIA_RETRIEVAL',
   '/media': 'MEDIA_RETRIEVAL',
   '/ar': 'AR_LOOKUP', 
@@ -1216,6 +1235,20 @@ async function resolveCoordinates(rawLocationOrSite, mapCache = null, autoPersis
     }
   }
 
+  if (cache && typeof cache === 'string') {
+    try {
+      const decoded = Buffer.from(cache, 'base64').toString('utf8');
+      const parsed = JSON.parse(decoded);
+      const lat = parsed?.l?.lat || parsed?.lat || parsed?.o?.lat;
+      const lon = parsed?.l?.lng || parsed?.l?.lon || parsed?.lng || parsed?.lon;
+      if (lat && lon) {
+        const coords = { lat: parseFloat(lat), lon: parseFloat(lon) };
+        if (typeof rawLocation === 'string') memoryCache.coordinates.set(rawLocation, coords);
+        return coords;
+      }
+    } catch (e) {}
+  }
+
   if (typeof rawLocation === 'string' && rawLocation.length > 3) {
     const googleResult = await geocodeAddressWithGoogle(rawLocation);
     if (googleResult) {
@@ -1283,7 +1316,6 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   const warnings = [];
   const dewDelta = weather.temp - weather.dewPoint;
 
-  // Strict Crane Removal: Strictly suction cup verbiage
   if (weather.windGusts > 37) {
     holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h / >20 kts):* Suction cup glass installation prohibited. High panel sail hazard.`);
   } else if (weather.windGusts > 28) {
@@ -1367,6 +1399,7 @@ async function lookupSite(groupIdOrPhone, siteName = null) {
       .replace(/\bdon walker\b/gi, 'don walker')
       .replace(/\bnorth padel\b/gi, 'north padel')
       .replace(/\blevinsky\b/gi, 'levinsky')
+      .replace(/\blewinsky\b/gi, 'lewinsky')
       .replace(/\b(?:bpc|court)\b/gi, '')
       .trim();
 
@@ -2140,8 +2173,14 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
   if (nlp.slab_pour_date) { updatePayload['Slab Pour Date'] = nlp.slab_pour_date; updateNotes.push(`Slab Poured: ${nlp.slab_pour_date}`); }
   if (nlp.assigned_crew) { updatePayload['Assigned Crew'] = nlp.assigned_crew; updateNotes.push(`Crew: ${nlp.assigned_crew}`); }
   if (nlp.manufacturer) { updatePayload['Manufacturer'] = nlp.manufacturer; updateNotes.push(`Manufacturer: ${nlp.manufacturer}`); }
+  
+  if (nlp.steel_color) { updatePayload['Steel Color'] = nlp.steel_color; updateNotes.push(`Steel: ${nlp.steel_color}`); }
+  if (nlp.turf_color) { updatePayload['Turf Color'] = nlp.turf_color; updateNotes.push(`Turf: ${nlp.turf_color}`); }
+  if (nlp.turf_supplier) { updatePayload['Turf Supplier'] = nlp.turf_supplier; updateNotes.push(`Supplier: ${nlp.turf_supplier}`); }
+  if (nlp.year_installed) { updatePayload['Year Installed'] = nlp.year_installed; updateNotes.push(`Year: ${nlp.year_installed}`); }
+  if (nlp.model_type) { updatePayload['Model Type'] = nlp.model_type; updateNotes.push(`Model: ${nlp.model_type}`); }
+  if (nlp.glass_thickness) { updatePayload['Glass Thickness'] = nlp.glass_thickness; updateNotes.push(`Glass: ${nlp.glass_thickness}`); }
 
-  // AUTONOMOUS FALLTHROUGH: If no site dropdown modified, re-route to ticket re-assignment!
   if (Object.keys(updatePayload).length === 0) {
     if (/assign|ticket|chore|task|#\d+|reassign/i.test(rawText)) {
       console.log('[Routing Auto-Heal] Re-routing misclassified ACTIONABLE_STATE_CHANGE to handleTicketOrLeadUpdate');
@@ -2178,6 +2217,38 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
   await sendWhatsAppMessage(dispatchTarget, confirmCard);
 }
 
+async function handleSpokenSpecsQuery(queriedName, fallbackSite, dispatchTarget) {
+  let targetSite = null;
+  if (queriedName) targetSite = await lookupSite(null, queriedName);
+  if (!targetSite) targetSite = fallbackSite;
+
+  if (!targetSite) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Court not found to check specifications.`);
+    return;
+  }
+
+  const siteName = targetSite.fields['Site Name'] || 'Assigned Court';
+  const steelColor = targetSite.fields['Steel Color'] || 'Unspecified';
+  const turfColor = targetSite.fields['Turf Color'] || 'Unspecified';
+  const turfSupplier = targetSite.fields['Turf Supplier'] || 'Unspecified';
+  const yearInstalled = targetSite.fields['Year Installed'] || 'Unspecified';
+  const modelType = targetSite.fields['Model Type'] || 'Unspecified';
+  const glassThickness = targetSite.fields['Glass Thickness'] || 'Unspecified';
+
+  const specCard = `🎨 *TITAN OS | COURT SPECIFICATIONS*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🏟️ *Site:* ${siteName}\n` +
+    `🏗️ *Steel Color:* ${steelColor}\n` +
+    `🌱 *Turf Color:* ${turfColor}\n` +
+    `🏭 *Turf Supplier:* ${turfSupplier}\n` +
+    `📅 *Year Installed:* ${yearInstalled}\n` +
+    `🏢 *Model Type:* ${modelType}\n` +
+    `🛡️ *Glass Thickness:* ${glassThickness}\n` +
+    `━━━━━━━━━━━━━━━━━━━━`;
+
+  await sendWhatsAppMessage(dispatchTarget, specCard);
+}
+
 // ====================================================================
 // 14. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
@@ -2194,7 +2265,7 @@ ROUTING INTENTS:
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
 7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker (e.g., "please assign to Passionate Farms", "assign to Danish", "reassign ticket #81 to site passion farms").
-8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on the Sites table (deposit status, slab dates, crews, site status, foundation type).
+8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on the Sites table (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness).
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies.
@@ -2204,6 +2275,7 @@ ROUTING INTENTS:
 15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
 16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
 17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
+18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, or suppliers of a specific court (e.g., steel color, turf color, turf supplier, year installed).
 
 Extract:
 "queried_court_name": string or null,
@@ -2231,10 +2303,16 @@ DATABASE FIELD MAPPING OVERRIDES (Must exactly match these strings if present in
 "slab_pour_date": "YYYY-MM-DD" | null
 "assigned_crew": "Team Alpha" | "Team Beta" | "Logistics" | "Unassigned" | null
 "manufacturer": "BPC" | "Mejor Set" | "AFP" | "Chinese" | "Padel Tech" | "Spanish" | null
+"steel_color": "Black" | "Pearl Mouse" | "Blue" | "Green" | null
+"turf_color": "Blue" | "Green" | "Terracotta" | null
+"turf_supplier": "Real Turf" | "Mondo" | "House" | null
+"year_installed": number | null
+"model_type": "Standard" | "Hurricane" | "Indoor" | null
+"glass_thickness": "10mm" | "12mm" | null
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
@@ -2265,6 +2343,12 @@ OUTPUT FORMAT (JSON ONLY):
   "slab_pour_date": "string or null",
   "assigned_crew": "string or null",
   "manufacturer": "string or null",
+  "steel_color": "string or null",
+  "turf_color": "string or null",
+  "turf_supplier": "string or null",
+  "year_installed": number | null,
+  "model_type": "string or null",
+  "glass_thickness": "string or null",
   "transcript_en": "Clean English transcript",
   "transcript_es": "Clean Spanish transcript"
 }
@@ -2471,6 +2555,12 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   if (triage.intent === 'STATUS_QUERY' || triage.intent === 'TICKET_QUERY') {
     const targetQuery = triage.queried_court_name || triage.referenced_entity_name || triage.matched_site_name;
     await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, triage.intent === 'TICKET_QUERY');
+    return;
+  }
+
+  if (triage.intent === 'COURT_SPECS_QUERY') {
+    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+    await handleSpokenSpecsQuery(targetQuery, site, dispatchTarget);
     return;
   }
 
@@ -3028,6 +3118,7 @@ async function processMediaBatch(batch) {
             `🎫 *QA Ref:* Ticket ${qaTicketId}\n` +
             (primaryMediaUrl ? `🎥 *Forensic Clip:* ${primaryMediaUrl}` : '');
 
+          console.log(`[Factory QA Bridge] Autonomously broadcasting tolerance hold to Factory Hive: ${factoryTarget}`);
           await sendWhatsAppMessage(factoryTarget, factoryAlertCard);
         }
       } catch (qaErr) {
@@ -3529,6 +3620,11 @@ app.post('/webhook', async (req, res) => {
             await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, nlp.intent === 'TICKET_QUERY');
             return;
           }
+          if (nlp.intent === 'COURT_SPECS_QUERY') {
+            const targetQuery = nlp.queried_court_name || nlp.matched_site_name || nlp.referenced_entity_name;
+            await handleSpokenSpecsQuery(targetQuery, site, dispatchTarget);
+            return;
+          }
           if (nlp.intent === 'READINESS_QUERY') {
             await handleSpokenReadinessQuery(nlp.queried_court_name, site, dispatchTarget);
             return;
@@ -3656,7 +3752,7 @@ app.post('/webhook', async (req, res) => {
     const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
     const caption = mediaObj.caption || '';
 
-    sendWhatsAppReaction(fromPhone, messageId, isAudio ? '🎧' : (isVideo ? '🎥' : '🧾')).catch(() => {});
+    sendWhatsAppReaction(dispatchTarget, messageId, isAudio ? '🎧' : (isVideo ? '🎥' : '🧾')).catch(() => {});
 
     const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
@@ -3840,14 +3936,15 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.2',
-    engine: 'Titan OS V5.6.2 (Relational Key Auto-Linker, Crane-Free Weather, Velocity Tracker)'
+    version: '5.6.4',
+    engine: 'Titan OS V5.6.4 (Asset Specification Tracking)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.2 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.4 RUNNING ON PORT ${PORT}`);
+  console.log(`🎨 ASSET SPECS TRACKING: Steel, Turf, Model, Glass & Warranty Year Active`);
   console.log(`🎛️ ACTIONABLE STATE HANDLER: Conversational Airtable Admin Active`);
   console.log(`💼 HEADLESS FINANCE COPILOT: AR Lookups, Name Mapping, & Net-New Invoicing Active`);
   console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
