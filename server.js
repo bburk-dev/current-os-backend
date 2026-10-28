@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.12 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.13 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -33,7 +33,7 @@
  * 29. Bilingual Edge Dispatch (Native translations with English persistence)
  * 30. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
  * 31. Strict Target-Language Injection & Fabrication Tech Debt Cleanse
- * 32. Hardened Visual Memory Decoupling & Detailed Component QA (Caps, Anchors, Entrance Plates)
+ * 32. Hardened Visual Memory Decoupling & Structured QA Checklist Output (V5.6.13)
  */
 
 process.on('uncaughtException', (err) => {
@@ -1069,17 +1069,25 @@ If the inspector or field crew identifies a shop mistake, jig discrepancy, or ma
 - List the specific variance in "blockers_detected"
 - Set "status_observed": "ACTION_REQUIRED"
 
-SPECIFIC QUALITY AUDIT CHECKS (List missing items in "action_items"):
-- Silicone Sealant: Has perimeter glass silicone sealant been applied?
-- Entrance Plates: Are the "Bounce Padel Courts" entrance plates installed on the doors/entrances?
-- Anchoring & Bolts: Are any anchor bolts missing or not drilled in at the base plates?
-- Bolt Caps: Are the black protective caps installed over the bolts around the steel structure? 
+SPECIFIC QUALITY AUDIT CHECKS (You must evaluate each strictly in the "qa_checklist" JSON object):
+- "entrance_plates_installed": Look at the bottom threshold of the door openings for the "Bounce Padel Courts" branded plates.
+- "anchor_bolts_fully_installed": Look closely at the square green base plates at the bottom of the structural columns. If the holes are empty, the anchor bolts are missing.
+- "black_bolt_caps_installed": Look at the bolts holding the green steel frame together. Do they have black plastic caps covering them?
+- "silicone_sealant_applied": Is there visible silicone along the glass panel joints?
+- "jobsite_is_clean": Are there tools, debris, cords, or ladders left on the court? (If yes, this is false).
 
 SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
 
 OUTPUT SPECIFICATION (JSON ONLY):
-Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_LANGUAGE provided in the audit context. All other JSON fields (summary, blockers, action_items) MUST remain strictly in English for the HQ database.
+Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_LANGUAGE provided in the audit context. All other JSON fields MUST remain strictly in English for the HQ database.
 {
+  "qa_checklist": {
+    "entrance_plates_installed": boolean,
+    "anchor_bolts_fully_installed": boolean,
+    "black_bolt_caps_installed": boolean,
+    "silicone_sealant_applied": boolean,
+    "jobsite_is_clean": boolean
+  },
   "transcript_en": "Clean polished English transcript or visual scene summary",
   "transcript_es": "Transcripción limpia o resumen visual profesional en español",
   "spoken_court_name": "string or null",
@@ -1088,14 +1096,13 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
   "verified_gates": [1, 2, 3],
   "in_progress_gate": 4,
   "highest_gate": 4,
-  "silicone_applied": boolean | null,
   "defect_origin": "FABRICATION" | "SITE_CONDITION" | "TRANSIT_DAMAGE" | null,
   "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | null,
   "blockers_detected": ["Specific impediment, dimensional error, or missing hardware in English"],
   "work_verified": ["Specific verified stage completed in English"],
   "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
   "site_conditions": "Short string in English",
-  "action_items": ["Missing black bolt caps", "Missing entrance plates", "Silicone pending"],
+  "action_items": ["Action item in English"],
   "summary": "1-2 sentence concise executive summary of visible court progress or defect",
   "whatsapp_status_text": "Plaintext WhatsApp card"
 }
@@ -3085,8 +3092,11 @@ async function processMediaBatch(batch) {
     }
   }
 
+  const checklist = forensicAudit.qa_checklist || {};
   const hasBlockers = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
-    forensicAudit.status_observed === 'ACTION_REQUIRED';
+    forensicAudit.status_observed === 'ACTION_REQUIRED' || 
+    checklist.anchor_bolts_fully_installed === false || 
+    checklist.entrance_plates_installed === false;
 
   const isFabricationDefect = forensicAudit.defect_origin === 'FABRICATION' ||
     (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop/i.test(b)));
@@ -3116,11 +3126,12 @@ async function processMediaBatch(batch) {
       newlyVerifiedGates.push(`Gate ${highestGate}`);
     }
 
-    let siliconeStatusText = '';
-    if (forensicAudit.silicone_applied === true) {
-      siliconeStatusText = `• Silicone Sealant: Applied ✅`;
-    } else if (highestGate >= 4) {
-      siliconeStatusText = `• Silicone Sealant: None / Omitted (Partner Spec)`;
+    let qaSection = `\n🔍 *DETAILED QA AUDIT:*\n`;
+    if (Object.keys(checklist).length > 0) {
+      qaSection += `• Anchor Bolts: ${checklist.anchor_bolts_fully_installed ? '✅ Installed' : '❌ MISSING'}\n`;
+      qaSection += `• Entrance Plates: ${checklist.entrance_plates_installed ? '✅ Installed' : '❌ MISSING'}\n`;
+      qaSection += `• Black Bolt Caps: ${checklist.black_bolt_caps_installed ? '✅ Installed' : '❌ MISSING'}\n`;
+      qaSection += `• Jobsite Clean: ${checklist.jobsite_is_clean ? '✅ Yes' : '❌ Debris/Tools Present'}\n`;
     }
 
     let milestoneTimestamps = {};
@@ -3151,7 +3162,7 @@ async function processMediaBatch(batch) {
         'Cleared Milestones': allCleared,
         'Current Gate': compactGateStatus,
         'Milestone Timestamps': JSON.stringify(milestoneTimestamps),
-        'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${cleanSummary}${siliconeStatusText ? `\n${siliconeStatusText}` : ''}`,
+        'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${cleanSummary}`,
         'Last Intent': hasBlockers ? 'ACTION_REQUIRED' : 'MILESTONE_PROGRESS'
       };
 
@@ -3180,7 +3191,7 @@ async function processMediaBatch(batch) {
       `━━━━━━━━━━━━━━━━━━━━\n` +
       (hasBlockers && forensicAudit.blockers_detected?.length ? `🚨 *Blocker Detected:*\n${forensicAudit.blockers_detected.join('\n')}\n\n` : '') +
       `👁️ *Observation:*\n${cleanSummary}\n` +
-      (siliconeStatusText ? `${siliconeStatusText}\n` : '') +
+      qaSection +
       velocityMessage;
 
     if (weatherTripwires.summaryText) {
@@ -4322,15 +4333,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.12',
+    version: '5.6.13',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.12 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.13 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.12 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.13 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
