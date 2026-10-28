@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.11 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.12 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -33,6 +33,7 @@
  * 29. Bilingual Edge Dispatch (Native translations with English persistence)
  * 30. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
  * 31. Strict Target-Language Injection & Fabrication Tech Debt Cleanse
+ * 32. Hardened Visual Memory Decoupling & Detailed Component QA (Caps, Anchors, Entrance Plates)
  */
 
 process.on('uncaughtException', (err) => {
@@ -428,7 +429,7 @@ async function streamToDarkMatterVault({
     category: category || 'General Logistics',
     distilled_context: distilledContext || rawText.slice(0, 150),
     urgency,
-    gravity_score: gravityScore,
+    gravityScore: gravityScore,
     actionable_followup: actionableFollowup,
     status: 'ARCHIVED',
     created_at: new Date().toISOString()
@@ -1058,20 +1059,21 @@ When inspecting video frames, visually identify completed physical stages:
 - Gate 5: "Turf Laid" (Synthetic turf rolled out, seamed, glued, and white regulation boundary lines cut in. Turf can be ANY color)
 - Gate 6: "Sand Infill" (Silica sand distributed and brushed evenly across turf carpet fibers)
 - Gate 7: "Net & Posts" (Center net posts mounted, regulation net installed and tensioned)
-- Gate 8: "Clean & Handover" (Construction tools and debris cleared, court ready for tournament play)
+- Gate 8: "Clean & Handover" (STRICT: Construction tools, trash, and active debris MUST be entirely cleared. Court must be pristine and ready for tournament play).
 
 CLOSED-LOOP QA & UPSTREAM FABRICATION DEFECT IDENTIFICATION:
-Listen carefully to spoken audio and inspect visible tape measurements, welding, hole alignments, and tabs.
+Listen carefully to spoken audio and inspect visual elements.
 If the inspector or field crew identifies a shop mistake, jig discrepancy, or manufacturing defect:
 - Set "defect_origin": "FABRICATION"
 - Set "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE"
-- List the specific variance in "blockers_detected" (e.g., "Glass tab welded at incorrect specification")
+- List the specific variance in "blockers_detected"
 - Set "status_observed": "ACTION_REQUIRED"
 
-SILICONE INSPECTION CHECK (QUALITY AUDIT ONLY — NOT A BLOCKING GATE):
-- Check if perimeter glass silicone sealant has been applied along the glass panel joints.
-- Report "silicone_applied": true | false.
-- DO NOT hold or block gate progress if silicone is missing, as some partner courts do not use silicone.
+SPECIFIC QUALITY AUDIT CHECKS (List missing items in "action_items"):
+- Silicone Sealant: Has perimeter glass silicone sealant been applied?
+- Entrance Plates: Are the "Bounce Padel Courts" entrance plates installed on the doors/entrances?
+- Anchoring & Bolts: Are any anchor bolts missing or not drilled in at the base plates?
+- Bolt Caps: Are the black protective caps installed over the bolts around the steel structure? 
 
 SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
 
@@ -1093,7 +1095,7 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
   "work_verified": ["Specific verified stage completed in English"],
   "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
   "site_conditions": "Short string in English",
-  "action_items": ["Action item in English"],
+  "action_items": ["Missing black bolt caps", "Missing entrance plates", "Silicone pending"],
   "summary": "1-2 sentence concise executive summary of visible court progress or defect",
   "whatsapp_status_text": "Plaintext WhatsApp card"
 }
@@ -2813,12 +2815,13 @@ async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
 Active Registry: [${siteListStr}]
 Current Target Court: ${cumulativeContext.siteName || 'Unbound Court'}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
-Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
+Previously Cleared Gates: ${cumulativeContext.clearedMilestones.join(', ') || 'None'}
 TARGET_LANGUAGE: ${targetLang}
 
-Evaluate ONLY the foreground court. Grade against 8-Gate physical rubric.
-Check silicone status on Gate 4 without treating it as a blocker.
-Check for shop/manufacturing/jig discrepancies (e.g., tab spacing, hole offsets, cut lengths).`;
+CRITICAL MANDATE: Evaluate ONLY the foreground court based STRICTLY on what is visible in the frames. 
+- Grade against the 8-Gate physical rubric.
+- DO NOT invent, assume, or hallucinate defects, measurements, or missing materials unless explicitly visible or spoken.
+- Check silicone, entrance plates, anchoring bolts, and black caps.`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -4319,15 +4322,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.11',
+    version: '5.6.12',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.11 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.12 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.11 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.12 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
