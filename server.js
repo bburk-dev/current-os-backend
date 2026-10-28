@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.9 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.10 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -31,6 +31,7 @@
  * 27. Dynamic Morning Easter Eggs (Joke/Recipe/Fact) & 7:30 AM EST Proactive Pulse
  * 28. Multi-Court Location Resolver & 6:00 PM Shift Clock-Out Pulse
  * 29. Bilingual Edge Dispatch (Native translations with English persistence)
+ * 30. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
  */
 
 process.on('uncaughtException', (err) => {
@@ -1546,7 +1547,8 @@ async function resolveCallerIdentity(fromPhone) {
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
   if (!toTarget || !messageId || !CONFIG.meta.phoneNumberId) return false;
-  const cleanDestination = String(toTarget).replace(/\D/g, ''); 
+  let cleanDestination = String(toTarget).replace(/\D/g, ''); 
+  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -1571,11 +1573,12 @@ async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
 
 async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
   if (!toTarget || !CONFIG.meta.phoneNumberId) {
-    console.warn(`[Meta Outbound] Aborted: Target (${toTarget}) or phoneNumberId (${CONFIG.meta.phoneNumberId}) missing.`);
+    console.warn(`[Meta Outbound] Aborted: Target missing.`);
     return false;
   }
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
-  const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
+  let cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
+  if (!isGroup && cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -1619,7 +1622,8 @@ async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
 async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
   if (!toTarget || !buttons || buttons.length === 0 || !CONFIG.meta.phoneNumberId) return false;
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
-  const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
+  let cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
+  if (!isGroup && cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
     type: 'reply',
@@ -1668,7 +1672,12 @@ async function fanOutToSubscribers(phoneNumbersString, messageBody, buttons = []
   if (!phoneNumbersString) return;
   
   const rawNumbers = String(phoneNumbersString).split(',');
-  const cleanNumbers = rawNumbers.map(n => n.replace(/\D/g, '').trim()).filter(n => n.length >= 10);
+  const cleanNumbers = rawNumbers.map(n => {
+      let num = n.replace(/\D/g, '').trim();
+      if (num.length === 10) num = '1' + num;
+      return num;
+  }).filter(n => n.length >= 10);
+  
   const uniqueTargets = [...new Set(cleanNumbers)];
 
   for (const target of uniqueTargets) {
@@ -4036,9 +4045,9 @@ setInterval(async () => {
   if (now.getDay() === 1 && now.getHours() === 9 && now.getMinutes() === 0) {
     const allSites = await getCachedSites();
     const financeSite = allSites.find(s => s.fields['Workflow Mode'] === 'FINANCE' || /finance|receivables/i.test(s.fields['Site Name'] || ''));
-    const financeTarget = financeSite?.fields?.['WhatsApp Group ID'];
+    const financeTargets = financeSite?.fields?.['Subscribed Phones'] || financeSite?.fields?.['WhatsApp Group ID'];
 
-    if (!financeTarget) return; 
+    if (!financeTargets) return; 
     
     const dunningCard = `🚨 *TITAN OS | ACCOUNTS RECEIVABLE AGING*\n` +
                         `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -4048,7 +4057,7 @@ setInterval(async () => {
                         `Tap to execute automated follow-up protocol.`;
 
     const buttons = [{ id: `QBO_SEND_REMINDERS`, title: '✉️ Send Reminders' }];
-    await sendWhatsAppButtons(financeTarget, dunningCard, buttons);
+    await fanOutToSubscribers(financeTargets, dunningCard, buttons);
   }
 }, 60 * 1000);
 
@@ -4096,36 +4105,9 @@ setInterval(async () => {
 }, 60 * 1000);
 
 // ====================================================================
-// 17. GAMECAM, ADMIN & SYSTEM HEALTH
+// AUTOMATED GEOSPATIAL BACKFILL (RUNS EVERY 6 HOURS)
 // ====================================================================
-
-app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
-  const apiKey = req.headers['x-gamecam-secret'];
-  if (apiKey !== CONFIG.gamecam.webhookSecret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const { venue_name, court_number, image_url } = req.body;
-  if (!venue_name || !image_url) {
-    return res.status(400).json({ error: 'Missing venue_name or image_url' });
-  }
-
-  res.status(200).json({ status: 'received' });
-
-  setImmediate(async () => {
-    try {
-      const matchedSite = await lookupSite(null, venue_name);
-      if (matchedSite) {
-        await airtableWriteWithAutoDrop('Sites', {
-          'Last Note': `[GAMECAM AUDIT - Court ${court_number || 1}]: Snapshot ingested for playability review.`,
-          'Last Intent': 'FACILITY_HEALTH_AUDIT'
-        }, matchedSite.id);
-      }
-    } catch (err) {}
-  });
-});
-
-app.get('/api/admin/backfill-geo', async (req, res) => {
+async function runGeospatialBackfill() {
   try {
     const records = await getCachedSites(true);
     let updatedCount = 0;
@@ -4170,7 +4152,52 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
       }
     }
 
-    invalidateAirtableCache('sites');
+    if (updatedCount > 0) invalidateAirtableCache('sites');
+    return updatedCount;
+  } catch (err) {
+    console.error('[Geo-Backfill Error]:', err.message);
+    return 0;
+  }
+}
+
+setInterval(async () => {
+  console.log(`[Cron] Running background geospatial backfill...`);
+  await runGeospatialBackfill();
+}, 6 * 60 * 60 * 1000);
+
+// ====================================================================
+// 17. GAMECAM, ADMIN & SYSTEM HEALTH
+// ====================================================================
+
+app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
+  const apiKey = req.headers['x-gamecam-secret'];
+  if (apiKey !== CONFIG.gamecam.webhookSecret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { venue_name, court_number, image_url } = req.body;
+  if (!venue_name || !image_url) {
+    return res.status(400).json({ error: 'Missing venue_name or image_url' });
+  }
+
+  res.status(200).json({ status: 'received' });
+
+  setImmediate(async () => {
+    try {
+      const matchedSite = await lookupSite(null, venue_name);
+      if (matchedSite) {
+        await airtableWriteWithAutoDrop('Sites', {
+          'Last Note': `[GAMECAM AUDIT - Court ${court_number || 1}]: Snapshot ingested for playability review.`,
+          'Last Intent': 'FACILITY_HEALTH_AUDIT'
+        }, matchedSite.id);
+      }
+    } catch (err) {}
+  });
+});
+
+app.get('/api/admin/backfill-geo', async (req, res) => {
+  try {
+    const updatedCount = await runGeospatialBackfill();
     res.json({ status: 'success', courts_updated: updatedCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4287,15 +4314,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.9',
+    version: '5.6.10',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.9 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.10 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.9 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.10 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
