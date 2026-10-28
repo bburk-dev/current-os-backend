@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.10 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.11 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -32,6 +32,7 @@
  * 28. Multi-Court Location Resolver & 6:00 PM Shift Clock-Out Pulse
  * 29. Bilingual Edge Dispatch (Native translations with English persistence)
  * 30. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
+ * 31. Strict Target-Language Injection & Fabrication Tech Debt Cleanse
  */
 
 process.on('uncaughtException', (err) => {
@@ -1064,7 +1065,7 @@ Listen carefully to spoken audio and inspect visible tape measurements, welding,
 If the inspector or field crew identifies a shop mistake, jig discrepancy, or manufacturing defect:
 - Set "defect_origin": "FABRICATION"
 - Set "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE"
-- List the specific variance in "blockers_detected" (e.g. "Glass tab welded at 15cm instead of 16cm specification")
+- List the specific variance in "blockers_detected" (e.g., "Glass tab welded at incorrect specification")
 - Set "status_observed": "ACTION_REQUIRED"
 
 SILICONE INSPECTION CHECK (QUALITY AUDIT ONLY — NOT A BLOCKING GATE):
@@ -1075,7 +1076,7 @@ SILICONE INSPECTION CHECK (QUALITY AUDIT ONLY — NOT A BLOCKING GATE):
 SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
 
 OUTPUT SPECIFICATION (JSON ONLY):
-Write the "whatsapp_status_text" receipt card in the primary language spoken in the audio (e.g., if the user speaks Spanish, output the card in Spanish). All other JSON fields (summary, blockers, action_items) MUST remain strictly in English for the HQ database.
+Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_LANGUAGE provided in the audit context. All other JSON fields (summary, blockers, action_items) MUST remain strictly in English for the HQ database.
 {
   "transcript_en": "Clean polished English transcript or visual scene summary",
   "transcript_es": "Transcripción limpia o resumen visual profesional en español",
@@ -1106,7 +1107,7 @@ CRITICAL DIRECTIVE:
 2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
 
 OUTPUT SPECIFICATION (JSON ONLY):
-Write the "whatsapp_status_text" receipt card in the primary language spoken in the audio (e.g., if the user speaks Spanish, output the card in Spanish). All other JSON fields (summary, blockers, action_items) MUST remain strictly in English for the HQ database.
+Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_LANGUAGE provided in the audit context. All other JSON fields (summary, blockers, action_items) MUST remain strictly in English for the HQ database.
 {
   "transcript_en": "Clean polished English transcript without filler words",
   "transcript_es": "Transcripción limpia y profesional en español sin muletillas",
@@ -2805,16 +2806,19 @@ async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
   const systemInstruction = isMaintenanceMode ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT;
   const activeSites = await getAllActiveSitesList();
   const siteListStr = activeSites.join(', ');
+  
+  const targetLang = cumulativeContext.workerLanguage || 'English';
 
   const auditContextText = `AUDIT CONTEXT:
 Active Registry: [${siteListStr}]
 Current Target Court: ${cumulativeContext.siteName || 'Unbound Court'}
 Current Mode: ${cumulativeContext.workflowMode || 'INSTALLATION'}
 Active Open Punch Notes: ${cumulativeContext.lastNote || 'None'}
+TARGET_LANGUAGE: ${targetLang}
 
 Evaluate ONLY the foreground court. Grade against 8-Gate physical rubric.
 Check silicone status on Gate 4 without treating it as a blocker.
-Check for shop/manufacturing/jig discrepancies (15cm vs 16cm tab spacing, hole offsets, cut lengths).`;
+Check for shop/manufacturing/jig discrepancies (e.g., tab spacing, hole offsets, cut lengths).`;
 
   const contentParts = [{ text: auditContextText }];
 
@@ -2869,7 +2873,8 @@ async function processMediaBatch(batch) {
     openTickets: site?.fields?.['Open Tickets'] || 0,
     clearedMilestones: site?.fields?.['Cleared Milestones'] || [],
     lastNote: site?.fields?.['Last Note'] || '',
-    isIndoor: indoorSite
+    isIndoor: indoorSite,
+    workerLanguage: worker?.fields?.['Language'] || 'English'
   };
 
   const batchText = items.map(i => i.caption || i.rawMessage?.text?.body || '').filter(Boolean).join(' ').trim();
@@ -3081,7 +3086,7 @@ async function processMediaBatch(batch) {
     forensicAudit.status_observed === 'ACTION_REQUIRED';
 
   const isFabricationDefect = forensicAudit.defect_origin === 'FABRICATION' ||
-    (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|15cm|16cm|measurement|fabrication|shop/i.test(b)));
+    (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop/i.test(b)));
 
   // PIPELINE A: INSTALLATION ENGINE WITH VELOCITY TELEMETRY
   if (siteMode === 'INSTALLATION' && !explicitTicketId) {
@@ -4057,7 +4062,7 @@ setInterval(async () => {
                         `Tap to execute automated follow-up protocol.`;
 
     const buttons = [{ id: `QBO_SEND_REMINDERS`, title: '✉️ Send Reminders' }];
-    await fanOutToSubscribers(financeTargets, dunningCard, buttons);
+    await sendWhatsAppButtons(financeTargets, dunningCard, buttons);
   }
 }, 60 * 1000);
 
@@ -4314,15 +4319,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.10',
+    version: '5.6.11',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.10 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.11 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.10 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.11 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
