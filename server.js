@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.14 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.15 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -17,7 +17,7 @@
  * 13. Autonomous Zero-Touch Provisioning
  * 14. Milestone-Aware Joy Cannon (Hub-and-Spoke Fan-Out)
  * 15. Proactive Weather Tripwire Matrix (Crane-Free & Critical Alert Split)
- * 16. On-Arrival Proactive Scan & Auto-Bind Clock-In (800m Radius)
+ * 16. On-Arrival Proactive Scan & Auto-Bind Site Context (800m Radius)
  * 17. Conversational Spoken Lookups & Relational Cross-Referencing
  * 18. Voice-to-Integer Unstructured Freight Ledger
  * 19. Media Retrieval Engine: Spoken recall of historical video walkthroughs
@@ -27,14 +27,14 @@
  * 23. Technical Specs & Border Clearance Copilot (CBSA C13MM / PAPS BOWB)
  * 24. Asset Specification Tracking: Steel, Turf, Warranty Year, Model Type, and Glass Thickness
  * 25. Autonomous Self-Healing Meta WABA Subscription & Dynamic Phone ID Sync for +1 289-221-7329
- * 26. Official Meta Groups API Handler (Hive Creator)
- * 27. Dynamic Morning Easter Eggs (Joke/Recipe/Fact) & 7:30 AM EST Proactive Pulse
- * 28. Multi-Court Location Resolver & 6:00 PM Shift Clock-Out Pulse
- * 29. Bilingual Edge Dispatch (Native translations with English persistence)
- * 30. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
- * 31. Strict Target-Language Injection & Fabrication Tech Debt Cleanse
- * 32. Hardened Visual Memory Decoupling & Structured QA Checklist Output
- * 33. Collaborative Tone Enforcement, UI Emoji Preservation, & 3500lb Sand Correction (V5.6.14)
+ * 26. Dynamic Morning Easter Eggs (Joke/Recipe/Fact) & 7:30 AM EST Proactive Pulse
+ * 27. Multi-Court Location Resolver & 6:00 PM Context Cleared Pulse
+ * 28. Bilingual Edge Dispatch (Native translations with English persistence)
+ * 29. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
+ * 30. Strict Target-Language Injection & Fabrication Tech Debt Cleanse
+ * 31. Hardened Visual Memory Decoupling & Structured QA Checklist Output
+ * 32. Collaborative Tone Enforcement, UI Emoji Preservation, & 3500lb Sand Correction
+ * 33. Dead Group API Purge, "Anti-Time-Police" Context Binding, & Virtual Hive Crew Sync (V5.6.15)
  */
 
 process.on('uncaughtException', (err) => {
@@ -1163,7 +1163,6 @@ const COMMAND_MAP = {
   '/install': 'MODE_INSTALLATION',
   '/l': 'LINK_SITE',
   '/link': 'LINK_SITE',
-  '/group': 'LINK_SITE',
   '/map': 'LOCATION',
   '/loc': 'LOCATION',
   '/location': 'LOCATION',
@@ -1591,18 +1590,17 @@ async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
     console.warn(`[Meta Outbound] Aborted: Target missing.`);
     return false;
   }
-  const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
-  let cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
-  if (!isGroup && cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+  
+  let cleanDestination = String(toTarget).replace(/\D/g, '');
+  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
   const payload = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to: cleanDestination,
     type: 'text',
     text: { body: messageBody }
   };
-
-  if (!isGroup) payload.recipient_type = 'individual';
 
   const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`;
 
@@ -1636,9 +1634,9 @@ async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
 
 async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
   if (!toTarget || !buttons || buttons.length === 0 || !CONFIG.meta.phoneNumberId) return false;
-  const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
-  let cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
-  if (!isGroup && cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+  
+  let cleanDestination = String(toTarget).replace(/\D/g, '');
+  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
     type: 'reply',
@@ -1650,6 +1648,7 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
 
   const payload = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to: cleanDestination,
     type: 'interactive',
     interactive: {
@@ -1658,8 +1657,6 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
       action: { buttons: actionButtons }
     }
   };
-
-  if (!isGroup) payload.recipient_type = 'individual';
 
   const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`;
   try {
@@ -1704,7 +1701,7 @@ async function fanOutToSubscribers(phoneNumbersString, messageBody, buttons = []
   }
 }
 
-async function fireInstallationJoyCannon(siteRecord, highestGate) {
+async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = 'A crew member') {
   try {
     const subscribedPhones = siteRecord.fields['Subscribed Phones']; // Internal Execs / PMs
     const linkedContactIds = siteRecord.fields['Linked Contacts'] || []; // External Clients
@@ -1758,40 +1755,22 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
         }
       }
     }
+
+    // 3. Crew Sync Virtual Hive (1-on-1 update to assigned crew members)
+    const assignedCrewName = siteRecord.fields['Assigned Crew'];
+    if (assignedCrewName) {
+      const workers = await getCachedWorkers();
+      const crewMembers = workers.filter(w => w.fields['Assigned Crew'] === assignedCrewName && w.fields['Active']);
+      const crewPhones = crewMembers.map(w => w.fields['Phone E164'] || w.fields['WhatsApp Number']).filter(Boolean).join(',');
+      
+      const crewCard = `🤜🤛 *TITAN OS | CREW SYNC*\n━━━━━━━━━━━━━━━━━━━━\n${workerName} just locked in Gate ${highestGate} at ${siteRecord.fields['Site Name']}.\n\n` + 
+                       celebrationCard.replace('🎾 *BOUNCE PADEL | PROGRESS UPDATE*\n━━━━━━━━━━━━━━━━━━━━\n', '');
+      
+      await fanOutToSubscribers(crewPhones, crewCard);
+    }
+
   } catch (err) {
     console.error('[Joy Cannon Error]:', err.message);
-  }
-}
-
-// ====================================================================
-// 10B. OFFICIAL META GROUPS API HANDLER
-// ====================================================================
-async function createMetaWhatsAppGroup(groupSubject, groupDescription = 'Bounce Padel Court Operations') {
-  const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/groups`;
-  
-  const payload = {
-    messaging_product: 'whatsapp',
-    subject: groupSubject.slice(0, 128),
-    description: groupDescription.slice(0, 2048),
-    join_approval_mode: 'auto_approve' // Crew joins instantly upon tapping the link
-  };
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${CONFIG.meta.accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await res.json();
-    console.log(`[Meta Groups API] Create Group Response:`, data);
-    return data;
-  } catch (err) {
-    console.error(`[Meta Groups API Error]:`, err.message);
-    return null;
   }
 }
 
@@ -2643,8 +2622,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
       'Site Name': newSiteName,
       'Workflow Mode': 'PLANNING',
       'Site Status': 'ACTIVE',
-      'Last Note': `[SITE VISIT - Created via Spoken Audio on ${new Date().toLocaleDateString()}]`,
-      'WhatsApp Group ID': dispatchTarget || fromPhone
+      'Last Note': `[SITE VISIT - Created via Spoken Audio on ${new Date().toLocaleDateString()}]`
     };
 
     if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
@@ -2921,8 +2899,7 @@ async function processMediaBatch(batch) {
                 'Site Name': newSiteName,
                 'Workflow Mode': 'PLANNING',
                 'Site Status': 'ACTIVE',
-                'Last Note': `[SITE VISIT - Created via Text/Image Combo on ${new Date().toLocaleDateString()}]`,
-                'WhatsApp Group ID': dispatchTarget || fromPhone
+                'Last Note': `[SITE VISIT - Created via Text/Image Combo on ${new Date().toLocaleDateString()}]`
               };
 
               if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
@@ -3179,7 +3156,7 @@ async function processMediaBatch(batch) {
 
       if (isNewMilestone) {
         console.log(`🎾 [Joy Cannon Triggered] Firing Gate ${highestGate} for ${courtLabel}`);
-        await fireInstallationJoyCannon(targetedSite, highestGate);
+        await fireInstallationJoyCannon(targetedSite, highestGate, workerName);
       }
     }
 
@@ -3329,14 +3306,12 @@ async function processMediaBatch(batch) {
 // 15. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
 
-async function executeClockIn(site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon) {
+async function bindSiteContext(site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
-  const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-
   userActiveSiteMap.set(fromPhone, site.id);
 
   await airtableWriteWithAutoDrop('Sites', {
-    'Last Note': `[START OF DAY] Clock-in verified for ${workerName} at ${timestamp} (${Math.round(distanceMeters)}m from pin).`,
+    'Last Note': `[SITE BOUND] Context locked for ${workerName} (${Math.round(distanceMeters)}m from pin).`,
     'Last Intent': 'PRESENCE_VERIFIED'
   }, site.id);
 
@@ -3349,11 +3324,10 @@ async function executeClockIn(site, worker, callerIdentity, dispatchTarget, from
     if (weather) arrivalWeatherNotice = evaluateWeatherTripwires(weather).summaryText;
   }
 
-  let checkinResponse = `📍 *ON-SITE CLOCK IN VERIFIED*\n` +
+  let checkinResponse = `📍 *SITE CONTEXT BOUND*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `👤 *Technician:* ${workerName}\n` +
-    `🏟️ *Court Bound:* ${site.fields['Site Name']}\n` +
-    `⏱️ *Start Time:* ${timestamp}\n`;
+    `🏟️ *Court Bound:* ${site.fields['Site Name']}\n`;
 
   if (arrivalWeatherNotice) checkinResponse += `\n🌤️ *Site Telemetry:*${arrivalWeatherNotice}\n`;
 
@@ -3452,43 +3426,29 @@ app.post('/webhook', async (req, res) => {
     }
     processedMessageMap.set(messageId, Date.now());
 
-    const rawAuthor = message.author || message.participant || '';
-    const rawChatId = message.chat_id || message.group_id || changes?.metadata?.phone_number_id || '';
-
-    const isGroupMessage = rawFrom.includes('@g.us') || rawChatId.includes('@g.us');
-    const groupJid = rawFrom.includes('@g.us') ? rawFrom : (rawChatId.includes('@g.us') ? rawChatId : null);
-
-    const fromPhone = isGroupMessage && rawAuthor
-      ? rawAuthor.split('@')[0].replace(/\D/g, '')
-      : (rawFrom.includes('@g.us') ? '' : rawFrom.replace(/\D/g, ''));
-
-    const dispatchTarget = groupJid || fromPhone;
+    const fromPhone = rawFrom.replace(/\D/g, '');
+    const dispatchTarget = fromPhone;
     console.log(`🎯 [Routing] Target destination: ${dispatchTarget} (fromPhone: ${fromPhone})`);
 
     const dispatchReply = async (text) => {
       console.log(`📤 [Outbound] Dispatching response to ${dispatchTarget}...`);
       const ok = await sendWhatsAppMessage(dispatchTarget, text);
-      if (!ok && dispatchTarget !== fromPhone && fromPhone) {
-        await sendWhatsAppMessage(fromPhone, text);
-      }
       return ok;
     };
 
     const callerIdentity = await resolveCallerIdentity(fromPhone);
 
-    const sessionSiteId = (fromPhone && userActiveSiteMap.get(fromPhone)) || (dispatchTarget && userActiveSiteMap.get(dispatchTarget));
+    const sessionSiteId = userActiveSiteMap.get(fromPhone);
     let site = null;
     if (sessionSiteId) {
       const allSites = await getCachedSites();
       site = allSites.find(s => s.id === sessionSiteId) || null;
     }
     if (!site) {
-      site = callerIdentity.siteRecord || await lookupSite(groupJid || fromPhone);
+      site = callerIdentity.siteRecord || await lookupSite(fromPhone);
     }
 
     const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
-
-    const isBoundGroupMember = Boolean(site && isGroupMessage);
     const isAuthorizedClient = callerIdentity.type === 'CONTACT' || (!worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE');
 
     const rawText = message.text?.body?.trim() || '';
@@ -3497,9 +3457,9 @@ app.post('/webhook', async (req, res) => {
 
     // Dynamic bouncer bypass: Allow utility commands (/help, /status, /specs, etc.) even if sender is unmapped
     const isPublicUtility = message.type === 'text' &&
-      /^\/(help|\?|status|s|specs|border|carm|weather|w|creategroup|newhive)/i.test(rawText);
+      /^\/(help|\?|status|s|specs|border|carm|weather|w)/i.test(rawText);
 
-    if (!worker && !isBoundGroupMember && !isAuthorizedClient && !isLinkCommand && !isPublicUtility) {
+    if (!worker && !isAuthorizedClient && !isLinkCommand && !isPublicUtility) {
       console.warn(`[Bouncer] Unmapped sender +${fromPhone || rawFrom}. Dispatching welcome help menu.`);
       await dispatchReply(
         `🎾 *BOUNCE PADEL | TITAN OS*\n` +
@@ -3531,7 +3491,7 @@ app.post('/webhook', async (req, res) => {
                 const sc = await resolveCoordinates(selectedSite);
                 if (sc) dist = haversineDistanceKm(uLat, uLon, sc.lat, sc.lon) * 1000;
             }
-            await executeClockIn(selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, uLat, uLon);
+            await bindSiteContext(selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, uLat, uLon);
         }
         return;
       }
@@ -3653,12 +3613,12 @@ app.post('/webhook', async (req, res) => {
           id: `BIND_SITE_${ns.site.id}`,
           title: ns.site.fields['Site Name'].slice(0, 20)
         }));
-        await sendWhatsAppButtons(dispatchTarget, `📍 Multiple courts detected within 800m. Which one are you clocking into today?`, buttons);
+        await sendWhatsAppButtons(dispatchTarget, `📍 Multiple courts detected within 800m. Which one are you pulling up today?`, buttons);
         return;
       }
 
       // Exactly 1 court found: auto-bind instantly
-      await executeClockIn(nearbySites[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearbySites[0].distance, userLat, userLon);
+      await bindSiteContext(nearbySites[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearbySites[0].distance, userLat, userLon);
       return;
     }
 
@@ -3684,22 +3644,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      if (rawText.toLowerCase().startsWith('/creategroup') || rawText.toLowerCase().startsWith('/newhive')) {
-        const groupName = rawText.replace(/^\/(creategroup|newhive)\s*/i, '').trim() || 'Court Hive';
-        await dispatchReply(`⏳ Creating official Meta group for *${groupName}*...`);
-
-        const result = await createMetaWhatsAppGroup(groupName);
-
-        if (result?.group_id && result?.invite_link) {
-          await dispatchReply(`🎾 *GROUP CREATED: ${groupName}*\n\nTap below to join the hive with Titan OS:\n${result.invite_link}`);
-        } else if (result?.request_id) {
-          await dispatchReply(`🎾 *Group creation requested for ${groupName}* (Ref: ${result.request_id}). Invite link will drop here momentarily.`);
-        } else {
-          await dispatchReply(`⚠️ Error creating group: ${JSON.stringify(result?.error?.message || result)}`);
-        }
-        return;
-      }
-
       const newSiteMatch = rawText.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
       
       if (newSiteMatch) {
@@ -3710,8 +3654,7 @@ app.post('/webhook', async (req, res) => {
           'Site Name': newSiteName,
           'Workflow Mode': 'PLANNING',
           'Site Status': 'ACTIVE',
-          'Last Note': `[SITE VISIT - Created via WhatsApp Text by ${callerIdentity.name || 'User'} on ${new Date().toLocaleDateString()}]`,
-          'WhatsApp Group ID': isGroupMessage ? groupJid : fromPhone
+          'Last Note': `[SITE VISIT - Created via WhatsApp Text by ${callerIdentity.name || 'User'} on ${new Date().toLocaleDateString()}]`
         };
 
         if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
@@ -3746,24 +3689,8 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        const linkTargetId = groupJid || fromPhone;
-
         if (fromPhone) userActiveSiteMap.set(fromPhone, targetSite.id);
         if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, targetSite.id);
-
-        const allSites = await getCachedSites();
-        for (const s of allSites) {
-          if (s.id !== targetSite.id) {
-            const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
-            if (gid && (gid === linkTargetId || gid.includes(linkTargetId) || linkTargetId.includes(gid))) {
-              s.fields['WhatsApp Group ID'] = '';
-              airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': '' }, s.id).catch(() => {});
-            }
-          }
-        }
-
-        await airtableWriteWithAutoDrop('Sites', { 'WhatsApp Group ID': linkTargetId }, targetSite.id);
-        if (targetSite.fields) targetSite.fields['WhatsApp Group ID'] = linkTargetId;
 
         await dispatchReply(`✅ *Connected to ${targetSite.fields['Site Name']}*`);
         return;
@@ -3823,13 +3750,12 @@ app.post('/webhook', async (req, res) => {
           `  _"Create a new invoice for David Cynamon for 30 bags of sand, $1250"_ (drafts net-new invoice)\n` +
           `  _"Update Aurora John to Paid in Full and change status to PLANNING"_ (modifies database fields)\n` +
           `  _"Please assign Ticket #81 to Passionate Farms"_ (relinks site in Airtable)\n` +
-          `  _"/creategroup RCOR Court 2"_ (Generates an official WhatsApp Group invite link)\n` +
           `  _"What's our CBSA carrier code?"_ (returns border clearance instructions)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
           `• Send BOL or logistics voice note -> Instant Freight Ledger tracking\n` +
           `• Say _"We are missing base plates"_ -> Instant Logistics Dispatch Ticket\n` +
-          `• Send video walkaround -> Instant milestone progression or fabrication tolerance alert\n` +
+          `• Send video walkaround -> Instant milestone progression or fabrication QA sweep\n` +
           `• Drop a pin and text _"Create new site Burk"_ -> Auto-provisions in Airtable`);
         return;
       }
@@ -4084,7 +4010,7 @@ setInterval(async () => {
 }, 60 * 1000);
 
 // ====================================================================
-// DAILY MORNING CLOCK-IN PULSE (7:30 AM EST, MON-SAT)
+// DAILY MORNING CONTEXT PULSE (7:30 AM EST, MON-SAT)
 // ====================================================================
 setInterval(async () => {
   const now = new Date();
@@ -4098,8 +4024,8 @@ setInterval(async () => {
     for (const w of activeCrew) {
       const phone = String(w.fields['Phone E164']).replace(/\D/g, '');
       if (phone) {
-        const pulseMsg = `🌅 *Good morning, Titan!*\n\n` + 
-                         `Please drop your WhatsApp Location Pin 📍 to automatically clock in and bind your session to your court for the day.`;
+        const pulseMsg = `🌅 *Good morning!*\n\n` + 
+                         `Dropping your WhatsApp Location Pin 📍 will instantly pull up your court's specs and tickets for the day. Have a great shift!`;
         await sendWhatsAppMessage(phone, pulseMsg);
       }
     }
@@ -4107,16 +4033,15 @@ setInterval(async () => {
 }, 60 * 1000);
 
 // ====================================================================
-// END OF DAY CLOCK-OUT PULSE (6:00 PM EST, MON-SAT)
+// END OF DAY CONTEXT CLEAR (6:00 PM EST, MON-SAT)
 // ====================================================================
 setInterval(async () => {
   const now = new Date();
   // 22:00 UTC = 6:00 PM EDT. getUTCDay() 0 is Sunday.
   if (now.getUTCDay() !== 0 && now.getUTCHours() === 22 && now.getUTCMinutes() === 0) {
     
-    // Notify all active sessions that their shift has closed
     for (const [phone, siteId] of userActiveSiteMap.entries()) {
-      const clockOutMsg = `🌙 *End of Day Shift Closed*\n\nYour session has been securely clocked out. Have a great evening!`;
+      const clockOutMsg = `🌙 *Site Session Cleared*\n\nYour active court session has been cleared from the board for the night. Great work today!`;
       await sendWhatsAppMessage(phone, clockOutMsg);
     }
     
@@ -4336,15 +4261,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.14',
+    version: '5.6.15',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.14 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.15 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.14 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.15 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
