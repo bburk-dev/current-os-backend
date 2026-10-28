@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.6 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.7 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -27,6 +27,7 @@
  * 23. Technical Specs & Border Clearance Copilot (CBSA C13MM / PAPS BOWB)
  * 24. Asset Specification Tracking: Steel, Turf, Warranty Year, Model Type, and Glass Thickness
  * 25. Autonomous Self-Healing Meta WABA Subscription & Dynamic Phone ID Sync for +1 289-221-7329
+ * 26. Official Meta Groups API Handler (Hive Creator)
  */
 
 process.on('uncaughtException', (err) => {
@@ -1671,6 +1672,38 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
     }
   } catch (err) {
     console.error('[Joy Cannon Error]:', err.message);
+  }
+}
+
+// ====================================================================
+// 10B. OFFICIAL META GROUPS API HANDLER
+// ====================================================================
+async function createMetaWhatsAppGroup(groupSubject, groupDescription = 'Bounce Padel Court Operations') {
+  const url = `${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/groups`;
+  
+  const payload = {
+    messaging_product: 'whatsapp',
+    subject: groupSubject.slice(0, 128),
+    description: groupDescription.slice(0, 2048),
+    join_approval_mode: 'auto_approve' // Crew joins instantly upon tapping the link
+  };
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CONFIG.meta.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    console.log(`[Meta Groups API] Create Group Response:`, data);
+    return data;
+  } catch (err) {
+    console.error(`[Meta Groups API Error]:`, err.message);
+    return null;
   }
 }
 
@@ -3321,7 +3354,7 @@ app.post('/webhook', async (req, res) => {
 
     // Dynamic bouncer bypass: Allow utility commands (/help, /status, /specs, etc.) even if sender is unmapped
     const isPublicUtility = message.type === 'text' &&
-      /^\/(help|\?|status|s|specs|border|carm|weather|w)/i.test(rawText);
+      /^\/(help|\?|status|s|specs|border|carm|weather|w|creategroup|newhive)/i.test(rawText);
 
     if (!worker && !isBoundGroupMember && !isAuthorizedClient && !isLinkCommand && !isPublicUtility) {
       console.warn(`[Bouncer] Unmapped sender +${fromPhone || rawFrom}. Dispatching welcome help menu.`);
@@ -3520,6 +3553,22 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      if (rawText.toLowerCase().startsWith('/creategroup') || rawText.toLowerCase().startsWith('/newhive')) {
+        const groupName = rawText.replace(/^\/(creategroup|newhive)\s*/i, '').trim() || 'Court Hive';
+        await dispatchReply(`⏳ Creating official Meta group for *${groupName}*...`);
+
+        const result = await createMetaWhatsAppGroup(groupName);
+
+        if (result?.group_id && result?.invite_link) {
+          await dispatchReply(`🎾 *GROUP CREATED: ${groupName}*\n\nTap below to join the hive with Titan OS:\n${result.invite_link}`);
+        } else if (result?.request_id) {
+          await dispatchReply(`🎾 *Group creation requested for ${groupName}* (Ref: ${result.request_id}). Invite link will drop here momentarily.`);
+        } else {
+          await dispatchReply(`⚠️ Error creating group: ${JSON.stringify(result?.error?.message || result)}`);
+        }
+        return;
+      }
+
       const newSiteMatch = rawText.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
       
       if (newSiteMatch) {
@@ -3643,6 +3692,7 @@ app.post('/webhook', async (req, res) => {
           `  _"Create a new invoice for David Cynamon for 30 bags of sand, $1250"_ (drafts net-new invoice)\n` +
           `  _"Update Aurora John to Paid in Full and change status to PLANNING"_ (modifies database fields)\n` +
           `  _"Please assign Ticket #81 to Passionate Farms"_ (relinks site in Airtable)\n` +
+          `  _"/creategroup RCOR Court 2"_ (Generates an official WhatsApp Group invite link)\n` +
           `  _"What's our CBSA carrier code?"_ (returns border clearance instructions)\n` +
           `• Send photo of receipt -> Instant QuickBooks sync\n` +
           `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
@@ -4094,15 +4144,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.6',
+    version: '5.6.7',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.6 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.7 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.6 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.7 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
