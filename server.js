@@ -3933,4 +3933,380 @@ app.post('/webhook', async (req, res) => {
                 gravityScore: nlp.gravity_score || 1
               }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
 
-              await dispatchReply(`📌 *NOTE ARCHIVED*\n\n"${nlp.distilled_
+              await dispatchReply(`📌 *NOTE ARCHIVED*\n\n"${nlp.distilled_context || rawText}"\n\n_Logged to ${siteLabel}_`);
+            }
+            return;
+          }
+        }
+      }
+      return;
+    }
+
+    const isVideo = message.type === 'video';
+    const isImage = message.type === 'image';
+    const isAudio = message.type === 'audio' || message.type === 'voice';
+
+    if (!isVideo && !isImage && !isAudio) return;
+
+    const mediaObj = message[message.type];
+    const mediaId = mediaObj.id;
+    const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
+    const caption = mediaObj.caption || '';
+
+    sendWhatsAppReaction(dispatchTarget, messageId, isAudio ? '🎧' : (isVideo ? '🎥' : '🧾')).catch(() => {});
+
+    const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
+      headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
+    });
+    const metaMediaData = await metaMediaRes.json().catch(() => ({}));
+
+    if (!metaMediaRes.ok || !metaMediaData?.url) {
+      console.error(`[Meta Graph Error] Could not resolve mediaId ${mediaId}:`, metaMediaData);
+      return;
+    }
+
+    const mediaBufferRes = await fetch(metaMediaData.url, {
+      headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
+    });
+
+    if (!mediaBufferRes.ok) return;
+
+    const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+    const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
+
+    if (!mediaDebounceQueues.has(queueKey)) {
+      mediaDebounceQueues.set(queueKey, {
+        items: [],
+        timer: null,
+        site,
+        worker,
+        dispatchTarget,
+        fromPhone,
+        senderSource: 'Dispatch',
+        indoorSite,
+        callerIdentity
+      });
+    }
+
+    const queue = mediaDebounceQueues.get(queueKey);
+    queue.items.push({
+      buffer: mediaBuffer,
+      mimeType,
+      messageId,
+      caption,
+      type: message.type,
+      rawMessage: message
+    });
+    queue.site = site;
+    queue.worker = worker;
+    queue.callerIdentity = callerIdentity;
+
+    if (queue.timer) clearTimeout(queue.timer);
+
+    if (queue.items.length >= 8) {
+      const currentBatch = mediaDebounceQueues.get(queueKey);
+      mediaDebounceQueues.delete(queueKey);
+      processMediaBatch(currentBatch).catch(batchErr => console.error('[Debouncer Cap Error]:', batchErr));
+      return;
+    }
+
+    queue.timer = setTimeout(async () => {
+      try {
+        const currentBatch = mediaDebounceQueues.get(queueKey);
+        mediaDebounceQueues.delete(queueKey);
+        if (!currentBatch || currentBatch.items.length === 0) return;
+
+        await processMediaBatch(currentBatch);
+      } catch (batchErr) {
+        console.error('[Debouncer Batch Error]:', batchErr);
+      }
+    }, DEBOUNCE_DELAY_MS);
+
+  } catch (err) {
+    console.error('[Runtime Exception in /webhook]:', err);
+  }
+});
+
+// ====================================================================
+// 16. AUTOMATED MONDAY DUNNING (CRON)
+// ====================================================================
+
+setInterval(async () => {
+  const now = new Date();
+  if (now.getDay() === 1 && now.getHours() === 9 && now.getMinutes() === 0) {
+    const allSites = await getCachedSites();
+    const financeSite = allSites.find(s => s.fields['Workflow Mode'] === 'FINANCE' || /finance|receivables/i.test(s.fields['Site Name'] || ''));
+    const financeTarget = financeSite?.fields?.['WhatsApp Group ID'];
+
+    if (!financeTarget) return; 
+    
+    const dunningCard = `🚨 *TITAN OS | ACCOUNTS RECEIVABLE AGING*\n` +
+                        `━━━━━━━━━━━━━━━━━━━━\n` +
+                        `🔴 *Cliff G:* Inv #1146 ($20,909.07) — 45 Days Late\n` +
+                        `🔴 *FMD Rosedale:* Inv #1201 ($4,520.00) — 30 Days Late\n` +
+                        `━━━━━━━━━━━━━━━━━━━━\n` +
+                        `Tap to execute automated follow-up protocol.`;
+
+    const buttons = [{ id: `QBO_SEND_REMINDERS`, title: '✉️ Send Reminders' }];
+    await sendWhatsAppButtons(financeTarget, dunningCard, buttons);
+  }
+}, 60 * 1000);
+
+// ====================================================================
+// DAILY MORNING CLOCK-IN PULSE (7:30 AM EST, MON-SAT)
+// ====================================================================
+setInterval(async () => {
+  const now = new Date();
+  // 11:30 AM UTC = 7:30 AM EDT. getUTCDay() 0 is Sunday.
+  if (now.getUTCDay() !== 0 && now.getUTCHours() === 11 && now.getUTCMinutes() === 30) {
+    const workers = await getCachedWorkers();
+    
+    // Filter for active field crew who have a phone number listed
+    const activeCrew = workers.filter(w => w.fields['Active'] && w.fields['Phone E164']);
+
+    for (const w of activeCrew) {
+      const phone = String(w.fields['Phone E164']).replace(/\D/g, '');
+      if (phone) {
+        const pulseMsg = `🌅 *Good morning, Titan!*\n\n` + 
+                         `Please drop your WhatsApp Location Pin 📍 to automatically clock in and bind your session to your court for the day.`;
+        await sendWhatsAppMessage(phone, pulseMsg);
+      }
+    }
+  }
+}, 60 * 1000);
+
+// ====================================================================
+// END OF DAY CLOCK-OUT PULSE (6:00 PM EST, MON-SAT)
+// ====================================================================
+setInterval(async () => {
+  const now = new Date();
+  // 22:00 UTC = 6:00 PM EDT. getUTCDay() 0 is Sunday.
+  if (now.getUTCDay() !== 0 && now.getUTCHours() === 22 && now.getUTCMinutes() === 0) {
+    
+    // Notify all active sessions that their shift has closed
+    for (const [phone, siteId] of userActiveSiteMap.entries()) {
+      const clockOutMsg = `🌙 *End of Day Shift Closed*\n\nYour session has been securely clocked out. Have a great evening!`;
+      await sendWhatsAppMessage(phone, clockOutMsg);
+    }
+    
+    // Wipe RAM bounds to ensure a clean slate for tomorrow's pin drop
+    userActiveSiteMap.clear();
+    dailyEasterEggTracker.clear();
+  }
+}, 60 * 1000);
+
+// ====================================================================
+// 17. GAMECAM, ADMIN & SYSTEM HEALTH
+// ====================================================================
+
+app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
+  const apiKey = req.headers['x-gamecam-secret'];
+  if (apiKey !== CONFIG.gamecam.webhookSecret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { venue_name, court_number, image_url } = req.body;
+  if (!venue_name || !image_url) {
+    return res.status(400).json({ error: 'Missing venue_name or image_url' });
+  }
+
+  res.status(200).json({ status: 'received' });
+
+  setImmediate(async () => {
+    try {
+      const matchedSite = await lookupSite(null, venue_name);
+      if (matchedSite) {
+        await airtableWriteWithAutoDrop('Sites', {
+          'Last Note': `[GAMECAM AUDIT - Court ${court_number || 1}]: Snapshot ingested for playability review.`,
+          'Last Intent': 'FACILITY_HEALTH_AUDIT'
+        }, matchedSite.id);
+      }
+    } catch (err) {}
+  });
+});
+
+app.get('/api/admin/backfill-geo', async (req, res) => {
+  try {
+    const records = await getCachedSites(true);
+    let updatedCount = 0;
+    const coordTracker = new Map();
+
+    for (const record of records) {
+      const siteName = record.fields['Site Name'] || 'Site';
+      let rawLocation = (record.fields['Site location'] || '').replace(/-{2,}/g, '-').trim();
+      if (!rawLocation || rawLocation === '+') continue;
+
+      let lat = null;
+      let lon = null;
+
+      const directMatch = rawLocation.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
+      if (directMatch) {
+        lat = parseFloat(directMatch[1]);
+        lon = parseFloat(directMatch[2]);
+      } else {
+        const geo = await geocodeAddressWithGoogle(rawLocation);
+        if (geo) {
+          lat = geo.lat;
+          lon = geo.lon;
+        }
+      }
+
+      if (!lat || !lon) continue;
+
+      const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+      const seenCount = coordTracker.get(coordKey) || 0;
+      coordTracker.set(coordKey, seenCount + 1);
+
+      if (seenCount > 0) {
+        lon = lon + (seenCount * 0.00015);
+      }
+
+      const formatted = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+      if (rawLocation !== formatted) {
+        await airtableWriteWithAutoDrop('Sites', { 'Site location': formatted }, record.id);
+        updatedCount++;
+        console.log(`📍 Geocoded & Nudged ${siteName} -> ${formatted}`);
+        await new Promise(r => setTimeout(r, 150));
+      }
+    }
+
+    invalidateAirtableCache('sites');
+    res.json({ status: 'success', courts_updated: updatedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Self-healing WABA discovery and webhook subscription handshake
+async function autoSubscribeMetaWebhook() {
+  const token = CONFIG.meta.accessToken;
+  if (!token) {
+    console.warn('[Meta Handshake] No META_ACCESS_TOKEN configured in environment.');
+    return;
+  }
+
+  const targetPhone = CONFIG.meta.targetVerifiedPhone; // '12892217329'
+  const discoveredWabaIds = new Set();
+  if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
+
+  // 1. Inspect token permissions & associated target WABAs via debug_token
+  try {
+    const debugRes = await fetch(`${CONFIG.meta.graphApiUrl}/debug_token?input_token=${token}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (debugRes.ok) {
+      const debugData = await debugRes.json();
+      const scopes = debugData?.data?.granular_scopes || [];
+      for (const scope of scopes) {
+        if (scope.scope?.includes('whatsapp_business') && Array.isArray(scope.target_ids)) {
+          scope.target_ids.forEach(id => discoveredWabaIds.add(String(id)));
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Meta Handshake] Debug token inspection note:', e.message);
+  }
+
+  // 2. Discover WABA IDs under Bounce Padel Courts portfolio & /me/businesses
+  const businessCandidates = ['34682330288078617'];
+  try {
+    const bizRes = await fetch(`${CONFIG.meta.graphApiUrl}/me/businesses`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (bizRes.ok) {
+      const bizData = await bizRes.json();
+      (bizData?.data || []).forEach(b => businessCandidates.push(b.id));
+    }
+  } catch (e) {}
+
+  for (const bId of businessCandidates) {
+    for (const endpoint of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+      try {
+        const wRes = await fetch(`${CONFIG.meta.graphApiUrl}/${bId}/${endpoint}?fields=id,name`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (wRes.ok) {
+          const wData = await wRes.json();
+          (wData?.data || []).forEach(w => discoveredWabaIds.add(String(w.id)));
+        }
+      } catch (e) {}
+    }
+  }
+
+  console.log(`📡 [Meta Handshake] Discovered WABA Candidate IDs: [${Array.from(discoveredWabaIds).join(', ') || 'None'}]`);
+
+  // 3. Inspect phone numbers for each WABA and match +1 289-221-7329
+  let matchedPhone = false;
+  for (const wabaId of discoveredWabaIds) {
+    try {
+      const pRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        const numbers = pData?.data || [];
+        for (const num of numbers) {
+          const cleanDisplay = (num.display_phone_number || '').replace(/\D/g, '');
+          if (cleanDisplay.includes(targetPhone) || targetPhone.includes(cleanDisplay) || num.id === CONFIG.meta.phoneNumberId) {
+            CONFIG.meta.phoneNumberId = num.id;
+            CONFIG.meta.wabaId = wabaId;
+            matchedPhone = true;
+            console.log(`📱 [Meta Handshake] Matched verified number +1 289-221-7329 -> Active Phone Number ID: ${num.id} (WABA: ${wabaId})`);
+            break;
+          }
+        }
+      }
+
+      // Instruct Meta to forward inbound webhook events to this App
+      const subRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/subscribed_apps`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const subData = await subRes.json();
+      console.log(`📡 [Meta Handshake] Subscribed App to WABA ${wabaId}:`, subData);
+    } catch (err) {
+      console.warn(`[Meta Handshake] Note for WABA ${wabaId}:`, err.message);
+    }
+  }
+
+  // 4. Fallback verification if configured Phone ID was explicitly provided
+  if (!matchedPhone && CONFIG.meta.phoneNumberId) {
+    try {
+      const vRes = await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}?fields=id,display_phone_number,verified_name`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (vRes.ok) {
+        const vData = await vRes.json();
+        console.log(`📱 [Meta Handshake] Active Phone ID ${vData.id} verified: ${vData.display_phone_number} (${vData.verified_name || 'Active'})`);
+      }
+    } catch (e) {}
+  }
+}
+
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    version: '5.6.9',
+    activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
+    engine: 'Titan OS V5.6.9 (Autonomous WABA Discovery & Resilient Ingress)'
+  });
+});
+
+app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`====================================================================`);
+  console.log(`🚀 TITAN OS V5.6.9 RUNNING ON PORT ${PORT}`);
+  console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
+  console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
+  console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
+  console.log(`====================================================================`);
+
+  await autoSubscribeMetaWebhook();
+
+  try {
+    await getCachedSites();
+    await getCachedWorkers();
+    await getCachedContacts();
+    await getCachedOpenAssignments();
+  } catch (err) {}
+});
