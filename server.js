@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.5 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.6 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -26,7 +26,7 @@
  * 22. Autonomous Milestone Velocity Tracking (Gate 1 to Gate 8)
  * 23. Technical Specs & Border Clearance Copilot (CBSA C13MM / PAPS BOWB)
  * 24. Asset Specification Tracking: Steel, Turf, Warranty Year, Model Type, and Glass Thickness
- * 25. Self-Healing Meta WABA Webhook Subscription & Dynamic Bouncer Bypass for Admin/Help
+ * 25. Autonomous Self-Healing Meta WABA Subscription & Dynamic Phone ID Sync for +1 289-221-7329
  */
 
 process.on('uncaughtException', (err) => {
@@ -67,6 +67,8 @@ const CONFIG = {
     accessToken: process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
     appSecret: process.env.META_APP_SECRET,
     phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
+    wabaId: process.env.META_WABA_ID || process.env.WABA_ID,
+    targetVerifiedPhone: '12892217329',
     graphApiUrl: 'https://graph.facebook.com/v21.0'
   },
   supabase: {
@@ -465,7 +467,7 @@ async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
 }
 
 // ====================================================================
-// 4. SPRING 2027 MOBILIZATION GATE ENGINE
+// 4. SPRING MOBILIZATION GATE ENGINE
 // ====================================================================
 function evaluateReadinessGate(siteRecord) {
   const f = siteRecord.fields || siteRecord;
@@ -1496,7 +1498,7 @@ async function resolveCallerIdentity(fromPhone) {
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
-  if (!toTarget || !messageId) return false;
+  if (!toTarget || !messageId || !CONFIG.meta.phoneNumberId) return false;
   const cleanDestination = String(toTarget).replace(/\D/g, ''); 
 
   const payload = {
@@ -1521,7 +1523,10 @@ async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
 }
 
 async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
-  if (!toTarget) return false;
+  if (!toTarget || !CONFIG.meta.phoneNumberId) {
+    console.warn(`[Meta Outbound] Aborted: Target (${toTarget}) or phoneNumberId (${CONFIG.meta.phoneNumberId}) missing.`);
+    return false;
+  }
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
   const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
 
@@ -1565,7 +1570,7 @@ async function sendWhatsAppMessage(toTarget, messageBody, retries = 2) {
 }
 
 async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
-  if (!toTarget || !buttons || buttons.length === 0) return false;
+  if (!toTarget || !buttons || buttons.length === 0 || !CONFIG.meta.phoneNumberId) return false;
   const isGroup = typeof toTarget === 'string' && toTarget.includes('@g.us');
   const cleanDestination = isGroup ? toTarget.trim() : String(toTarget).replace(/\D/g, '');
 
@@ -2267,7 +2272,7 @@ ROUTING INTENTS:
 4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks.
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
-7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker (e.g., "please assign to Passionate Farms", "assign to Danish", "reassign ticket #81 to site passion farms").
+7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker.
 8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on the Sites table (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness).
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
@@ -2278,14 +2283,14 @@ ROUTING INTENTS:
 15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
 16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
 17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
-18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, or suppliers of a specific court (e.g., steel color, turf color, turf supplier, year installed).
+18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, or suppliers of a specific court.
 
 Extract:
 "queried_court_name": string or null,
 "referenced_ticket_id": integer or null,
-"referenced_entity_name": string or null (e.g. "Ondako", "Cliff", "RCOR", "Cynamon", "Passionate Farms"),
-"reassign_site_name": string or null (target court name to reassign ticket to, e.g. "Passionate Farms"),
-"assign_worker_name": string or null (technician name, e.g. "Danish", "Morris", "Yeikol"),
+"referenced_entity_name": string or null,
+"reassign_site_name": string or null,
+"assign_worker_name": string or null,
 "ticket_status_update": string or null,
 "update_note": string or null,
 "freight_bol": string or null,
@@ -2298,7 +2303,7 @@ Extract:
 "qbo_amount": number or null,
 "qbo_line_items": string or null,
 
-DATABASE FIELD MAPPING OVERRIDES (Must exactly match these strings if present in the prompt):
+DATABASE FIELD MAPPING OVERRIDES:
 "workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT" | "EXECUTIVE" | "PRODUCTION" | "LOGISTICS" | "INVENTORY" | "PLANNING" | null
 "site_status_update": "PLANNING" | "ACTIVE" | "PAUSED" | "COMPLETE" | "BLOCKED_WEATHER" | "BLOCKED_PARTS" | "END_OF_DAY" | "OPEN_FOR_PLAY" | "WINTERIZED_CLOSED" | "UNDER_MAINTENANCE" | "IN_CONSTRUCTION" | null
 "deposit_status": "Pending Deposit" | "50% Deposit Received" | "Paid in Full" | null
@@ -3004,7 +3009,6 @@ async function processMediaBatch(batch) {
       siliconeStatusText = `• Silicone Sealant: None / Omitted (Partner Spec)`;
     }
 
-    // 1. Parse existing timestamps dictionary
     let milestoneTimestamps = {};
     try {
       if (targetedSite?.fields?.['Milestone Timestamps']) {
@@ -3012,13 +3016,11 @@ async function processMediaBatch(batch) {
       }
     } catch (e) {}
 
-    // 2. Seal the current gate's timestamp
     let velocityMessage = '';
     if (highestGate > 0 && !milestoneTimestamps[highestGate]) {
       milestoneTimestamps[highestGate] = new Date().toISOString();
     }
 
-    // 3. Calculate total build duration if Gate 8 is cleared
     if (highestGate >= 8 && milestoneTimestamps['1'] && isNewMilestone) {
       const start = new Date(milestoneTimestamps['1']);
       const end = new Date(milestoneTimestamps[highestGate]);
@@ -3077,7 +3079,6 @@ async function processMediaBatch(batch) {
 
     await sendWhatsAppMessage(dispatchTarget, installCard);
 
-    // AUTONOMOUS CLOSED-LOOP QA FORK
     if (hasBlockers && isFabricationDefect) {
       try {
         const primaryMediaUrl = storageResults.find(s => s && s.storagePath && (s.storagePath.includes('.mp4') || s.storagePath.includes('.mov')))?.signedUrl || storageResults.filter(s => s && s.signedUrl)[0]?.signedUrl || '';
@@ -3213,7 +3214,6 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', async (req, res) => {
-  // Acknowledge Meta immediately to avoid duplicate dispatch
   res.sendStatus(200);
 
   console.log(`\n========================================================`);
@@ -3223,7 +3223,15 @@ app.post('/webhook', async (req, res) => {
   const entry = body?.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
 
-  // Log delivery telemetry (sent, delivered, read)
+  // Real-time Phone Number ID & WABA Sync from incoming Meta payload
+  const inboundPhoneId = changes?.metadata?.phone_number_id;
+  const inboundDisplayPhone = changes?.metadata?.display_phone_number;
+  if (inboundPhoneId && inboundPhoneId !== CONFIG.meta.phoneNumberId) {
+    console.log(`🔄 [Auto-Sync Phone ID] Upgraded active META_PHONE_NUMBER_ID -> ${inboundPhoneId} (${inboundDisplayPhone || 'Verified'})`);
+    CONFIG.meta.phoneNumberId = inboundPhoneId;
+  }
+
+  // Delivery status telemetry
   if (changes?.statuses) {
     const st = changes.statuses[0];
     console.log(`📬 [Status Telemetry] Message ${st.id} status: "${st.status}" (Recipient: ${st.recipient_id})`);
@@ -3240,7 +3248,7 @@ app.post('/webhook', async (req, res) => {
   const messageText = message.text?.body || message.type || '';
   console.log(`💬 [Webhook Inbound] From: ${rawFrom} | Type: ${message.type} | Text: "${messageText}"`);
 
-  // Signature check
+  // HMAC SHA-256 signature verification
   const signature = req.headers['x-hub-signature-256'];
   if (CONFIG.meta.appSecret && signature && req.rawBody) {
     try {
@@ -3976,70 +3984,126 @@ app.get('/api/admin/backfill-geo', async (req, res) => {
   }
 });
 
-// Self-healing WABA webhook subscription handshake on startup
+// Self-healing WABA discovery and webhook subscription handshake
 async function autoSubscribeMetaWebhook() {
   const token = CONFIG.meta.accessToken;
-  const phoneId = CONFIG.meta.phoneNumberId;
-  if (!token || !phoneId) return;
+  if (!token) {
+    console.warn('[Meta Handshake] No META_ACCESS_TOKEN configured in environment.');
+    return;
+  }
 
+  const targetPhone = CONFIG.meta.targetVerifiedPhone; // '12892217329'
+  const discoveredWabaIds = new Set();
+  if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
+
+  // 1. Inspect token permissions & associated target WABAs via debug_token
   try {
-    const res = await fetch(`${CONFIG.meta.graphApiUrl}/${phoneId}?fields=whatsapp_business_account`, {
+    const debugRes = await fetch(`${CONFIG.meta.graphApiUrl}/debug_token?input_token=${token}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
-    if (!res.ok) {
-      console.warn('[Meta Handshake] Could not retrieve WABA ID:', await res.text());
-      return;
+    if (debugRes.ok) {
+      const debugData = await debugRes.json();
+      const scopes = debugData?.data?.granular_scopes || [];
+      for (const scope of scopes) {
+        if (scope.scope?.includes('whatsapp_business') && Array.isArray(scope.target_ids)) {
+          scope.target_ids.forEach(id => discoveredWabaIds.add(String(id)));
+        }
+      }
     }
-    const data = await res.json();
-    const wabaId = data?.whatsapp_business_account?.id;
-    if (wabaId) {
-      console.log(`📡 [Meta Handshake] Found WABA ID: ${wabaId}. Subscribing app to incoming messages...`);
+  } catch (e) {
+    console.warn('[Meta Handshake] Debug token inspection note:', e.message);
+  }
+
+  // 2. Discover WABA IDs under Bounce Padel Courts portfolio & /me/businesses
+  const businessCandidates = ['34682330288078617'];
+  try {
+    const bizRes = await fetch(`${CONFIG.meta.graphApiUrl}/me/businesses`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (bizRes.ok) {
+      const bizData = await bizRes.json();
+      (bizData?.data || []).forEach(b => businessCandidates.push(b.id));
+    }
+  } catch (e) {}
+
+  for (const bId of businessCandidates) {
+    for (const endpoint of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+      try {
+        const wRes = await fetch(`${CONFIG.meta.graphApiUrl}/${bId}/${endpoint}?fields=id,name`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (wRes.ok) {
+          const wData = await wRes.json();
+          (wData?.data || []).forEach(w => discoveredWabaIds.add(String(w.id)));
+        }
+      } catch (e) {}
+    }
+  }
+
+  console.log(`📡 [Meta Handshake] Discovered WABA Candidate IDs: [${Array.from(discoveredWabaIds).join(', ') || 'None'}]`);
+
+  // 3. Inspect phone numbers for each WABA and match +1 289-221-7329
+  let matchedPhone = false;
+  for (const wabaId of discoveredWabaIds) {
+    try {
+      const pRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        const numbers = pData?.data || [];
+        for (const num of numbers) {
+          const cleanDisplay = (num.display_phone_number || '').replace(/\D/g, '');
+          if (cleanDisplay.includes(targetPhone) || targetPhone.includes(cleanDisplay) || num.id === CONFIG.meta.phoneNumberId) {
+            CONFIG.meta.phoneNumberId = num.id;
+            CONFIG.meta.wabaId = wabaId;
+            matchedPhone = true;
+            console.log(`📱 [Meta Handshake] Matched verified number +1 289-221-7329 -> Active Phone Number ID: ${num.id} (WABA: ${wabaId})`);
+            break;
+          }
+        }
+      }
+
+      // Instruct Meta to forward inbound webhook events to this App
       const subRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/subscribed_apps`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const subData = await subRes.json();
-      console.log(`📡 [Meta Handshake] Webhook Subscription Result:`, subData);
+      console.log(`📡 [Meta Handshake] Subscribed App to WABA ${wabaId}:`, subData);
+    } catch (err) {
+      console.warn(`[Meta Handshake] Note for WABA ${wabaId}:`, err.message);
     }
-  } catch (err) {
-    console.warn(`📡 [Meta Handshake] Auto-subscribe warning:`, err.message);
+  }
+
+  // 4. Fallback verification if configured Phone ID was explicitly provided
+  if (!matchedPhone && CONFIG.meta.phoneNumberId) {
+    try {
+      const vRes = await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}?fields=id,display_phone_number,verified_name`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (vRes.ok) {
+        const vData = await vRes.json();
+        console.log(`📱 [Meta Handshake] Active Phone ID ${vData.id} verified: ${vData.display_phone_number} (${vData.verified_name || 'Active'})`);
+      }
+    } catch (e) {}
   }
 }
 
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.5',
-    engine: 'Titan OS V5.6.5 (Asset Specification Tracking & Resilient Ingress)'
+    version: '5.6.6',
+    activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
+    engine: 'Titan OS V5.6.6 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.5 RUNNING ON PORT ${PORT}`);
-  console.log(`🎨 ASSET SPECS TRACKING: Steel, Turf, Model, Glass & Warranty Year Active`);
-  console.log(`🎛️ ACTIONABLE STATE HANDLER: Conversational Airtable Admin Active`);
-  console.log(`💼 HEADLESS FINANCE COPILOT: AR Lookups, Name Mapping, & Net-New Invoicing Active`);
-  console.log(`📐 CLOSED-LOOP QA BRIDGE: Autonomous Defect Bifurcation to Factory Active`);
-  console.log(`🚚 LOGISTICS FORK: Voice-to-Integer Freight & BOL Triage Active`);
-  console.log(`📦 MISSING PARTS BRIDGE: Autonomous Logistics Dispatch & Claiming Active`);
-  console.log(`👁️ MULTIMODAL INTENT OVERRIDE: Hardened Screenshot Caption Override Active`);
-  console.log(`📱 1-ON-1 SANDBOX RESILIENCE: Active Feedback & Direct DM Logging Active`);
-  console.log(`🩹 ORPHAN HEALING: Auto-Link Parent Sites on Ticket Promotion Active`);
-  console.log(`🔗 DYNAMIC SESSION BINDING: Auto-Unlink Stale Court Links Active`);
-  console.log(`📝 TICKET & LEAD REASSIGNMENT: Foreign Key Auto-Linker to Sites/Workers Active`);
-  console.log(`💼 COMMERCIAL LEAD INGESTION: Auto-OCR Screenshots -> Daily Assignments Active`);
-  console.log(`🧾 EXPENSE GHOSTING: Auto-Complete & Filtered from Active Dispatch Active`);
-  console.log(`📡 RESILIENT DISPATCH: Auto-Retry on Meta Timeout Active`);
-  console.log(`📍 ZERO-TOUCH PROVISIONING: Drop a Pin & Say 'Create New Site' Active`);
-  console.log(`🎾 OPEN FOR PLAY: Readiness Gate Overrides & WINTERIZED_CLOSED Routing Active`);
-  console.log(`🎉 JOY CANNON: Direct Milestone Advancement & Number Sanitizer Active`);
-  console.log(`🌤️ CRANE-FREE WEATHER ENGINE: Wind, Cold Glue (<10°C), Moisture & Heat Active`);
-  console.log(`📍 GOOGLE GEO ENTERPRISE: Geocoding, Driving, Satellite & Twin Nudging Active`);
-  console.log(`🗣️ SPOKEN LOOKUPS & ENTRY #088: Relational Ticket Synthesis Active`);
-  console.log(`🏗️ 8-GATE FIELD RUBRIC: Single-Court Evaluation Active`);
-  console.log(`🎥 MEDIA RETRIEVAL ENGINE: Historical Walkaround Recall Active`);
-  console.log(`⏱️ MILESTONE TIMESTAMPS: Autonomous Velocity Tracking Active`);
+  console.log(`🚀 TITAN OS V5.6.6 RUNNING ON PORT ${PORT}`);
+  console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
   console.log(`====================================================================`);
