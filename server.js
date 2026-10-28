@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.13 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.14 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -33,7 +33,8 @@
  * 29. Bilingual Edge Dispatch (Native translations with English persistence)
  * 30. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
  * 31. Strict Target-Language Injection & Fabrication Tech Debt Cleanse
- * 32. Hardened Visual Memory Decoupling & Structured QA Checklist Output (V5.6.13)
+ * 32. Hardened Visual Memory Decoupling & Structured QA Checklist Output
+ * 33. Collaborative Tone Enforcement, UI Emoji Preservation, & 3500lb Sand Correction (V5.6.14)
  */
 
 process.on('uncaughtException', (err) => {
@@ -1078,6 +1079,10 @@ SPECIFIC QUALITY AUDIT CHECKS (You must evaluate each strictly in the "qa_checkl
 
 SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
 
+COLLABORATIVE TONE DIRECTIVE:
+Never shame the installers. Do not use dictatorial terms like "ACTION REQUIRED", "FAIL", "MISSING", or "Address immediately". 
+Use supportive, professional terms like "Pending", "To-Do", "Awaiting", or "Punch list". Ensure the "whatsapp_status_text" observation is friendly and collaborative.
+
 OUTPUT SPECIFICATION (JSON ONLY):
 Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_LANGUAGE provided in the audit context. All other JSON fields MUST remain strictly in English for the HQ database.
 {
@@ -1098,13 +1103,13 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
   "highest_gate": 4,
   "defect_origin": "FABRICATION" | "SITE_CONDITION" | "TRANSIT_DAMAGE" | null,
   "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | null,
-  "blockers_detected": ["Specific impediment, dimensional error, or missing hardware in English"],
+  "blockers_detected": ["Specific impediment, dimensional error, or pending hardware in English"],
   "work_verified": ["Specific verified stage completed in English"],
   "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
   "site_conditions": "Short string in English",
-  "action_items": ["Action item in English"],
+  "action_items": ["Pending black bolt caps", "Pending entrance plates", "Silicone pending"],
   "summary": "1-2 sentence concise executive summary of visible court progress or defect",
-  "whatsapp_status_text": "Plaintext WhatsApp card"
+  "whatsapp_status_text": "Plaintext WhatsApp friendly observation"
 }
 `;
 
@@ -1136,7 +1141,7 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
   "action_items": ["Action item in English"],
   "site_conditions": "Short string in English",
   "worker_summary": "1-2 sentence executive summary in English",
-  "whatsapp_status_text": "Plaintext WhatsApp card"
+  "whatsapp_status_text": "Plaintext friendly observation"
 }
 `;
 
@@ -1901,7 +1906,7 @@ function handleTechnicalSpecsQuery(rawText, dispatchTarget) {
     const card = `📐 *TITAN OS | ENGINEERING & SPECS ORACLE*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `• *Net Dimensions:* 88cm (34.6") center height, 92cm (36.2") at post. Knotted net mandatory for outdoor courts.\n` +
-      `• *Silica Sand:* 200–240 bags (~5,000–6,000 lbs) per court. 1.5 to 2 full pallets kiln-dried (0.2–0.8mm).\n` +
+      `• *Silica Sand:* 77 bags (~3,500 lbs) per court (50lb bags). Kiln-dried (0.2–0.8mm).\n` +
       `• *Turf Layout:* 3 rolls per court (A, B, C). White lines trimmed with 1.2m inset. Polyurethane bond requires >=10°C.\n` +
       `• *Paint Colors:* Standard Black: RAL 9005 (Jet Black). Blue: Pantone 533 C / Oxford Blue. Pearl Mouse for custom.\n` +
       `• *Fasteners:* M8 hex socket cap screws (450 pcs), 1/2"x4" & 1/2"x6" hex head anchor bolts (50 pcs, 17mm head).\n` +
@@ -3094,7 +3099,6 @@ async function processMediaBatch(batch) {
 
   const checklist = forensicAudit.qa_checklist || {};
   const hasBlockers = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
-    forensicAudit.status_observed === 'ACTION_REQUIRED' || 
     checklist.anchor_bolts_fully_installed === false || 
     checklist.entrance_plates_installed === false;
 
@@ -3126,12 +3130,12 @@ async function processMediaBatch(batch) {
       newlyVerifiedGates.push(`Gate ${highestGate}`);
     }
 
-    let qaSection = `\n🔍 *DETAILED QA AUDIT:*\n`;
+    let qaSection = `\n🔍 *PUNCH LIST QA:*\n`;
     if (Object.keys(checklist).length > 0) {
-      qaSection += `• Anchor Bolts: ${checklist.anchor_bolts_fully_installed ? '✅ Installed' : '❌ MISSING'}\n`;
-      qaSection += `• Entrance Plates: ${checklist.entrance_plates_installed ? '✅ Installed' : '❌ MISSING'}\n`;
-      qaSection += `• Black Bolt Caps: ${checklist.black_bolt_caps_installed ? '✅ Installed' : '❌ MISSING'}\n`;
-      qaSection += `• Jobsite Clean: ${checklist.jobsite_is_clean ? '✅ Yes' : '❌ Debris/Tools Present'}\n`;
+      qaSection += `• Anchor Bolts: ${checklist.anchor_bolts_fully_installed ? '✅ Secured' : '⏳ Pending'}\n`;
+      qaSection += `• Entrance Plates: ${checklist.entrance_plates_installed ? '✅ Installed' : '⏳ Pending'}\n`;
+      qaSection += `• Black Bolt Caps: ${checklist.black_bolt_caps_installed ? '✅ Capped' : '⏳ Pending'}\n`;
+      qaSection += `• Jobsite Clean: ${checklist.jobsite_is_clean ? '✅ Cleared' : '🧹 Sweep Pending'}\n`;
     }
 
     let milestoneTimestamps = {};
@@ -3180,7 +3184,7 @@ async function processMediaBatch(batch) {
     }
 
     const cardHeader = hasBlockers
-      ? `⚠️ *TITAN OS | ACTION REQUIRED — GATE ${inProgressGateNum || highestGate || 4} HOLD*`
+      ? `📋 *TITAN OS | QA CHECKLIST — GATE ${inProgressGateNum || highestGate || 4}*`
       : `🏗️ *TITAN OS | MILESTONE VERIFIED*`;
 
     let installCard = `${cardHeader}\n` +
@@ -3189,8 +3193,7 @@ async function processMediaBatch(batch) {
       `👤 *Lead:* ${workerName}\n` +
       `📊 *Progress:* ${Math.round(progressPercent * 100)}% (${gateLabel})\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      (hasBlockers && forensicAudit.blockers_detected?.length ? `🚨 *Blocker Detected:*\n${forensicAudit.blockers_detected.join('\n')}\n\n` : '') +
-      `👁️ *Observation:*\n${cleanSummary}\n` +
+      `👁️ *Observation:*\n${forensicAudit.whatsapp_status_text || cleanSummary}\n` +
       qaSection +
       velocityMessage;
 
@@ -3199,11 +3202,11 @@ async function processMediaBatch(batch) {
     }
 
     installCard += hasBlockers
-      ? `\n⚠️ *Remediation logged to Daily Assignments.*`
+      ? `\n📋 *Punch list logged to Daily Assignments.*`
       : `\n✅ *Progress updated in Sites ledger.*`;
 
-    // Swap strictly to dynamic bilingual generation here if returned by AI
-    await sendWhatsAppMessage(dispatchTarget, forensicAudit.whatsapp_status_text || installCard);
+    // Dispatch the strictly formatted UI card (ignores generic AI paragraphs)
+    await sendWhatsAppMessage(dispatchTarget, installCard);
 
     if (hasBlockers && isFabricationDefect) {
       try {
@@ -4333,15 +4336,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.13',
+    version: '5.6.14',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.13 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.14 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.13 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.14 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
