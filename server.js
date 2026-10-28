@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.7 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.8 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -15,9 +15,9 @@
  * 11. Silent Expense Ghost Routing (QuickBooks Sync Ready)
  * 12. Resilient Meta Dispatch with Auto-Retry
  * 13. Autonomous Zero-Touch Provisioning
- * 14. Milestone-Aware Joy Cannon
- * 15. Proactive Weather Tripwire Matrix (Crane-Free)
- * 16. On-Arrival Proactive Scan
+ * 14. Milestone-Aware Joy Cannon (Hub-and-Spoke Fan-Out)
+ * 15. Proactive Weather Tripwire Matrix (Crane-Free & Critical Alert Split)
+ * 16. On-Arrival Proactive Scan & Auto-Bind Clock-In (800m Radius)
  * 17. Conversational Spoken Lookups & Relational Cross-Referencing
  * 18. Voice-to-Integer Unstructured Freight Ledger
  * 19. Media Retrieval Engine: Spoken recall of historical video walkthroughs
@@ -28,6 +28,7 @@
  * 24. Asset Specification Tracking: Steel, Turf, Warranty Year, Model Type, and Glass Thickness
  * 25. Autonomous Self-Healing Meta WABA Subscription & Dynamic Phone ID Sync for +1 289-221-7329
  * 26. Official Meta Groups API Handler (Hive Creator)
+ * 27. Dynamic Morning Easter Eggs (Joke/Recipe/Fact) & 7:30 AM EST Proactive Pulse
  */
 
 process.on('uncaughtException', (err) => {
@@ -107,6 +108,7 @@ const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'FINANCE', 'LOGISTICS', 'PRODUCTION', '
 
 const lastDroppedCoordinates = new Map();
 const userActiveSiteMap = new Map(); 
+const dailyEasterEggTracker = new Map(); // Tracks Easter Eggs sent today
 
 // ====================================================================
 // 2. IN-MEMORY CACHE-ASIDE ENGINE
@@ -1314,52 +1316,91 @@ async function getHyperlocalWeather(lat, lon) {
 }
 
 function evaluateWeatherTripwires(weather, targetGate = null) {
-  if (!weather) return { holds: [], warnings: [], nominal: true, summaryText: '' };
+  if (!weather) return { criticalAlerts: [], holds: [], warnings: [], nominal: true, summaryText: '' };
 
+  const criticalAlerts = [];
   const holds = [];
   const warnings = [];
   const dewDelta = weather.temp - weather.dewPoint;
 
-  if (weather.windGusts > 37) {
-    holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h / >20 kts):* Suction cup glass installation prohibited. High panel sail hazard.`);
-  } else if (weather.windGusts > 28) {
-    warnings.push(`💨 *WIND WARNING (${weather.windGusts} km/h):* Approach glass seating with caution; verify post anchoring.`);
+  // 1. CRITICAL SAFETY & CHEMICAL LOCKOUTS (Proactive Push-Worthy)
+  if (weather.weatherCode >= 95 && weather.weatherCode <= 99) {
+    criticalAlerts.push(`⛈️ *SEVERE WEATHER / LIGHTNING:* Evacuate court frame. Immediate safety stand-down.`);
+  }
+  if (weather.windGusts > 60) {
+    criticalAlerts.push(`🌪️ *EXTREME WIND HAZARD (${weather.windGusts} km/h):* Secure all loose materials. Frame and glass hazard.`);
+  }
+  if (weather.temp < 10) {
+    criticalAlerts.push(`❄️ *TURF GLUE CURE HOLD (${weather.temp}°C):* Polyurethane adhesive failure risk. Do not glue turf seams.`);
   }
 
-  if (weather.temp < 5) {
-    holds.push(`❄️ *COLD LOCKOUT (${weather.temp}°C):* Total freeze lockout on polyurethane turf adhesive. Chemical bonding fails below 5°C.`);
-  } else if (weather.temp < 10) {
-    holds.push(`⚠️ *TURF GLUE CURE HOLD (${weather.temp}°C / <50°F):* Adhesive curing requires >=10°C. Do not glue turf seams until ambient temp rises.`);
+  // 2. STANDARD OPERATIONAL TRIPWIRES (Morning Pin-Drop Briefing Only)
+  if (weather.windGusts > 37 && weather.windGusts <= 60) {
+    holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h):* Suction cup glass installation prohibited.`);
+  } else if (weather.windGusts > 28) {
+    warnings.push(`💨 *WIND WARNING (${weather.windGusts} km/h):* Approach glass seating with caution.`);
   }
 
   if (weather.humidity > 85 || dewDelta <= 2.5) {
-    holds.push(`💧 *CONDENSATION HOLD:* Dew delta is ${dewDelta.toFixed(1)}°C (Humidity: ${weather.humidity}%). Pad/carpet surface moisture will ruin adhesive bond.`);
+    holds.push(`💧 *CONDENSATION HOLD:* Dew delta is ${dewDelta.toFixed(1)}°C (Humidity: ${weather.humidity}%). Pad/carpet moisture will ruin adhesive bond.`);
   }
 
   if (weather.isRainingOrStorm || weather.precip > 0) {
-    holds.push(`🌧️ *RAIN HOLD:* Active rain/storm detected. Hold all outdoor gluing, glass, and mesh.`);
+    holds.push(`🌧️ *RAIN HOLD:* Active rain detected. Hold outdoor gluing, glass, and mesh.`);
   } else if (weather.precipProbability4h > 40) {
-    warnings.push(`🌦️ *RAIN PROBABILITY (${weather.precipProbability4h}% in 4h):* Keep blue tarps staged over open turf rolls and seaming tape.`);
+    warnings.push(`🌦️ *RAIN PROBABILITY (${weather.precipProbability4h}% in 4h):* Keep blue tarps staged over open turf rolls.`);
   }
 
   if (weather.isRainingOrStorm || weather.precip > 0 || weather.humidity > 90) {
-    holds.push(`⏳ *SAND INFILL HOLD:* Wet conditions detected. Silica sand must strictly be applied to dry turf to prevent pile clumping.`);
+    holds.push(`⏳ *SAND INFILL HOLD:* Wet conditions detected. Silica sand must strictly be applied to dry turf.`);
   }
 
   if (weather.temp > 35) {
-    warnings.push(`☀️ *HIGH HEAT ALERT (${weather.temp}°C):* Adhesive pot-life drops to <5 minutes. Mandatory crew shade and hydration rest cycles.`);
+    warnings.push(`☀️ *HIGH HEAT ALERT (${weather.temp}°C):* Adhesive pot-life drops to <5 minutes. Mandatory crew shade rest cycles.`);
   }
 
-  const isNominal = holds.length === 0;
+  const isNominal = holds.length === 0 && criticalAlerts.length === 0;
   let summaryText = '';
 
+  if (criticalAlerts.length > 0) summaryText += `\n` + criticalAlerts.join('\n');
   if (holds.length > 0) summaryText += `\n` + holds.join('\n');
   if (warnings.length > 0) summaryText += `\n` + warnings.join('\n');
   if (isNominal) {
-    summaryText += `\n🟢 *Conditions Nominal:* Wind (${weather.windSpeed} km/h), Temp (${weather.temp}°C), and moisture are clear for work.`;
+    summaryText += `\n🟢 *Conditions Nominal:* Wind (${weather.windSpeed} km/h), Temp (${weather.temp}°C), and moisture clear for work.`;
   }
 
-  return { holds, warnings, nominal: isNominal, summaryText };
+  return { criticalAlerts, holds, warnings, nominal: isNominal, summaryText };
+}
+
+async function generateMorningEasterEgg() {
+  const topics = [
+    "a short, clean construction dad joke",
+    "a fun, interesting fact about the sport of Padel to help the crew understand the game",
+    "a quick, high-protein jobsite recipe (like something you can make in a microwave, cooler, or thermos)"
+  ];
+  const selectedTopic = topics[Math.floor(Math.random() * topics.length)];
+
+  const prompt = `You are a friendly dispatcher for a Bounce Padel court construction crew. 
+  Generate exactly ONE of the following: ${selectedTopic}. 
+  Keep it brief (1-2 sentences max). Add a relevant emoji at the start. Do not use quotes or conversational filler.`;
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.8 }
+  };
+
+  try {
+    const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    return text ? `\n\n🎁 *Morning Bonus:*\n${text.trim()}` : '';
+  } catch (err) {
+    return '';
+  }
 }
 
 // ====================================================================
@@ -1618,10 +1659,26 @@ async function sendWhatsAppButtons(toTarget, textBody, buttons = []) {
   }
 }
 
+async function fanOutToSubscribers(phoneNumbersString, messageBody, buttons = []) {
+  if (!phoneNumbersString) return;
+  
+  const rawNumbers = String(phoneNumbersString).split(',');
+  const cleanNumbers = rawNumbers.map(n => n.replace(/\D/g, '').trim()).filter(n => n.length >= 10);
+  const uniqueTargets = [...new Set(cleanNumbers)];
+
+  for (const target of uniqueTargets) {
+    if (buttons.length > 0) {
+      await sendWhatsAppButtons(target, messageBody, buttons);
+    } else {
+      await sendWhatsAppMessage(target, messageBody);
+    }
+  }
+}
+
 async function fireInstallationJoyCannon(siteRecord, highestGate) {
   try {
-    const clientGroup = siteRecord.fields['Client WhatsApp Group ID'];
-    const linkedContactIds = siteRecord.fields['Linked Contacts'] || [];
+    const subscribedPhones = siteRecord.fields['Subscribed Phones']; // Internal Execs / PMs
+    const linkedContactIds = siteRecord.fields['Linked Contacts'] || []; // External Clients
 
     let celebrationCard = null;
 
@@ -1656,10 +1713,12 @@ async function fireInstallationJoyCannon(siteRecord, highestGate) {
 
     if (!celebrationCard) return;
 
-    if (clientGroup) {
-      await sendWhatsAppMessage(clientGroup, celebrationCard);
+    // 1. Blast Internal Leadership & Dispatch (Hub-and-Spoke)
+    if (subscribedPhones) {
+      await fanOutToSubscribers(subscribedPhones, celebrationCard);
     }
 
+    // 2. Blast External Clients (1-on-1 DM to all linked VIP contacts)
     if (Array.isArray(linkedContactIds) && linkedContactIds.length > 0) {
       const contacts = await getCachedContacts();
       for (const cid of linkedContactIds) {
@@ -2516,7 +2575,7 @@ async function handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTa
     /logistics|freight/i.test(s.fields['Site Name'] || '')
   );
 
-  const logisticsTarget = logisticsSite?.fields?.['WhatsApp Group ID'];
+  const logisticsTarget = logisticsSite?.fields?.['Subscribed Phones'];
 
   if (logisticsTarget) {
     const logisticsCard = `🚨 *TITAN OS | MISSING PARTS ALERT*\n` +
@@ -2529,7 +2588,7 @@ async function handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTa
       `Tap below to claim this delivery.`;
     
     const buttons = [{ id: `CLAIM_SUPPLY_${ticketDbId}_${site?.id || 'none'}`, title: '🚚 Claim Delivery' }];
-    await sendWhatsAppButtons(logisticsTarget, logisticsCard, buttons);
+    await fanOutToSubscribers(logisticsTarget, logisticsCard, buttons);
   }
 }
 
@@ -3142,9 +3201,9 @@ async function processMediaBatch(batch) {
           /factory|production/i.test(s.fields['Site Name'] || '')
         );
 
-        const factoryTarget = factorySite?.fields?.['WhatsApp Group ID'];
+        const factoryTargetPhones = factorySite?.fields?.['Subscribed Phones'];
 
-        if (factoryTarget && factoryTarget !== dispatchTarget) {
+        if (factoryTargetPhones) {
           const factoryAlertCard = `📐 *TITAN OS | UPSTREAM TOLERANCE ALERT*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `📍 *Source:* Field Inspection (${courtLabel})\n` +
@@ -3155,8 +3214,8 @@ async function processMediaBatch(batch) {
             `🎫 *QA Ref:* Ticket ${qaTicketId}\n` +
             (primaryMediaUrl ? `🎥 *Forensic Clip:* ${primaryMediaUrl}` : '');
 
-          console.log(`[Factory QA Bridge] Autonomously broadcasting tolerance hold to Factory Hive: ${factoryTarget}`);
-          await sendWhatsAppMessage(factoryTarget, factoryAlertCard);
+          console.log(`[Factory QA Bridge] Autonomously broadcasting tolerance hold to Factory Hub via fan-out`);
+          await fanOutToSubscribers(factoryTargetPhones, factoryAlertCard);
         }
       } catch (qaErr) {
         console.error('[Factory QA Bridge Error]:', qaErr.message);
@@ -3466,66 +3525,75 @@ app.post('/webhook', async (req, res) => {
     if (message.type === 'location') {
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
-      
       lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
 
-      if (!site) {
-        await dispatchReply(`📍 Location received (${userLat.toFixed(4)}, ${userLon.toFixed(4)}).\n\n` +
-          `👉 *To assign this coordinate:*\nLink a court using \`/group <Name>\`\n\n` +
-          `👉 *To provision a brand new site here:*\nReply with *"Create new site <Name>"*`);
-        return;
+      const allSites = await getCachedSites();
+      let nearestSite = null;
+      let shortestDistance = Infinity;
+
+      // Scan all courts to find the closest match
+      for (const s of allSites) {
+        const coords = await resolveCoordinates(s);
+        if (coords) {
+          const dist = haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000; // in meters
+          if (dist < shortestDistance) {
+            shortestDistance = dist;
+            nearestSite = s;
+          }
+        }
       }
 
-      let siteCoords = await resolveCoordinates(site);
-      if (!siteCoords) {
-        const coordString = `${userLat.toFixed(5)}, ${userLon.toFixed(5)}`;
-        await airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, site.id);
-        await dispatchReply(`📍 *Coordinates Locked: ${coordString}* to *${site.fields['Site Name']}*`);
-        return;
-      }
-
-      const distanceMeters = haversineDistanceKm(userLat, userLon, siteCoords.lat, siteCoords.lon) * 1000;
       const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
       const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-      if (distanceMeters <= 300) {
-        lastDroppedCoordinates.delete(fromPhone);
+      // Generous 800-meter radius to account for cell tower drift at remote clubs
+      if (nearestSite && shortestDistance <= 800) { 
+        // 1. Auto-Bind their session in RAM
+        userActiveSiteMap.set(fromPhone, nearestSite.id);
 
+        // 2. Log Start Time to Airtable
         await airtableWriteWithAutoDrop('Sites', {
-          'Last Note': `Arrival verified for ${workerName} at ${timestamp} (${Math.round(distanceMeters)}m).`,
+          'Last Note': `[START OF DAY] Clock-in verified for ${workerName} at ${timestamp} (${Math.round(shortestDistance)}m from pin).`,
           'Last Intent': 'PRESENCE_VERIFIED'
-        }, site.id);
+        }, nearestSite.id);
 
-        const activeTicket = await findActiveTicketForSite(site.id);
+        const activeTicket = await findActiveTicketForSite(nearestSite.id);
+        const isIndoor = isIndoorSite(nearestSite);
 
         let arrivalWeatherNotice = '';
-        if (!indoorSite) {
-          const weather = await getHyperlocalWeather(siteCoords.lat, siteCoords.lon);
-          if (weather) {
-            const tripwire = evaluateWeatherTripwires(weather);
-            arrivalWeatherNotice = tripwire.summaryText;
-          }
+        if (!isIndoor) {
+          const weather = await getHyperlocalWeather(userLat, userLon);
+          if (weather) arrivalWeatherNotice = evaluateWeatherTripwires(weather).summaryText;
         }
 
-        let checkinResponse = `📍 *ON-SITE ARRIVAL VERIFIED*\n` +
+        let checkinResponse = `📍 *ON-SITE CLOCK IN VERIFIED*\n` +
           `━━━━━━━━━━━━━━━━━━━━\n` +
           `👤 *Technician:* ${workerName}\n` +
-          `🏟️ *Court:* ${site.fields['Site Name']}\n` +
-          `⏱️ *Time:* ${timestamp}\n`;
+          `🏟️ *Court Bound:* ${nearestSite.fields['Site Name']}\n` +
+          `⏱️ *Start Time:* ${timestamp}\n`;
 
-        if (arrivalWeatherNotice) {
-          checkinResponse += `\n🌤️ *Site Telemetry:*${arrivalWeatherNotice}\n`;
-        }
+        if (arrivalWeatherNotice) checkinResponse += `\n🌤️ *Site Telemetry:*${arrivalWeatherNotice}\n`;
 
         if (activeTicket) {
           await airtableWriteWithAutoDrop('Daily Assignments', { 'Status': 'In Progress' }, activeTicket.id);
           checkinResponse += `\n🎫 *Ticket Active:* #${activeTicket.fields['Assignment ID'] || activeTicket.id}\n` +
             `👉 Send 15-second walkaround video before touching tools.`;
+        } else {
+          checkinResponse += `\n👉 You are bound to this court. Send any photos, videos, or missing parts requests here.`;
         }
+
+        // --- DYNAMIC EASTER EGG INJECTION ---
+        const todayString = new Date().toISOString().split('T')[0];
+        if (dailyEasterEggTracker.get(fromPhone) !== todayString) {
+          const dynamicEgg = await generateMorningEasterEgg();
+          checkinResponse += dynamicEgg;
+          dailyEasterEggTracker.set(fromPhone, todayString);
+        }
+        // ------------------------------------
 
         await dispatchReply(checkinResponse);
       } else {
-        await dispatchReply(`📍 Location received: ${(distanceMeters / 1000).toFixed(1)} km from *${site.fields['Site Name']}*.\n\n` +
+        await dispatchReply(`📍 Location received, but you are not within 800m of a known court (${Math.round(shortestDistance / 1000)}km away).\n\n` +
           `👉 *If you are scouting a new location here:*\nReply with *"Create new site <Name>"*`);
       }
       return;
@@ -3953,6 +4021,29 @@ setInterval(async () => {
 }, 60 * 1000);
 
 // ====================================================================
+// DAILY MORNING CLOCK-IN PULSE (7:30 AM EST, MON-SAT)
+// ====================================================================
+setInterval(async () => {
+  const now = new Date();
+  // 11:30 AM UTC = 7:30 AM EST. getUTCDay() 0 is Sunday.
+  if (now.getUTCDay() !== 0 && now.getUTCHours() === 11 && now.getUTCMinutes() === 30) {
+    const workers = await getCachedWorkers();
+    
+    // Filter for active field crew who have a phone number listed
+    const activeCrew = workers.filter(w => w.fields['Active'] && w.fields['Phone E164']);
+
+    for (const w of activeCrew) {
+      const phone = String(w.fields['Phone E164']).replace(/\D/g, '');
+      if (phone) {
+        const pulseMsg = `🌅 *Good morning, Titan!*\n\n` + 
+                         `Please drop your WhatsApp Location Pin 📍 to automatically clock in and bind your session to your court for the day.`;
+        await sendWhatsAppMessage(phone, pulseMsg);
+      }
+    }
+  }
+}, 60 * 1000);
+
+// ====================================================================
 // 17. GAMECAM, ADMIN & SYSTEM HEALTH
 // ====================================================================
 
@@ -4144,15 +4235,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.7',
+    version: '5.6.8',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.7 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.8 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.7 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.8 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
