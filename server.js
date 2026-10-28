@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.8 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.9 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -29,6 +29,8 @@
  * 25. Autonomous Self-Healing Meta WABA Subscription & Dynamic Phone ID Sync for +1 289-221-7329
  * 26. Official Meta Groups API Handler (Hive Creator)
  * 27. Dynamic Morning Easter Eggs (Joke/Recipe/Fact) & 7:30 AM EST Proactive Pulse
+ * 28. Multi-Court Location Resolver & 6:00 PM Shift Clock-Out Pulse
+ * 29. Bilingual Edge Dispatch (Native translations with English persistence)
  */
 
 process.on('uncaughtException', (err) => {
@@ -1072,6 +1074,7 @@ SILICONE INSPECTION CHECK (QUALITY AUDIT ONLY — NOT A BLOCKING GATE):
 SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
 
 OUTPUT SPECIFICATION (JSON ONLY):
+Write the "whatsapp_status_text" receipt card in the primary language spoken in the audio (e.g., if the user speaks Spanish, output the card in Spanish). All other JSON fields (summary, blockers, action_items) MUST remain strictly in English for the HQ database.
 {
   "transcript_en": "Clean polished English transcript or visual scene summary",
   "transcript_es": "Transcripción limpia o resumen visual profesional en español",
@@ -1102,6 +1105,7 @@ CRITICAL DIRECTIVE:
 2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
 
 OUTPUT SPECIFICATION (JSON ONLY):
+Write the "whatsapp_status_text" receipt card in the primary language spoken in the audio (e.g., if the user speaks Spanish, output the card in Spanish). All other JSON fields (summary, blockers, action_items) MUST remain strictly in English for the HQ database.
 {
   "transcript_en": "Clean polished English transcript without filler words",
   "transcript_es": "Transcripción limpia y profesional en español sin muletillas",
@@ -1359,7 +1363,7 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
     warnings.push(`☀️ *HIGH HEAT ALERT (${weather.temp}°C):* Adhesive pot-life drops to <5 minutes. Mandatory crew shade rest cycles.`);
   }
 
-  const isNominal = holds.length === 0 && criticalAlerts.length === 0;
+  const isNominal = holds.length === 0 && criticalAlerts.length === 0 && warnings.length === 0;
   let summaryText = '';
 
   if (criticalAlerts.length > 0) summaryText += `\n` + criticalAlerts.join('\n');
@@ -1372,7 +1376,7 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   return { criticalAlerts, holds, warnings, nominal: isNominal, summaryText };
 }
 
-async function generateMorningEasterEgg() {
+async function generateMorningEasterEgg(workerLanguage = 'English') {
   const topics = [
     "a short, clean construction dad joke",
     "a fun, interesting fact about the sport of Padel to help the crew understand the game",
@@ -1382,6 +1386,7 @@ async function generateMorningEasterEgg() {
 
   const prompt = `You are a friendly dispatcher for a Bounce Padel court construction crew. 
   Generate exactly ONE of the following: ${selectedTopic}. 
+  Write the response entirely in ${workerLanguage}.
   Keep it brief (1-2 sentences max). Add a relevant emoji at the start. Do not use quotes or conversational filler.`;
 
   const payload = {
@@ -3169,7 +3174,8 @@ async function processMediaBatch(batch) {
       ? `\n⚠️ *Remediation logged to Daily Assignments.*`
       : `\n✅ *Progress updated in Sites ledger.*`;
 
-    await sendWhatsAppMessage(dispatchTarget, installCard);
+    // Swap strictly to dynamic bilingual generation here if returned by AI
+    await sendWhatsAppMessage(dispatchTarget, forensicAudit.whatsapp_status_text || installCard);
 
     if (hasBlockers && isFabricationDefect) {
       try {
@@ -3254,7 +3260,7 @@ async function processMediaBatch(batch) {
         (weatherTripwires.summaryText ? `📋 *Weather Telemetry:*${weatherTripwires.summaryText}\n\n` : '') +
         `👉 Send 10s completion video when work is finished to close ticket.`;
 
-      await sendWhatsAppMessage(dispatchTarget, baselineCard);
+      await sendWhatsAppMessage(dispatchTarget, forensicAudit.whatsapp_status_text || baselineCard);
       return;
     }
 
@@ -3291,6 +3297,53 @@ async function processMediaBatch(batch) {
 // ====================================================================
 // 15. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
+
+async function executeClockIn(site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon) {
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
+  const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  userActiveSiteMap.set(fromPhone, site.id);
+
+  await airtableWriteWithAutoDrop('Sites', {
+    'Last Note': `[START OF DAY] Clock-in verified for ${workerName} at ${timestamp} (${Math.round(distanceMeters)}m from pin).`,
+    'Last Intent': 'PRESENCE_VERIFIED'
+  }, site.id);
+
+  const activeTicket = await findActiveTicketForSite(site.id);
+  const isIndoor = isIndoorSite(site);
+
+  let arrivalWeatherNotice = '';
+  if (!isIndoor && userLat && userLon) {
+    const weather = await getHyperlocalWeather(userLat, userLon);
+    if (weather) arrivalWeatherNotice = evaluateWeatherTripwires(weather).summaryText;
+  }
+
+  let checkinResponse = `📍 *ON-SITE CLOCK IN VERIFIED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `👤 *Technician:* ${workerName}\n` +
+    `🏟️ *Court Bound:* ${site.fields['Site Name']}\n` +
+    `⏱️ *Start Time:* ${timestamp}\n`;
+
+  if (arrivalWeatherNotice) checkinResponse += `\n🌤️ *Site Telemetry:*${arrivalWeatherNotice}\n`;
+
+  if (activeTicket) {
+    await airtableWriteWithAutoDrop('Daily Assignments', { 'Status': 'In Progress' }, activeTicket.id);
+    checkinResponse += `\n🎫 *Ticket Active:* #${activeTicket.fields['Assignment ID'] || activeTicket.id}\n` +
+      `👉 Send 15-second walkaround video before touching tools.`;
+  } else {
+    checkinResponse += `\n👉 You are bound to this court. Send any photos, videos, or missing parts requests here.`;
+  }
+
+  const prefLang = worker?.fields?.['Language'] || 'English';
+  const todayString = new Date().toISOString().split('T')[0];
+  if (dailyEasterEggTracker.get(fromPhone) !== todayString) {
+    const dynamicEgg = await generateMorningEasterEgg(prefLang);
+    checkinResponse += dynamicEgg;
+    dailyEasterEggTracker.set(fromPhone, todayString);
+  }
+
+  await sendWhatsAppMessage(dispatchTarget, checkinResponse);
+}
 
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -3433,6 +3486,25 @@ app.post('/webhook', async (req, res) => {
     if (message.type === 'interactive') {
       const selectedId = message.interactive?.button_reply?.id || '';
 
+      if (selectedId.startsWith('BIND_SITE_')) {
+        const siteId = selectedId.replace('BIND_SITE_', '');
+        const allSites = await getCachedSites();
+        const selectedSite = allSites.find(s => s.id === siteId);
+        
+        if (selectedSite) {
+            const recentPin = lastDroppedCoordinates.get(fromPhone);
+            let dist = 0, uLat = null, uLon = null;
+            if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
+                uLat = recentPin.lat;
+                uLon = recentPin.lon;
+                const sc = await resolveCoordinates(selectedSite);
+                if (sc) dist = haversineDistanceKm(uLat, uLon, sc.lat, sc.lon) * 1000;
+            }
+            await executeClockIn(selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, uLat, uLon);
+        }
+        return;
+      }
+
       if (selectedId.startsWith('PROMOTE_VAULT_')) {
         const vaultId = selectedId.replace('PROMOTE_VAULT_', '');
         const res = await fetch(`${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?id=eq.${vaultId}`, {
@@ -3528,74 +3600,34 @@ app.post('/webhook', async (req, res) => {
       lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
 
       const allSites = await getCachedSites();
-      let nearestSite = null;
-      let shortestDistance = Infinity;
+      let nearbySites = [];
 
-      // Scan all courts to find the closest match
       for (const s of allSites) {
         const coords = await resolveCoordinates(s);
         if (coords) {
-          const dist = haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000; // in meters
-          if (dist < shortestDistance) {
-            shortestDistance = dist;
-            nearestSite = s;
-          }
+          const dist = haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+          if (dist <= 800) nearbySites.push({ site: s, distance: dist });
         }
       }
 
-      const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
-      const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+      nearbySites.sort((a, b) => a.distance - b.distance);
 
-      // Generous 800-meter radius to account for cell tower drift at remote clubs
-      if (nearestSite && shortestDistance <= 800) { 
-        // 1. Auto-Bind their session in RAM
-        userActiveSiteMap.set(fromPhone, nearestSite.id);
-
-        // 2. Log Start Time to Airtable
-        await airtableWriteWithAutoDrop('Sites', {
-          'Last Note': `[START OF DAY] Clock-in verified for ${workerName} at ${timestamp} (${Math.round(shortestDistance)}m from pin).`,
-          'Last Intent': 'PRESENCE_VERIFIED'
-        }, nearestSite.id);
-
-        const activeTicket = await findActiveTicketForSite(nearestSite.id);
-        const isIndoor = isIndoorSite(nearestSite);
-
-        let arrivalWeatherNotice = '';
-        if (!isIndoor) {
-          const weather = await getHyperlocalWeather(userLat, userLon);
-          if (weather) arrivalWeatherNotice = evaluateWeatherTripwires(weather).summaryText;
-        }
-
-        let checkinResponse = `📍 *ON-SITE CLOCK IN VERIFIED*\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `👤 *Technician:* ${workerName}\n` +
-          `🏟️ *Court Bound:* ${nearestSite.fields['Site Name']}\n` +
-          `⏱️ *Start Time:* ${timestamp}\n`;
-
-        if (arrivalWeatherNotice) checkinResponse += `\n🌤️ *Site Telemetry:*${arrivalWeatherNotice}\n`;
-
-        if (activeTicket) {
-          await airtableWriteWithAutoDrop('Daily Assignments', { 'Status': 'In Progress' }, activeTicket.id);
-          checkinResponse += `\n🎫 *Ticket Active:* #${activeTicket.fields['Assignment ID'] || activeTicket.id}\n` +
-            `👉 Send 15-second walkaround video before touching tools.`;
-        } else {
-          checkinResponse += `\n👉 You are bound to this court. Send any photos, videos, or missing parts requests here.`;
-        }
-
-        // --- DYNAMIC EASTER EGG INJECTION ---
-        const todayString = new Date().toISOString().split('T')[0];
-        if (dailyEasterEggTracker.get(fromPhone) !== todayString) {
-          const dynamicEgg = await generateMorningEasterEgg();
-          checkinResponse += dynamicEgg;
-          dailyEasterEggTracker.set(fromPhone, todayString);
-        }
-        // ------------------------------------
-
-        await dispatchReply(checkinResponse);
-      } else {
-        await dispatchReply(`📍 Location received, but you are not within 800m of a known court (${Math.round(shortestDistance / 1000)}km away).\n\n` +
-          `👉 *If you are scouting a new location here:*\nReply with *"Create new site <Name>"*`);
+      if (nearbySites.length === 0) {
+        await dispatchReply(`📍 Location received, but you are not within 800m of a known court.\n\n👉 *If scouting a new location here:*\nReply with *"Create new site <Name>"*`);
+        return;
       }
+
+      if (nearbySites.length > 1) {
+        const buttons = nearbySites.slice(0, 3).map(ns => ({
+          id: `BIND_SITE_${ns.site.id}`,
+          title: ns.site.fields['Site Name'].slice(0, 20)
+        }));
+        await sendWhatsAppButtons(dispatchTarget, `📍 Multiple courts detected within 800m. Which one are you clocking into today?`, buttons);
+        return;
+      }
+
+      // Exactly 1 court found: auto-bind instantly
+      await executeClockIn(nearbySites[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearbySites[0].distance, userLat, userLon);
       return;
     }
 
@@ -3901,360 +3933,4 @@ app.post('/webhook', async (req, res) => {
                 gravityScore: nlp.gravity_score || 1
               }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
 
-              await dispatchReply(`📌 *NOTE ARCHIVED*\n\n"${nlp.distilled_context || rawText}"\n\n_Logged to ${siteLabel}_`);
-            }
-            return;
-          }
-        }
-      }
-      return;
-    }
-
-    const isVideo = message.type === 'video';
-    const isImage = message.type === 'image';
-    const isAudio = message.type === 'audio' || message.type === 'voice';
-
-    if (!isVideo && !isImage && !isAudio) return;
-
-    const mediaObj = message[message.type];
-    const mediaId = mediaObj.id;
-    const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
-    const caption = mediaObj.caption || '';
-
-    sendWhatsAppReaction(dispatchTarget, messageId, isAudio ? '🎧' : (isVideo ? '🎥' : '🧾')).catch(() => {});
-
-    const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
-      headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
-    });
-    const metaMediaData = await metaMediaRes.json().catch(() => ({}));
-
-    if (!metaMediaRes.ok || !metaMediaData?.url) {
-      console.error(`[Meta Graph Error] Could not resolve mediaId ${mediaId}:`, metaMediaData);
-      return;
-    }
-
-    const mediaBufferRes = await fetch(metaMediaData.url, {
-      headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
-    });
-
-    if (!mediaBufferRes.ok) return;
-
-    const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
-    const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
-
-    if (!mediaDebounceQueues.has(queueKey)) {
-      mediaDebounceQueues.set(queueKey, {
-        items: [],
-        timer: null,
-        site,
-        worker,
-        dispatchTarget,
-        fromPhone,
-        senderSource: 'Dispatch',
-        indoorSite,
-        callerIdentity
-      });
-    }
-
-    const queue = mediaDebounceQueues.get(queueKey);
-    queue.items.push({
-      buffer: mediaBuffer,
-      mimeType,
-      messageId,
-      caption,
-      type: message.type,
-      rawMessage: message
-    });
-    queue.site = site;
-    queue.worker = worker;
-    queue.callerIdentity = callerIdentity;
-
-    if (queue.timer) clearTimeout(queue.timer);
-
-    if (queue.items.length >= 8) {
-      const currentBatch = mediaDebounceQueues.get(queueKey);
-      mediaDebounceQueues.delete(queueKey);
-      processMediaBatch(currentBatch).catch(batchErr => console.error('[Debouncer Cap Error]:', batchErr));
-      return;
-    }
-
-    queue.timer = setTimeout(async () => {
-      try {
-        const currentBatch = mediaDebounceQueues.get(queueKey);
-        mediaDebounceQueues.delete(queueKey);
-        if (!currentBatch || currentBatch.items.length === 0) return;
-
-        await processMediaBatch(currentBatch);
-      } catch (batchErr) {
-        console.error('[Debouncer Batch Error]:', batchErr);
-      }
-    }, DEBOUNCE_DELAY_MS);
-
-  } catch (err) {
-    console.error('[Runtime Exception in /webhook]:', err);
-  }
-});
-
-// ====================================================================
-// 16. AUTOMATED MONDAY DUNNING (CRON)
-// ====================================================================
-
-setInterval(async () => {
-  const now = new Date();
-  if (now.getDay() === 1 && now.getHours() === 9 && now.getMinutes() === 0) {
-    const allSites = await getCachedSites();
-    const financeSite = allSites.find(s => s.fields['Workflow Mode'] === 'FINANCE' || /finance|receivables/i.test(s.fields['Site Name'] || ''));
-    const financeTarget = financeSite?.fields?.['WhatsApp Group ID'];
-
-    if (!financeTarget) return; 
-    
-    const dunningCard = `🚨 *TITAN OS | ACCOUNTS RECEIVABLE AGING*\n` +
-                        `━━━━━━━━━━━━━━━━━━━━\n` +
-                        `🔴 *Cliff G:* Inv #1146 ($20,909.07) — 45 Days Late\n` +
-                        `🔴 *FMD Rosedale:* Inv #1201 ($4,520.00) — 30 Days Late\n` +
-                        `━━━━━━━━━━━━━━━━━━━━\n` +
-                        `Tap to execute automated follow-up protocol.`;
-
-    const buttons = [{ id: `QBO_SEND_REMINDERS`, title: '✉️ Send Reminders' }];
-    await sendWhatsAppButtons(financeTarget, dunningCard, buttons);
-  }
-}, 60 * 1000);
-
-// ====================================================================
-// DAILY MORNING CLOCK-IN PULSE (7:30 AM EST, MON-SAT)
-// ====================================================================
-setInterval(async () => {
-  const now = new Date();
-  // 11:30 AM UTC = 7:30 AM EST. getUTCDay() 0 is Sunday.
-  if (now.getUTCDay() !== 0 && now.getUTCHours() === 11 && now.getUTCMinutes() === 30) {
-    const workers = await getCachedWorkers();
-    
-    // Filter for active field crew who have a phone number listed
-    const activeCrew = workers.filter(w => w.fields['Active'] && w.fields['Phone E164']);
-
-    for (const w of activeCrew) {
-      const phone = String(w.fields['Phone E164']).replace(/\D/g, '');
-      if (phone) {
-        const pulseMsg = `🌅 *Good morning, Titan!*\n\n` + 
-                         `Please drop your WhatsApp Location Pin 📍 to automatically clock in and bind your session to your court for the day.`;
-        await sendWhatsAppMessage(phone, pulseMsg);
-      }
-    }
-  }
-}, 60 * 1000);
-
-// ====================================================================
-// 17. GAMECAM, ADMIN & SYSTEM HEALTH
-// ====================================================================
-
-app.post('/api/webhooks/gamecam/snapshot', async (req, res) => {
-  const apiKey = req.headers['x-gamecam-secret'];
-  if (apiKey !== CONFIG.gamecam.webhookSecret) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const { venue_name, court_number, image_url } = req.body;
-  if (!venue_name || !image_url) {
-    return res.status(400).json({ error: 'Missing venue_name or image_url' });
-  }
-
-  res.status(200).json({ status: 'received' });
-
-  setImmediate(async () => {
-    try {
-      const matchedSite = await lookupSite(null, venue_name);
-      if (matchedSite) {
-        await airtableWriteWithAutoDrop('Sites', {
-          'Last Note': `[GAMECAM AUDIT - Court ${court_number || 1}]: Snapshot ingested for playability review.`,
-          'Last Intent': 'FACILITY_HEALTH_AUDIT'
-        }, matchedSite.id);
-      }
-    } catch (err) {}
-  });
-});
-
-app.get('/api/admin/backfill-geo', async (req, res) => {
-  try {
-    const records = await getCachedSites(true);
-    let updatedCount = 0;
-    const coordTracker = new Map();
-
-    for (const record of records) {
-      const siteName = record.fields['Site Name'] || 'Site';
-      let rawLocation = (record.fields['Site location'] || '').replace(/-{2,}/g, '-').trim();
-      if (!rawLocation || rawLocation === '+') continue;
-
-      let lat = null;
-      let lon = null;
-
-      const directMatch = rawLocation.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
-      if (directMatch) {
-        lat = parseFloat(directMatch[1]);
-        lon = parseFloat(directMatch[2]);
-      } else {
-        const geo = await geocodeAddressWithGoogle(rawLocation);
-        if (geo) {
-          lat = geo.lat;
-          lon = geo.lon;
-        }
-      }
-
-      if (!lat || !lon) continue;
-
-      const coordKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
-      const seenCount = coordTracker.get(coordKey) || 0;
-      coordTracker.set(coordKey, seenCount + 1);
-
-      if (seenCount > 0) {
-        lon = lon + (seenCount * 0.00015);
-      }
-
-      const formatted = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
-      if (rawLocation !== formatted) {
-        await airtableWriteWithAutoDrop('Sites', { 'Site location': formatted }, record.id);
-        updatedCount++;
-        console.log(`📍 Geocoded & Nudged ${siteName} -> ${formatted}`);
-        await new Promise(r => setTimeout(r, 150));
-      }
-    }
-
-    invalidateAirtableCache('sites');
-    res.json({ status: 'success', courts_updated: updatedCount });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Self-healing WABA discovery and webhook subscription handshake
-async function autoSubscribeMetaWebhook() {
-  const token = CONFIG.meta.accessToken;
-  if (!token) {
-    console.warn('[Meta Handshake] No META_ACCESS_TOKEN configured in environment.');
-    return;
-  }
-
-  const targetPhone = CONFIG.meta.targetVerifiedPhone; // '12892217329'
-  const discoveredWabaIds = new Set();
-  if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
-
-  // 1. Inspect token permissions & associated target WABAs via debug_token
-  try {
-    const debugRes = await fetch(`${CONFIG.meta.graphApiUrl}/debug_token?input_token=${token}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    if (debugRes.ok) {
-      const debugData = await debugRes.json();
-      const scopes = debugData?.data?.granular_scopes || [];
-      for (const scope of scopes) {
-        if (scope.scope?.includes('whatsapp_business') && Array.isArray(scope.target_ids)) {
-          scope.target_ids.forEach(id => discoveredWabaIds.add(String(id)));
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('[Meta Handshake] Debug token inspection note:', e.message);
-  }
-
-  // 2. Discover WABA IDs under Bounce Padel Courts portfolio & /me/businesses
-  const businessCandidates = ['34682330288078617'];
-  try {
-    const bizRes = await fetch(`${CONFIG.meta.graphApiUrl}/me/businesses`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    if (bizRes.ok) {
-      const bizData = await bizRes.json();
-      (bizData?.data || []).forEach(b => businessCandidates.push(b.id));
-    }
-  } catch (e) {}
-
-  for (const bId of businessCandidates) {
-    for (const endpoint of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
-      try {
-        const wRes = await fetch(`${CONFIG.meta.graphApiUrl}/${bId}/${endpoint}?fields=id,name`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (wRes.ok) {
-          const wData = await wRes.json();
-          (wData?.data || []).forEach(w => discoveredWabaIds.add(String(w.id)));
-        }
-      } catch (e) {}
-    }
-  }
-
-  console.log(`📡 [Meta Handshake] Discovered WABA Candidate IDs: [${Array.from(discoveredWabaIds).join(', ') || 'None'}]`);
-
-  // 3. Inspect phone numbers for each WABA and match +1 289-221-7329
-  let matchedPhone = false;
-  for (const wabaId of discoveredWabaIds) {
-    try {
-      const pRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      if (pRes.ok) {
-        const pData = await pRes.json();
-        const numbers = pData?.data || [];
-        for (const num of numbers) {
-          const cleanDisplay = (num.display_phone_number || '').replace(/\D/g, '');
-          if (cleanDisplay.includes(targetPhone) || targetPhone.includes(cleanDisplay) || num.id === CONFIG.meta.phoneNumberId) {
-            CONFIG.meta.phoneNumberId = num.id;
-            CONFIG.meta.wabaId = wabaId;
-            matchedPhone = true;
-            console.log(`📱 [Meta Handshake] Matched verified number +1 289-221-7329 -> Active Phone Number ID: ${num.id} (WABA: ${wabaId})`);
-            break;
-          }
-        }
-      }
-
-      // Instruct Meta to forward inbound webhook events to this App
-      const subRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/subscribed_apps`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const subData = await subRes.json();
-      console.log(`📡 [Meta Handshake] Subscribed App to WABA ${wabaId}:`, subData);
-    } catch (err) {
-      console.warn(`[Meta Handshake] Note for WABA ${wabaId}:`, err.message);
-    }
-  }
-
-  // 4. Fallback verification if configured Phone ID was explicitly provided
-  if (!matchedPhone && CONFIG.meta.phoneNumberId) {
-    try {
-      const vRes = await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}?fields=id,display_phone_number,verified_name`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (vRes.ok) {
-        const vData = await vRes.json();
-        console.log(`📱 [Meta Handshake] Active Phone ID ${vData.id} verified: ${vData.display_phone_number} (${vData.verified_name || 'Active'})`);
-      }
-    } catch (e) {}
-  }
-}
-
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    version: '5.6.8',
-    activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.8 (Autonomous WABA Discovery & Resilient Ingress)'
-  });
-});
-
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.8 RUNNING ON PORT ${PORT}`);
-  console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
-  console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
-  console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
-  console.log(`====================================================================`);
-
-  await autoSubscribeMetaWebhook();
-
-  try {
-    await getCachedSites();
-    await getCachedWorkers();
-    await getCachedContacts();
-    await getCachedOpenAssignments();
-  } catch (err) {}
-});
+              await dispatchReply(`📌 *NOTE ARCHIVED*\n\n"${nlp.distilled_
