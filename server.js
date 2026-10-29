@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.16 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.17 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -34,7 +34,7 @@
  * 30. Strict Target-Language Injection & Fabrication Tech Debt Cleanse
  * 31. Hardened Visual Memory Decoupling & Structured QA Checklist Output
  * 32. Collaborative Tone Enforcement, UI Emoji Preservation, & 3500lb Sand Correction
- * 33. Super Panoramic Engineering Specs, Right-Door Orientation Check, & Virtual Hive Crew Sync (V5.6.16)
+ * 33. Frictionless Punch List Progression & Decoupled Gate Advancement (V5.6.17)
  */
 
 process.on('uncaughtException', (err) => {
@@ -1062,27 +1062,12 @@ When inspecting video frames, visually identify completed physical stages:
 - Gate 7: "Net & Posts" (Center net posts mounted, regulation net installed and tensioned)
 - Gate 8: "Clean & Handover" (STRICT: Construction tools, trash, and active debris MUST be entirely cleared. Court must be pristine and ready for tournament play).
 
-CLOSED-LOOP QA & UPSTREAM FABRICATION DEFECT IDENTIFICATION:
-Listen carefully to spoken audio and inspect visual elements.
-If the inspector or field crew identifies a shop mistake, jig discrepancy, or manufacturing defect:
-- Set "defect_origin": "FABRICATION"
-- Set "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | "DOORS"
-- List the specific variance in "blockers_detected"
-- Set "status_observed": "ACTION_REQUIRED"
-
-SPECIFIC QUALITY AUDIT CHECKS (You must evaluate each strictly in the "qa_checklist" JSON object):
-- "entrance_plates_installed": Look ONLY at the bottom threshold of the door openings/entrances for the "Bounce Padel Courts" branded plates. Do NOT confuse with corner plates.
-- "anchor_bolts_fully_installed": Look closely at the square green base plates at the bottom of the structural columns holding up the glass and mesh. If the holes are empty, anchor bolts are pending.
-- "black_bolt_caps_installed": Look at the bolts holding the green steel frame together. Do they have black plastic caps covering them?
-- "silicone_sealant_applied": Is there visible silicone along the glass panel joints?
-- "doors_oriented_correctly": Check door orientations. Doors must be RIGHT and RIGHT (not left and right). If a left door is installed, flag it.
-- "jobsite_is_clean": Are there tools, debris, cords, or ladders left on the court? (If yes, this is false).
-
-SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
+FRICTIONLESS PROGRESSION & PUNCH LIST QA:
+- Evaluate the qa_checklist items (bolts, entrance plates, bolt caps, silicone, doors, jobsite cleanliness) for the punch list.
+- CRITICAL: Pending cosmetic or hardware punch list items (such as missing bolt caps, entrance plates, or pending cleanups) ARE NOT blocking gates. Allow milestone progression to advance based on physical construction gates even if punch list items remain pending.
 
 COLLABORATIVE TONE DIRECTIVE:
-Never shame the installers. Do not use dictatorial terms like "ACTION REQUIRED", "FAIL", "MISSING", or "Address immediately". 
-Use supportive, professional terms like "Pending", "To-Do", "Awaiting", or "Punch list". Ensure the "whatsapp_status_text" observation is friendly and collaborative.
+Never shame the installers. Use supportive, professional terms like "Pending", "To-Do", "Awaiting", or "Punch list". 
 
 OUTPUT SPECIFICATION (JSON ONLY):
 Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_LANGUAGE provided in the audit context. All other JSON fields MUST remain strictly in English for the HQ database.
@@ -1100,18 +1085,18 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
   "spoken_court_name": "string or null",
   "spoken_ticket_id": integer or null,
   "video_phase": "INSTALLATION_SWEEP" | "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT",
-  "verified_gates": [1, 2, 3],
-  "in_progress_gate": 4,
-  "highest_gate": 4,
+  "verified_gates": [1, 2, 3, 4, 5, 6],
+  "in_progress_gate": 6,
+  "highest_gate": 6,
   "defect_origin": "FABRICATION" | "SITE_CONDITION" | "TRANSIT_DAMAGE" | null,
-  "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | "DOORS" | null,
-  "blockers_detected": ["Specific impediment, dimensional error, or pending hardware in English"],
+  "qa_component": null,
+  "blockers_detected": [],
   "work_verified": ["Specific verified stage completed in English"],
-  "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
+  "status_observed": "MILESTONE_PROGRESS",
   "site_conditions": "Short string in English",
-  "action_items": ["Pending black bolt caps", "Pending entrance plates", "Silicone pending", "Swap left door for right door"],
-  "summary": "1-2 sentence concise executive summary of visible court progress or defect",
-  "whatsapp_status_text": "Plaintext WhatsApp friendly observation"
+  "action_items": ["Pending black bolt caps", "Pending entrance plates"],
+  "summary": "1-2 sentence concise executive summary of visible court progress",
+  "whatsapp_status_text": "Plaintext WhatsApp friendly observation mentioning progress and gentle punch list reminders"
 }
 `;
 
@@ -2862,7 +2847,7 @@ async function processMediaBatch(batch) {
   const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
 
   const cumulativeContext = {
-    siteName: site?.fields['Site Name'] || 'Padel Court',
+    siteName: site?.fields?.['Site Name'] || 'Padel Court',
     workflowMode: currentMode,
     siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
     openTickets: site?.fields?.['Open Tickets'] || 0,
@@ -3077,10 +3062,7 @@ async function processMediaBatch(batch) {
   }
 
   const checklist = forensicAudit.qa_checklist || {};
-  const hasBlockers = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
-    checklist.anchor_bolts_fully_installed === false || 
-    checklist.entrance_plates_installed === false ||
-    checklist.doors_oriented_correctly === false;
+  const hasBlockers = false; // Frictionless progress: Punch list items do not block gate advancement
 
   const isFabricationDefect = forensicAudit.defect_origin === 'FABRICATION' ||
     (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop|door/i.test(b)));
@@ -3099,14 +3081,14 @@ async function processMediaBatch(batch) {
     const compactGateStatus = inProgressLabel ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGateNum} In Progress)` : gateLabel;
 
     const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
-    const isNewMilestone = highestGate > 0 && !previouslyCleared.includes(`Gate ${highestGate}`) && !hasBlockers;
+    const isNewMilestone = highestGate > 0 && !previouslyCleared.includes(`Gate ${highestGate}`);
 
     const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => {
       const num = parseInt(String(g).replace(/\D/g, ''));
       return isNaN(num) ? String(g) : `Gate ${num}`;
     });
 
-    if (highestGate > 0 && !hasBlockers) {
+    if (highestGate > 0) {
       newlyVerifiedGates.push(`Gate ${highestGate}`);
     }
 
@@ -3149,10 +3131,10 @@ async function processMediaBatch(batch) {
         'Current Gate': compactGateStatus,
         'Milestone Timestamps': JSON.stringify(milestoneTimestamps),
         'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${cleanSummary}`,
-        'Last Intent': hasBlockers ? 'ACTION_REQUIRED' : 'MILESTONE_PROGRESS'
+        'Last Intent': 'MILESTONE_PROGRESS'
       };
 
-      if (highestGate >= TOTAL_GATES && !hasBlockers) {
+      if (highestGate >= TOTAL_GATES) {
         updatePayload['Workflow Mode'] = 'MAINTENANCE';
         updatePayload['Site Status'] = 'ACTIVE';
       }
@@ -3165,9 +3147,7 @@ async function processMediaBatch(batch) {
       }
     }
 
-    const cardHeader = hasBlockers
-      ? `📋 *TITAN OS | QA CHECKLIST — GATE ${inProgressGateNum || highestGate || 4}*`
-      : `🏗️ *TITAN OS | MILESTONE VERIFIED*`;
+    const cardHeader = `🏗️ *TITAN OS | MILESTONE VERIFIED*`;
 
     let installCard = `${cardHeader}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -3183,63 +3163,10 @@ async function processMediaBatch(batch) {
       installCard += `\n📋 *Weather Telemetry:*${weatherTripwires.summaryText}\n`;
     }
 
-    installCard += hasBlockers
-      ? `\n📋 *Punch list logged to Daily Assignments.*`
-      : `\n✅ *Progress updated in Sites ledger.*`;
+    installCard += `\n✅ *Progress updated in Sites ledger.*`;
 
     // Dispatch the strictly formatted UI card (ignores generic AI paragraphs)
     await sendWhatsAppMessage(dispatchTarget, installCard);
-
-    if (hasBlockers && isFabricationDefect) {
-      try {
-        const primaryMediaUrl = storageResults.find(s => s && s.storagePath && (s.storagePath.includes('.mp4') || s.storagePath.includes('.mov')))?.signedUrl || storageResults.filter(s => s && s.signedUrl)[0]?.signedUrl || '';
-        const defectText = forensicAudit.blockers_detected?.join(' • ') || cleanSummary;
-        const componentLabel = forensicAudit.qa_component || 'Steel Framing / Tab Jig';
-
-        const qaAssignmentPayload = {
-          'Date': new Date().toISOString().split('T')[0],
-          'Assignment Type': 'Service',
-          'Task Category': 'Shop QA / Fabrication',
-          'Priority': 'Critical',
-          'Source': 'Automated Field QA Sweep',
-          'Status': 'Open',
-          'Notes': `[UPSTREAM FABRICATION DEFECT — ${courtLabel}]\n` +
-            `• Component: ${componentLabel}\n` +
-            `• Variance: ${defectText}\n` +
-            `• Observed by: ${workerName} at ${timeStr}\n\n` +
-            `FORENSIC VIDEO EVIDENCE:\n${primaryMediaUrl}`
-        };
-
-        if (targetedSite?.id) qaAssignmentPayload['Sites'] = [targetedSite.id];
-        const createdQaTicket = await airtableWriteWithAutoDrop('Daily Assignments', qaAssignmentPayload);
-        const qaTicketId = createdQaTicket?.fields?.['Assignment ID'] ? `#${createdQaTicket.fields['Assignment ID']}` : 'QA';
-
-        const allSites = await getCachedSites();
-        const factorySite = allSites.find(s =>
-          (s.fields['Workflow Mode'] === 'PRODUCTION') ||
-          /factory|production/i.test(s.fields['Site Name'] || '')
-        );
-
-        const factoryTargetPhones = factorySite?.fields?.['Subscribed Phones'];
-
-        if (factoryTargetPhones) {
-          const factoryAlertCard = `📐 *TITAN OS | UPSTREAM TOLERANCE ALERT*\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `📍 *Source:* Field Inspection (${courtLabel})\n` +
-            `🛠️ *Component:* ${componentLabel}\n` +
-            `📏 *Telemetry:* ${defectText}\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `⚠️ *Action for Shop:* Verify jig placement & tolerances before sending next batch to paint.\n` +
-            `🎫 *QA Ref:* Ticket ${qaTicketId}\n` +
-            (primaryMediaUrl ? `🎥 *Forensic Clip:* ${primaryMediaUrl}` : '');
-
-          console.log(`[Factory QA Bridge] Autonomously broadcasting tolerance hold to Factory Hub via fan-out`);
-          await fanOutToSubscribers(factoryTargetPhones, factoryAlertCard);
-        }
-      } catch (qaErr) {
-        console.error('[Factory QA Bridge Error]:', qaErr.message);
-      }
-    }
 
     return;
   }
@@ -4266,15 +4193,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.16',
+    version: '5.6.17',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.16 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.17 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.16 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.17 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
