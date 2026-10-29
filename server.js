@@ -1,5 +1,5 @@
 /**
- * TITAN OS V5.6.15 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V5.6.16 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -34,7 +34,7 @@
  * 30. Strict Target-Language Injection & Fabrication Tech Debt Cleanse
  * 31. Hardened Visual Memory Decoupling & Structured QA Checklist Output
  * 32. Collaborative Tone Enforcement, UI Emoji Preservation, & 3500lb Sand Correction
- * 33. Dead Group API Purge, "Anti-Time-Police" Context Binding, & Virtual Hive Crew Sync (V5.6.15)
+ * 33. Super Panoramic Engineering Specs, Right-Door Orientation Check, & Virtual Hive Crew Sync (V5.6.16)
  */
 
 process.on('uncaughtException', (err) => {
@@ -1051,12 +1051,12 @@ SINGLE-COURT EVALUATION MANDATE:
 Evaluate strictly the single primary court in the foreground being inspected.
 DO NOT evaluate background courts or adjacent courts. Disregard courts seen in the distance.
 
-PADEL COURT 8-GATE PHYSICAL CONSTRUCTION RUBRIC:
+PADEL COURT 8-GATE PHYSICAL CONSTRUCTION RUBRIC (SUPER PANORAMIC SPEC):
 When inspecting video frames, visually identify completed physical stages:
-- Gate 1: "Foundation & Slab" (Cured concrete pad or existing leveled slab, anchor base plates)
-- Gate 2: "Steel Frame" (Vertical steel posts, corner posts, and perimeter frame beams bolted upright)
-- Gate 3: "Mesh Panels" (Wire mesh fencing panels bolted to steel posts)
-- Gate 4: "Glass Installed" (Tempered glass panels mounted and secured in frame channels)
+- Gate 1: "Foundation & Slab" (Cured concrete pad, existing sport court, or existing tennis foundation)
+- Gate 2: "Steel Frame" (Vertical steel posts and perimeter frame beams bolted upright. NOTE: Super Panoramic courts do NOT have corner posts)
+- Gate 3: "Mesh Panels" (Lower and upper wire mesh fencing panels bolted to steel posts)
+- Gate 4: "Glass Installed" (Tempered glass panels mounted and secured via glass tabs. NOTE: Do not look for frame channels)
 - Gate 5: "Turf Laid" (Synthetic turf rolled out, seamed, glued, and white regulation boundary lines cut in. Turf can be ANY color)
 - Gate 6: "Sand Infill" (Silica sand distributed and brushed evenly across turf carpet fibers)
 - Gate 7: "Net & Posts" (Center net posts mounted, regulation net installed and tensioned)
@@ -1066,15 +1066,16 @@ CLOSED-LOOP QA & UPSTREAM FABRICATION DEFECT IDENTIFICATION:
 Listen carefully to spoken audio and inspect visual elements.
 If the inspector or field crew identifies a shop mistake, jig discrepancy, or manufacturing defect:
 - Set "defect_origin": "FABRICATION"
-- Set "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE"
+- Set "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | "DOORS"
 - List the specific variance in "blockers_detected"
 - Set "status_observed": "ACTION_REQUIRED"
 
 SPECIFIC QUALITY AUDIT CHECKS (You must evaluate each strictly in the "qa_checklist" JSON object):
-- "entrance_plates_installed": Look at the bottom threshold of the door openings for the "Bounce Padel Courts" branded plates.
-- "anchor_bolts_fully_installed": Look closely at the square green base plates at the bottom of the structural columns. If the holes are empty, the anchor bolts are missing.
+- "entrance_plates_installed": Look ONLY at the bottom threshold of the door openings/entrances for the "Bounce Padel Courts" branded plates. Do NOT confuse with corner plates.
+- "anchor_bolts_fully_installed": Look closely at the square green base plates at the bottom of the structural columns holding up the glass and mesh. If the holes are empty, anchor bolts are pending.
 - "black_bolt_caps_installed": Look at the bolts holding the green steel frame together. Do they have black plastic caps covering them?
 - "silicone_sealant_applied": Is there visible silicone along the glass panel joints?
+- "doors_oriented_correctly": Check door orientations. Doors must be RIGHT and RIGHT (not left and right). If a left door is installed, flag it.
 - "jobsite_is_clean": Are there tools, debris, cords, or ladders left on the court? (If yes, this is false).
 
 SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
@@ -1091,6 +1092,7 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
     "anchor_bolts_fully_installed": boolean,
     "black_bolt_caps_installed": boolean,
     "silicone_sealant_applied": boolean,
+    "doors_oriented_correctly": boolean,
     "jobsite_is_clean": boolean
   },
   "transcript_en": "Clean polished English transcript or visual scene summary",
@@ -1102,12 +1104,12 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
   "in_progress_gate": 4,
   "highest_gate": 4,
   "defect_origin": "FABRICATION" | "SITE_CONDITION" | "TRANSIT_DAMAGE" | null,
-  "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | null,
+  "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | "DOORS" | null,
   "blockers_detected": ["Specific impediment, dimensional error, or pending hardware in English"],
   "work_verified": ["Specific verified stage completed in English"],
   "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
   "site_conditions": "Short string in English",
-  "action_items": ["Pending black bolt caps", "Pending entrance plates", "Silicone pending"],
+  "action_items": ["Pending black bolt caps", "Pending entrance plates", "Silicone pending", "Swap left door for right door"],
   "summary": "1-2 sentence concise executive summary of visible court progress or defect",
   "whatsapp_status_text": "Plaintext WhatsApp friendly observation"
 }
@@ -2860,7 +2862,7 @@ async function processMediaBatch(batch) {
   const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
 
   const cumulativeContext = {
-    siteName: site?.fields?.['Site Name'] || 'Padel Court',
+    siteName: site?.fields['Site Name'] || 'Padel Court',
     workflowMode: currentMode,
     siteStatus: site?.fields?.['Site Status'] || 'ACTIVE',
     openTickets: site?.fields?.['Open Tickets'] || 0,
@@ -3077,10 +3079,11 @@ async function processMediaBatch(batch) {
   const checklist = forensicAudit.qa_checklist || {};
   const hasBlockers = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
     checklist.anchor_bolts_fully_installed === false || 
-    checklist.entrance_plates_installed === false;
+    checklist.entrance_plates_installed === false ||
+    checklist.doors_oriented_correctly === false;
 
   const isFabricationDefect = forensicAudit.defect_origin === 'FABRICATION' ||
-    (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop/i.test(b)));
+    (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop|door/i.test(b)));
 
   // PIPELINE A: INSTALLATION ENGINE WITH VELOCITY TELEMETRY
   if (siteMode === 'INSTALLATION' && !explicitTicketId) {
@@ -3112,6 +3115,8 @@ async function processMediaBatch(batch) {
       qaSection += `• Anchor Bolts: ${checklist.anchor_bolts_fully_installed ? '✅ Secured' : '⏳ Pending'}\n`;
       qaSection += `• Entrance Plates: ${checklist.entrance_plates_installed ? '✅ Installed' : '⏳ Pending'}\n`;
       qaSection += `• Black Bolt Caps: ${checklist.black_bolt_caps_installed ? '✅ Capped' : '⏳ Pending'}\n`;
+      qaSection += `• Silicone: ${checklist.silicone_sealant_applied ? '✅ Applied' : '⏳ Pending'}\n`;
+      qaSection += `• Doors (Right/Right): ${checklist.doors_oriented_correctly ? '✅ Correct' : '⚠️ Left Door Detected'}\n`;
       qaSection += `• Jobsite Clean: ${checklist.jobsite_is_clean ? '✅ Cleared' : '🧹 Sweep Pending'}\n`;
     }
 
@@ -4261,15 +4266,15 @@ async function autoSubscribeMetaWebhook() {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '5.6.15',
+    version: '5.6.16',
     activePhoneNumberId: CONFIG.meta.phoneNumberId || 'Awaiting Sync',
-    engine: 'Titan OS V5.6.15 (Autonomous WABA Discovery & Resilient Ingress)'
+    engine: 'Titan OS V5.6.16 (Autonomous WABA Discovery & Resilient Ingress)'
   });
 });
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V5.6.15 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V5.6.16 RUNNING ON PORT ${PORT}`);
   console.log(`📱 TARGET NUMBER ACTIVE: +1 (289) 221-7329`);
   console.log(`🇨🇦 BORDER & SPECS ORACLE: CBSA C13MM / PAPS BOWB / Fastener Registry Active`);
   console.log(`📡 WEBHOOK INGRESS TELEMETRY & AUTO-WABA SUBSCRIPTION ACTIVE`);
