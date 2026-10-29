@@ -1,7 +1,7 @@
 {
-  "name": "titan-v43-webhook",
-  "version": "1.1.0",
-  "description": "Titan V4.3 WhatsApp webhook: HMAC, private Supabase media, Gemini evaluation, Airtable logging",
+  "name": "titan-os",
+  "version": "6.0.0",
+  "description": "Titan OS V6.0 Headless ERP: Supabase Postgres, Gemini 2.5 Flash, Meta WhatsApp Webhook",
   "main": "server.js",
   "private": true,
   "scripts": {
@@ -9,7 +9,9 @@
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
+    "@supabase/supabase-js": "^2.45.6",
     "axios": "^1.7.9",
+    "dotenv": "^16.4.5",
     "express": "^4.21.0"
   },
   "engines": {
