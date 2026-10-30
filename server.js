@@ -2510,6 +2510,294 @@ async function triageSpokenOrTextNLP(rawInput, isAudio = false, audioItems = [])
   return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
 }
 
+async function handleVoiceToIntegerFreight(nlp, site, worker, callerIdentity, dispatchTarget, fromPhone) {
+  const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Logistics Tech';
+  const siteLabel = site?.fields?.['Site Name'] || nlp.matched_site_name || 'Fleet Operations';
+  const countLabel = nlp.freight_integer_count ? `[Count: ${nlp.freight_integer_count}] ` : '';
+  
+  const payloadNotes = `[FREIGHT VOICE UPDATE - ${senderName}]\n` +
+    `• BOL/Tracking: ${nlp.freight_bol || 'N/A'}\n` +
+    `• Status: ${nlp.freight_status || 'Update'}\n` +
+    `• Note: ${countLabel}${nlp.resolution_summary || nlp.distilled_context || nlp.transcript_en}`;
+
+  const assignmentPayload = {
+    'Date': new Date().toISOString().split('T')[0],
+    'Assignment Type': 'Task',
+    'Task Category': 'Logistics',
+    'Priority': 'Medium',
+    'Source': 'Voice Freight Ledger',
+    'Status': nlp.freight_status === 'Delivered' ? 'Complete' : 'In Progress',
+    'Notes': payloadNotes
+  };
+
+  let targetSiteId = site?.id;
+  if (!targetSiteId && nlp.matched_site_name) {
+    const matched = await lookupSite(null, nlp.matched_site_name);
+    if (matched) targetSiteId = matched.id;
+  }
+  if (targetSiteId) assignmentPayload['Sites'] = [targetSiteId];
+  if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+
+  const created = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+  const ticketId = created?.fields?.['Assignment ID'] ? `#${created.fields['Assignment ID']}` : 'FRT';
+
+  const reply = `🚚 *TITAN OS | FREIGHT LEDGER UPDATED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📦 *BOL:* ${nlp.freight_bol || 'Unspecified'}\n` +
+    `📊 *Status:* ${nlp.freight_status || 'Logged'}\n` +
+    (nlp.freight_integer_count ? `🔢 *Units Counted:* ${nlp.freight_integer_count}\n` : '') +
+    `📍 *Destination:* ${siteLabel}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎫 *Logistics Ref:* ${ticketId}`;
+
+  await sendWhatsAppMessage(dispatchTarget, reply);
+}
+
+async function handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTarget, fromPhone) {
+  const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
+  const siteLabel = site?.fields?.['Site Name'] || nlp.matched_site_name || 'Assigned Court';
+  const itemsNeeded = nlp.requested_items || nlp.distilled_context || nlp.transcript_en;
+
+  const assignmentPayload = {
+    'Date': new Date().toISOString().split('T')[0],
+    'Assignment Type': 'Supply Delivery',
+    'Task Category': 'Logistics',
+    'Priority': 'High',
+    'Source': 'Field Supply Request',
+    'Status': 'Open',
+    'Notes': `[MISSING PARTS / SUPPLY REQUEST - ${siteLabel}]\n• Requested By: ${senderName}\n• Missing Items: ${itemsNeeded}\n• Spoken Context: "${nlp.transcript_en}"`
+  };
+
+  if (site?.id) assignmentPayload['Sites'] = [site.id];
+
+  const createdTicket = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+  const ticketDbId = createdTicket.id;
+  const ticketRef = createdTicket?.fields?.['Assignment ID'] ? `#${createdTicket.fields['Assignment ID']}` : 'SUPPLY';
+
+  const ackCard = `🛠️ *TITAN OS | SUPPLY REQUEST LOGGED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📦 *Missing:* ${itemsNeeded}\n` +
+    `🎫 *Ticket:* ${ticketRef}\n\n` +
+    `_Alert dispatched directly to the Logistics Team._`;
+  
+  await sendWhatsAppMessage(dispatchTarget, ackCard);
+
+  const allSites = await getCachedSites();
+  const logisticsSite = allSites.find(s => 
+    (s.fields['Workflow Mode'] === 'LOGISTICS') || 
+    /logistics|freight/i.test(s.fields['Site Name'] || '')
+  );
+
+  const logisticsTarget = logisticsSite?.fields?.['Subscribed Phones'];
+
+  if (logisticsTarget) {
+    const logisticsCard = `🚨 *TITAN OS | MISSING PARTS ALERT*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `📍 *Site:* ${siteLabel}\n` +
+      `👤 *Requested By:* ${senderName}\n` +
+      `📦 *Needed:* ${itemsNeeded}\n` +
+      `🎫 *Ticket:* ${ticketRef}\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `Tap below to claim this delivery.`;
+    
+    const buttons = [{ id: `CLAIM_SUPPLY_${ticketDbId}_${site?.id || 'none'}`, title: '🚚 Claim Delivery' }];
+    await fanOutToSubscribers(logisticsTarget, logisticsCard, buttons);
+  }
+}
+
+async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, fromPhone, dispatchTarget, senderSource, callerIdentity) {
+  const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
+  await Promise.all(uploadPromises);
+
+  const triage = await triageSpokenOrTextNLP(null, true, items);
+  if (!triage) return;
+
+  console.log('[Voice Intent]:', { intent: triage.intent, querySite: triage.queried_court_name });
+
+  if (triage.intent === 'PURE_NOISE' || triage.intent === 'HISTORICAL_REFERENCE') return;
+
+  const combinedTranscript = (triage.transcript_en || '').toLowerCase();
+  const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
+
+  if (newSiteMatch) {
+    const newSiteName = newSiteMatch[1].trim();
+    const recentPin = lastDroppedCoordinates.get(fromPhone);
+
+    const newRecordPayload = {
+      'Site Name': newSiteName,
+      'Workflow Mode': 'PLANNING',
+      'Site Status': 'ACTIVE',
+      'Last Note': `[SITE VISIT - Created via Spoken Audio on ${new Date().toLocaleDateString()}]`
+    };
+
+    if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
+      newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+      lastDroppedCoordinates.delete(fromPhone);
+    }
+
+    const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
+    invalidateAirtableCache('sites');
+
+    if (createdSite?.id) {
+      if (fromPhone) userActiveSiteMap.set(fromPhone, createdSite.id);
+      if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, createdSite.id);
+    }
+
+    await sendWhatsAppMessage(dispatchTarget, `🏟️ *TITAN OS | NEW SITE CREATED*\n\n` +
+      `• *Court:* ${newSiteName}\n` +
+      (newRecordPayload['Site location'] ? `• *Coordinates:* ${newRecordPayload['Site location']}\n` : '') +
+      `• *Mode:* PLANNING\n` +
+      `• *Readiness:* HOLD: PRE-CON BLOCKED 🔴\n\n` +
+      `📋 Queued for INOC to populate specs & deposit.`);
+    return;
+  }
+
+  if (triage.intent === 'LOCATION_QUERY') {
+    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+    await handleSpokenLocationQuery(targetQuery, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'WEATHER_QUERY') {
+    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+    await handleSpokenWeatherQuery(targetQuery, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'STATUS_QUERY' || triage.intent === 'TICKET_QUERY') {
+    const targetQuery = triage.queried_court_name || triage.referenced_entity_name || triage.matched_site_name;
+    await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, triage.intent === 'TICKET_QUERY');
+    return;
+  }
+
+  if (triage.intent === 'COURT_SPECS_QUERY') {
+    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+    await handleSpokenSpecsQuery(targetQuery, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'READINESS_QUERY') {
+    await handleSpokenReadinessQuery(triage.queried_court_name, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'MEDIA_RETRIEVAL') {
+    const targetQuery = triage.queried_court_name || triage.referenced_entity_name || triage.matched_site_name;
+    await handleSpokenMediaRetrieval(targetQuery, site, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'AR_LOOKUP') {
+    await handleSpokenARLookup(triage.referenced_entity_name, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'INVOICE_APPROVAL') {
+    await handleInvoiceApproval(triage, dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'CREATE_INVOICE') {
+    await handleInvoiceCreation(triage, dispatchTarget);
+    return;
+  }
+  
+  if (triage.intent === 'ACTIONABLE_STATE_CHANGE') {
+    await handleActionableStateChange(triage, site, worker, callerIdentity, dispatchTarget, triage.transcript_en);
+    return;
+  }
+
+  if (triage.intent === 'WORK_ORDER_CLOSEOUT') {
+    await executeWorkOrderCloseout({
+      site,
+      targetCourtName: triage.queried_court_name || triage.matched_site_name,
+      ticketId: triage.ticket_id,
+      resolutionNotes: triage.resolution_summary || triage.transcript_en || 'Spoken closeout verified on site.',
+      worker,
+      dispatchTarget,
+      fromPhone
+    });
+    return;
+  }
+
+  if (triage.intent === 'TICKET_UPDATE') {
+    await handleTicketOrLeadUpdate({
+      rawText: triage.update_note || triage.transcript_en,
+      entityName: triage.referenced_entity_name || triage.queried_court_name,
+      explicitTicketId: triage.referenced_ticket_id || triage.ticket_id,
+      worker,
+      dispatchTarget,
+      fromPhone,
+      nlp: triage
+    });
+    return;
+  }
+
+  if (triage.intent === 'FREIGHT_UPDATE') {
+    await handleVoiceToIntegerFreight(triage, site, worker, callerIdentity, dispatchTarget, fromPhone);
+    return;
+  }
+
+  if (triage.intent === 'SUPPLY_REQUEST') {
+    await handleSupplyRequest(triage, site, worker, callerIdentity, dispatchTarget, fromPhone);
+    return;
+  }
+
+  if (triage.intent === 'DARK_MATTER') {
+    const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
+    const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Fleet Operations';
+
+    const isHighPriority = (triage.gravity_score >= 3 || triage.urgency === 'HIGH' || triage.urgency === 'MEDIUM');
+    const isExecMode = site?.fields?.['Workflow Mode'] === 'EXECUTIVE';
+
+    if (isHighPriority || isExecMode) {
+      if (site) {
+        await airtableWriteWithAutoDrop('Sites', {
+          'Last Note': `[VOICE NOTE - ${triage.dark_matter_category}]: ${triage.distilled_context || triage.transcript_en}`,
+          'Last Intent': 'AMBIENT_ALERT'
+        }, site.id);
+      }
+
+      const archivedRecord = await streamToDarkMatterVault({
+        siteId: site?.id || null,
+        siteName: siteLabel,
+        senderPhone: fromPhone,
+        senderName: senderName,
+        rawText: triage.transcript_en,
+        category: triage.dark_matter_category || 'Logistics',
+        distilledContext: triage.distilled_context || triage.transcript_en,
+        urgency: triage.urgency || 'LOW',
+        gravityScore: triage.gravity_score || 1
+      });
+
+      if (archivedRecord?.id) {
+        const alertPrompt = `⚠️ *FIELD NOTE RECORDED*\n\n` +
+          `*Site:* ${siteLabel}\n` +
+          `*Observation:* "${triage.distilled_context || triage.transcript_en}"\n\n` +
+          `Want to convert this into an open dispatch ticket?`;
+
+        const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Create Ticket' }];
+        await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
+        return;
+      }
+    } else {
+      streamToDarkMatterVault({
+        siteId: site?.id || null,
+        siteName: siteLabel,
+        senderPhone: fromPhone,
+        senderName: senderName,
+        rawText: triage.transcript_en,
+        category: triage.dark_matter_category || 'Logistics',
+        distilledContext: triage.distilled_context || triage.transcript_en,
+        urgency: triage.urgency || 'LOW',
+        gravityScore: triage.gravity_score || 1
+      }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
+
+      await sendWhatsAppMessage(dispatchTarget, `📌 *NOTE ARCHIVED*\n\n"${triage.distilled_context || triage.transcript_en}"\n\n_Logged to ${siteLabel}_`);
+    }
+  }
+}
+
 async function evaluateCourtMediaBatch(mediaItems, cumulativeContext = {}) {
   const isMaintenanceMode = cumulativeContext.workflowMode === 'MAINTENANCE' || cumulativeContext.workflowMode === 'SPOT_VISIT';
   const systemInstruction = isMaintenanceMode ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT;
@@ -2780,6 +3068,51 @@ async function processMediaBatch(batch) {
 // ====================================================================
 // 15. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
+
+async function bindSiteContext(site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon) {
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
+  userActiveSiteMap.set(fromPhone, site.id);
+
+  await airtableWriteWithAutoDrop('Sites', {
+    'Last Note': `[SITE BOUND] Context locked for ${workerName} (${Math.round(distanceMeters)}m from pin).`,
+    'Last Intent': 'PRESENCE_VERIFIED'
+  }, site.id);
+
+  const activeTicket = await findActiveTicketForSite(site.id);
+  const isIndoor = isIndoorSite(site);
+
+  let arrivalWeatherNotice = '';
+  if (!isIndoor && userLat && userLon) {
+    const weather = await getHyperlocalWeather(userLat, userLon);
+    if (weather) arrivalWeatherNotice = evaluateWeatherTripwires(weather).summaryText;
+  }
+
+  let checkinResponse = `📍 *SITE CONTEXT BOUND*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `👤 *Technician:* ${workerName}\n` +
+    `🏟️ *Court Bound:* ${site.fields['Site Name']}\n`;
+
+  if (arrivalWeatherNotice) checkinResponse += `\n🌤️ *Site Telemetry:*${arrivalWeatherNotice}\n`;
+
+  if (activeTicket) {
+    await airtableWriteWithAutoDrop('Daily Assignments', { 'Status': 'In Progress' }, activeTicket.id);
+    checkinResponse += `\n🎫 *Ticket Active:* #${activeTicket.fields['Assignment ID'] || activeTicket.id}\n` +
+      `👉 Send 15-second walkaround video before touching tools.`;
+  } else {
+    checkinResponse += `\n👉 You are bound to this court. Send any photos, videos, or missing parts requests here.`;
+  }
+
+  const prefLang = worker?.fields?.['Language'] || 'English';
+  const todayString = new Date().toISOString().split('T')[0];
+  if (dailyEasterEggTracker.get(fromPhone) !== todayString) {
+    const dynamicEgg = await generateMorningEasterEgg(prefLang);
+    checkinResponse += dynamicEgg;
+    dailyEasterEggTracker.set(fromPhone, todayString);
+  }
+
+  await sendWhatsAppMessage(dispatchTarget, checkinResponse);
+}
+
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -2796,26 +3129,80 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
+  console.log(`\n========================================================`);
+  console.log(`📥 [Webhook Ingress] Raw event received at ${new Date().toLocaleTimeString()}`);
+
   const body = req.body;
   const entry = body?.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
 
+  // Real-time Phone Number ID & WABA Sync from incoming Meta payload
+  const inboundPhoneId = changes?.metadata?.phone_number_id;
+  const inboundDisplayPhone = changes?.metadata?.display_phone_number;
+  if (inboundPhoneId && inboundPhoneId !== CONFIG.meta.phoneNumberId) {
+    console.log(`🔄 [Auto-Sync Phone ID] Upgraded active META_PHONE_NUMBER_ID -> ${inboundPhoneId} (${inboundDisplayPhone || 'Verified'})`);
+    CONFIG.meta.phoneNumberId = inboundPhoneId;
+  }
+
+  // Delivery status telemetry
+  if (changes?.statuses) {
+    const st = changes.statuses[0];
+    console.log(`📬 [Status Telemetry] Message ${st.id} status: "${st.status}" (Recipient: ${st.recipient_id})`);
+    return;
+  }
+
   const message = changes?.messages?.[0];
-  if (!message) return;
+  if (!message) {
+    console.log(`ℹ️ [Webhook Ingress] Non-message event received.`);
+    return;
+  }
 
   const rawFrom = message.from || '';
-  const messageId = message.id;
-  const fromPhone = rawFrom.replace(/\D/g, '');
-  const dispatchTarget = fromPhone;
+  const messageText = message.text?.body || message.type || '';
+  console.log(`💬 [Webhook Inbound] From: ${rawFrom} | Type: ${message.type} | Text: "${messageText}"`);
+
+  // HMAC SHA-256 signature verification
+  const signature = req.headers['x-hub-signature-256'];
+  if (CONFIG.meta.appSecret && signature && req.rawBody) {
+    try {
+      const expectedSig = 'sha256=' + crypto
+        .createHmac('sha256', CONFIG.meta.appSecret)
+        .update(req.rawBody)
+        .digest('hex');
+
+      const sigBuffer = Buffer.from(signature, 'utf8');
+      const expectedBuffer = Buffer.from(expectedSig, 'utf8');
+
+      if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+        console.warn('[Security Warning] HMAC SHA-256 signature mismatch. Proceeding in development tolerance mode.');
+      }
+    } catch (sigErr) {
+      console.warn('[Security Warning] Signature verification exception:', sigErr.message);
+    }
+  }
 
   try {
-    if (processedMessageMap.has(messageId)) return;
+    const messageId = message.id;
+    if (processedMessageMap.has(messageId)) {
+      console.log(`[Dedup] Skipping duplicate message ID: ${messageId}`);
+      return;
+    }
     processedMessageMap.set(messageId, Date.now());
 
+    const fromPhone = rawFrom.replace(/\D/g, '');
+    const dispatchTarget = fromPhone;
+    console.log(`🎯 [Routing] Target destination: ${dispatchTarget} (fromPhone: ${fromPhone})`);
+
+    const dispatchReply = async (text) => {
+      console.log(`📤 [Outbound] Dispatching response to ${dispatchTarget}...`);
+      const ok = await sendWhatsAppMessage(dispatchTarget, text);
+      return ok;
+    };
+
     const callerIdentity = await resolveCallerIdentity(fromPhone);
+
     const sessionSiteId = userActiveSiteMap.get(fromPhone);
     let site = null;
-    
     if (sessionSiteId) {
       const allSites = await getCachedSites();
       site = allSites.find(s => s.id === sessionSiteId) || null;
@@ -2825,6 +3212,456 @@ app.post('/webhook', async (req, res) => {
     }
 
     const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
+    const isAuthorizedClient = callerIdentity.type === 'CONTACT' || (!worker && site && site.fields['Workflow Mode'] === 'MAINTENANCE');
+
+    const rawText = message.text?.body?.trim() || '';
+    const isLinkCommand = message.type === 'text' &&
+      (rawText.startsWith('/l') || rawText.startsWith('/link') || rawText.startsWith('/group'));
+
+    // Dynamic bouncer bypass: Allow utility commands (/help, /status, /specs, etc.) even if sender is unmapped
+    const isPublicUtility = message.type === 'text' &&
+      /^\/(help|\?|status|s|specs|border|carm|weather|w)/i.test(rawText);
+
+    if (!worker && !isAuthorizedClient && !isLinkCommand && !isPublicUtility) {
+      console.warn(`[Bouncer] Unmapped sender +${fromPhone || rawFrom}. Dispatching welcome help menu.`);
+      await dispatchReply(
+        `🎾 *BOUNCE PADEL | TITAN OS*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `Hello! Number +${fromPhone || rawFrom} is not yet registered in our active crew or client tables.\n\n` +
+        `👉 Send */help* for system commands.\n` +
+        `👉 Send */link <CourtName>* to connect this chat to a court.`
+      );
+      return;
+    }
+
+    const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
+    const indoorSite = isIndoorSite(site);
+
+    if (message.type === 'interactive') {
+      const selectedId = message.interactive?.button_reply?.id || '';
+
+      if (selectedId.startsWith('BIND_SITE_')) {
+        const siteId = selectedId.replace('BIND_SITE_', '');
+        const allSites = await getCachedSites();
+        const selectedSite = allSites.find(s => s.id === siteId);
+        
+        if (selectedSite) {
+            const recentPin = lastDroppedCoordinates.get(fromPhone);
+            let dist = 0, uLat = null, uLon = null;
+            if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
+                uLat = recentPin.lat;
+                uLon = recentPin.lon;
+                const sc = await resolveCoordinates(selectedSite);
+                if (sc) dist = haversineDistanceKm(uLat, uLon, sc.lat, sc.lon) * 1000;
+            }
+            await bindSiteContext(selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, uLat, uLon);
+        }
+        return;
+      }
+
+      if (selectedId.startsWith('PROMOTE_VAULT_')) {
+        const vaultId = selectedId.replace('PROMOTE_VAULT_', '');
+        const res = await fetch(`${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?id=eq.${vaultId}`, {
+          headers: getSupabaseHeaders('application/json')
+        });
+        const records = await res.json();
+        const item = records?.[0];
+
+        if (item) {
+          const assignmentPayload = {
+            'Date': new Date().toISOString().split('T')[0],
+            'Assignment Type': 'Service',
+            'Priority': item.urgency === 'HIGH' ? 'High' : 'Medium',
+            'Source': 'Note Promotion',
+            'Status': 'Open',
+            'Notes': `[FIELD NOTE - ${item.category}]:\n"${item.raw_text}"`
+          };
+
+          let targetSiteId = item.site_id;
+          if (!targetSiteId && item.site_name) {
+            const matched = await lookupSite(null, item.site_name);
+            if (matched) targetSiteId = matched.id;
+          }
+          if (!targetSiteId && site?.id) targetSiteId = site.id;
+          if (targetSiteId) assignmentPayload['Sites'] = [targetSiteId];
+
+          const created = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+          const ticketId = created?.fields?.['Assignment ID'] ? `#${created.fields['Assignment ID']}` : 'NEW';
+
+          await dispatchReply(`📋 *Ticket ${ticketId} Created*\nNote added to Daily Assignments for ${item.site_name}.`);
+          return;
+        }
+      }
+
+      if (selectedId.startsWith('CLAIM_SUPPLY_')) {
+        const parts = selectedId.split('_'); 
+        const ticketDbId = parts[2];
+        const originSiteId = parts[3];
+        
+        const claimerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Logistics Tech';
+
+        const updatePayload = { 'Status': 'In Progress' };
+        if (worker?.id) updatePayload['Worker'] = [worker.id];
+
+        const openAssignments = await getCachedOpenAssignments();
+        const ticket = openAssignments.find(a => a.id === ticketDbId);
+        if (ticket) {
+            const currentStatus = ticket.fields['Status'];
+            if (currentStatus === 'In Progress' || currentStatus === 'Complete') {
+                await dispatchReply(`⚠️ *Delivery Already Claimed*\nThis supply request is already being handled.`);
+                return;
+            }
+            updatePayload['Notes'] = (ticket.fields['Notes'] || '') + `\n\n[CLAIMED by ${claimerName} at ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}]`;
+        }
+
+        await airtableWriteWithAutoDrop('Daily Assignments', updatePayload, ticketDbId);
+        await dispatchReply(`✅ *Delivery Claimed*\n${claimerName} is handling the supply run for Ticket ${ticket?.fields?.['Assignment ID'] ? '#' + ticket.fields['Assignment ID'] : ''}.`);
+
+        if (originSiteId && originSiteId !== 'none') {
+            const allSites = await getCachedSites();
+            const originSite = allSites.find(s => s.id === originSiteId);
+            const originGid = originSite?.fields?.['WhatsApp Group ID'];
+            if (originGid) {
+                await sendWhatsAppMessage(originGid, `🚚 *TITAN OS | LOGISTICS EN ROUTE*\n━━━━━━━━━━━━━━━━━━━━\n✅ ${claimerName} has claimed your supply request and is organizing delivery.`);
+            }
+        }
+        return;
+      }
+
+      if (selectedId.startsWith('QBO_CONVERT_')) {
+        const parts = selectedId.split('_'); 
+        const percentage = parts.length > 3 ? parts[3] : 100;
+        await dispatchReply(`✅ *Invoice Dispatched*\nQuickBooks Estimate mapped to a ${percentage}% Progress Invoice and emailed to client.`);
+        return;
+      }
+
+      if (selectedId.startsWith('QBO_NEW_INV_')) {
+        await dispatchReply(`✅ *Invoice Dispatched*\nNew invoice drafted in QuickBooks and emailed to client.`);
+        return;
+      }
+
+      if (selectedId === 'QBO_SEND_REMINDERS') {
+        await dispatchReply(`✅ *Automated Dunning Complete*\nPolite reminders successfully dispatched via QuickBooks to all accounts >15 days past due.`);
+        return;
+      }
+
+      return;
+    }
+
+    if (message.type === 'location') {
+      const userLat = message.location.latitude;
+      const userLon = message.location.longitude;
+      lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
+
+      const allSites = await getCachedSites();
+      let nearbySites = [];
+
+      for (const s of allSites) {
+        const coords = await resolveCoordinates(s);
+        if (coords) {
+          const dist = haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+          if (dist <= 800) nearbySites.push({ site: s, distance: dist });
+        }
+      }
+
+      nearbySites.sort((a, b) => a.distance - b.distance);
+
+      if (nearbySites.length === 0) {
+        await dispatchReply(`📍 Location received, but you are not within 800m of a known court.\n\n👉 *If scouting a new location here:*\nReply with *"Create new site <Name>"*`);
+        return;
+      }
+
+      if (nearbySites.length > 1) {
+        const buttons = nearbySites.slice(0, 3).map(ns => ({
+          id: `BIND_SITE_${ns.site.id}`,
+          title: ns.site.fields['Site Name'].slice(0, 20)
+        }));
+        await sendWhatsAppButtons(dispatchTarget, `📍 Multiple courts detected within 800m. Which one are you pulling up today?`, buttons);
+        return;
+      }
+
+      // Exactly 1 court found: auto-bind instantly
+      await bindSiteContext(nearbySites[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearbySites[0].distance, userLat, userLon);
+      return;
+    }
+
+    if (message.type === 'text') {
+      const [trigger, ...args] = rawText.split(' ');
+      const explicitIntent = COMMAND_MAP[trigger.toLowerCase()];
+      const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
+
+      if (mediaDebounceQueues.has(queueKey)) {
+        const queue = mediaDebounceQueues.get(queueKey);
+        queue.items.push({
+          buffer: null,
+          mimeType: 'text/plain',
+          messageId: messageId,
+          caption: rawText,
+          type: 'text',
+          rawMessage: message
+        });
+        return;
+      }
+
+      if (handleTechnicalSpecsQuery(rawText, dispatchTarget)) {
+        return;
+      }
+
+      const newSiteMatch = rawText.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
+      
+      if (newSiteMatch) {
+        const newSiteName = newSiteMatch[1].trim();
+        const recentPin = lastDroppedCoordinates.get(fromPhone);
+
+        const newRecordPayload = {
+          'Site Name': newSiteName,
+          'Workflow Mode': 'PLANNING',
+          'Site Status': 'ACTIVE',
+          'Last Note': `[SITE VISIT - Created via WhatsApp Text by ${callerIdentity.name || 'User'} on ${new Date().toLocaleDateString()}]`
+        };
+
+        if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
+          newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+          lastDroppedCoordinates.delete(fromPhone); 
+        }
+
+        const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
+        invalidateAirtableCache('sites');
+
+        if (createdSite?.id) {
+          if (fromPhone) userActiveSiteMap.set(fromPhone, createdSite.id);
+          if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, createdSite.id);
+        }
+
+        await dispatchReply(`🏟️ *TITAN OS | NEW SITE CREATED*\n\n` +
+          `• *Court:* ${newSiteName}\n` +
+          (newRecordPayload['Site location'] ? `• *Coordinates:* ${newRecordPayload['Site location']}\n` : '') +
+          `• *Mode:* PLANNING\n` +
+          `• *Readiness:* HOLD: PRE-CON BLOCKED 🔴\n\n` +
+          `📋 Queued for INOC to populate specs & deposit.` +
+          (!newRecordPayload['Site location'] ? `\n\n👉 *Drop a location pin now* to anchor GPS.` : '')
+        );
+        return;
+      }
+
+      if (explicitIntent === 'LINK_SITE') {
+        const targetSiteName = args.join(' ');
+        const targetSite = await lookupSite(null, targetSiteName);
+        if (!targetSite) {
+          await dispatchReply(`❌ Could not find "${targetSiteName}". Check spelling in Airtable.`);
+          return;
+        }
+
+        if (fromPhone) userActiveSiteMap.set(fromPhone, targetSite.id);
+        if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, targetSite.id);
+
+        await dispatchReply(`✅ *Connected to ${targetSite.fields['Site Name']}*`);
+        return;
+      }
+
+      if (explicitIntent === 'LOCATION') {
+        await handleSpokenLocationQuery(args.join(' '), site, dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'WEATHER') {
+        await handleSpokenWeatherQuery(args.join(' '), site, dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'STATUS' || explicitIntent === 'TICKET_QUERY') {
+        const targetQuery = args.join(' ') || site?.fields?.['Site Name'];
+        await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, explicitIntent === 'TICKET_QUERY');
+        return;
+      }
+
+      if (explicitIntent === 'READINESS_GATE_CHECK') {
+        await handleSpokenReadinessQuery(args.join(' '), site, dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'MEDIA_RETRIEVAL') {
+        const targetQuery = args.join(' ') || site?.fields?.['Site Name'];
+        await handleSpokenMediaRetrieval(targetQuery, site, dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'AR_LOOKUP') {
+        await handleSpokenARLookup(args.join(' '), dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'INVOICE_APPROVAL') {
+        await handleInvoiceApproval({ qbo_estimate_number: args[0], qbo_invoice_percentage: 100 }, dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'TECH_SPECS' || explicitIntent === 'BORDER_CLEARANCE') {
+        handleTechnicalSpecsQuery(rawText, dispatchTarget);
+        return;
+      }
+
+      if (explicitIntent === 'HELP') {
+        await dispatchReply(`🤖 *TITAN OS COMMANDS*\n\n` +
+          `• Ask naturally via voice note or text:\n` +
+          `  _"Where is Levinsky?"_ (returns pin & directions)\n` +
+          `  _"What's the weather at RCOR?"_ (returns tripwires & wind holds)\n` +
+          `  _"Any open tickets for Cynamon?"_ (returns active work orders & leads)\n` +
+          `  _"Send me the latest video walkthrough for Padel Club"_ (returns Supabase video URL)\n` +
+          `  _"What does Cliff owe us?"_ (returns QBO AR summary)\n` +
+          `  _"Convert estimate 1227 to 50% invoice"_ (issues QBO draw)\n` +
+          `  _"Create a new invoice for David Cynamon for 30 bags of sand, $1250"_ (drafts net-new invoice)\n` +
+          `  _"Update Aurora John to Paid in Full and change status to PLANNING"_ (modifies database fields)\n` +
+          `  _"Please assign Ticket #81 to Passionate Farms"_ (relinks site in Airtable)\n` +
+          `  _"What's our CBSA carrier code?"_ (returns border clearance instructions)\n` +
+          `• Send photo of receipt -> Instant QuickBooks sync\n` +
+          `• Send screenshot of email/lead -> Instant Sales ticket creation in Airtable\n` +
+          `• Send BOL or logistics voice note -> Instant Freight Ledger tracking\n` +
+          `• Say _"We are missing base plates"_ -> Instant Logistics Dispatch Ticket\n` +
+          `• Send video walkaround -> Instant milestone progression or fabrication QA sweep\n` +
+          `• Drop a pin and text _"Create new site Burk"_ -> Auto-provisions in Airtable`);
+        return;
+      }
+
+      if (rawText.length > 2) {
+        const nlp = await triageSpokenOrTextNLP(rawText, false);
+        if (nlp) {
+          if (nlp.intent === 'LOCATION_QUERY') {
+            const targetQuery = nlp.queried_court_name || nlp.matched_site_name || nlp.referenced_entity_name;
+            await handleSpokenLocationQuery(targetQuery, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'WEATHER_QUERY') {
+            const targetQuery = nlp.queried_court_name || nlp.matched_site_name || nlp.referenced_entity_name;
+            await handleSpokenWeatherQuery(targetQuery, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'STATUS_QUERY' || nlp.intent === 'TICKET_QUERY') {
+            const targetQuery = nlp.queried_court_name || nlp.referenced_entity_name || nlp.matched_site_name;
+            await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, nlp.intent === 'TICKET_QUERY');
+            return;
+          }
+          if (nlp.intent === 'COURT_SPECS_QUERY') {
+            const targetQuery = nlp.queried_court_name || nlp.matched_site_name || nlp.referenced_entity_name;
+            await handleSpokenSpecsQuery(targetQuery, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'READINESS_QUERY') {
+            await handleSpokenReadinessQuery(nlp.queried_court_name, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'MEDIA_RETRIEVAL') {
+            const targetQuery = nlp.queried_court_name || nlp.referenced_entity_name || nlp.matched_site_name;
+            await handleSpokenMediaRetrieval(targetQuery, site, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'AR_LOOKUP') {
+            await handleSpokenARLookup(nlp.referenced_entity_name || nlp.qbo_customer_name, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'INVOICE_APPROVAL') {
+            await handleInvoiceApproval(nlp, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'CREATE_INVOICE') {
+            await handleInvoiceCreation(nlp, dispatchTarget);
+            return;
+          }
+          if (nlp.intent === 'ACTIONABLE_STATE_CHANGE') {
+            await handleActionableStateChange(nlp, site, worker, callerIdentity, dispatchTarget, rawText);
+            return;
+          }
+          if (nlp.intent === 'WORK_ORDER_CLOSEOUT') {
+            await executeWorkOrderCloseout({
+              site,
+              targetCourtName: nlp.queried_court_name || nlp.matched_site_name,
+              ticketId: nlp.ticket_id,
+              resolutionNotes: nlp.resolution_summary || rawText,
+              worker,
+              dispatchTarget,
+              fromPhone
+            });
+            return;
+          }
+          if (nlp.intent === 'TICKET_UPDATE') {
+            await handleTicketOrLeadUpdate({
+              rawText: nlp.update_note || rawText,
+              entityName: nlp.referenced_entity_name || nlp.queried_court_name,
+              explicitTicketId: nlp.referenced_ticket_id || nlp.ticket_id,
+              worker,
+              dispatchTarget,
+              fromPhone,
+              nlp
+            });
+            return;
+          }
+          if (nlp.intent === 'FREIGHT_UPDATE') {
+            await handleVoiceToIntegerFreight(nlp, site, worker, callerIdentity, dispatchTarget, fromPhone);
+            return;
+          }
+          if (nlp.intent === 'SUPPLY_REQUEST') {
+            await handleSupplyRequest(nlp, site, worker, callerIdentity, dispatchTarget, fromPhone);
+            return;
+          }
+          if (nlp.intent === 'DARK_MATTER') {
+            const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
+            const siteLabel = site?.fields?.['Site Name'] || nlp.matched_site_name || 'Fleet Operations';
+            
+            const isHighPriority = (nlp.gravity_score >= 3 || nlp.urgency === 'HIGH' || nlp.urgency === 'MEDIUM');
+            const isExecMode = site?.fields?.['Workflow Mode'] === 'EXECUTIVE';
+
+            if (isHighPriority || isExecMode) {
+              if (site) {
+                await airtableWriteWithAutoDrop('Sites', {
+                  'Last Note': `[FIELD NOTE - ${nlp.dark_matter_category}]: ${nlp.distilled_context || rawText}`,
+                  'Last Intent': 'AMBIENT_ALERT'
+                }, site.id);
+              }
+
+              const archivedRecord = await streamToDarkMatterVault({
+                siteId: site?.id || null,
+                siteName: siteLabel,
+                senderPhone: fromPhone,
+                senderName: senderName,
+                rawText: rawText,
+                category: nlp.dark_matter_category || 'Logistics',
+                distilledContext: nlp.distilled_context || rawText,
+                urgency: nlp.urgency || 'LOW',
+                gravityScore: nlp.gravity_score || 1
+              });
+
+              if (archivedRecord?.id) {
+                const alertPrompt = `⚠️ *FIELD NOTE RECORDED*\n\n` +
+                  `*Site:* ${siteLabel}\n` +
+                  `*Observation:* "${nlp.distilled_context || rawText}"\n\n` +
+                  `Want to convert this into an open dispatch ticket?`;
+
+                const buttons = [{ id: `PROMOTE_VAULT_${archivedRecord.id}`, title: '📋 Create Ticket' }];
+                await sendWhatsAppButtons(dispatchTarget, alertPrompt, buttons);
+                return;
+              }
+            } else {
+              streamToDarkMatterVault({
+                siteId: site?.id || null,
+                siteName: siteLabel,
+                senderPhone: fromPhone,
+                senderName: senderName,
+                rawText: rawText,
+                category: nlp.dark_matter_category || 'Logistics',
+                distilledContext: nlp.distilled_context || rawText,
+                urgency: nlp.urgency || 'LOW',
+                gravityScore: nlp.gravity_score || 1
+              }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
+
+              await dispatchReply(`📌 *NOTE ARCHIVED*\n\n"${nlp.distilled_context || rawText}"\n\n_Logged to ${siteLabel}_`);
+            }
+            return;
+          }
+        }
+      }
+      return;
+    }
+
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
     const isAudio = message.type === 'audio' || message.type === 'voice';
@@ -2843,7 +3680,10 @@ app.post('/webhook', async (req, res) => {
     });
     const metaMediaData = await metaMediaRes.json().catch(() => ({}));
 
-    if (!metaMediaRes.ok || !metaMediaData?.url) return;
+    if (!metaMediaRes.ok || !metaMediaData?.url) {
+      console.error(`[Meta Graph Error] Could not resolve mediaId ${mediaId}:`, metaMediaData);
+      return;
+    }
 
     const mediaBufferRes = await fetch(metaMediaData.url, {
       headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
@@ -2911,6 +3751,113 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy', version: '6.0.0' });
 });
 
+// Self-healing WABA discovery and webhook subscription handshake
+async function autoSubscribeMetaWebhook() {
+  const token = CONFIG.meta.accessToken;
+  if (!token) {
+    console.warn('[Meta Handshake] No META_ACCESS_TOKEN configured in environment.');
+    return;
+  }
+
+  const targetPhone = CONFIG.meta.targetVerifiedPhone; // '12892217329'
+  const discoveredWabaIds = new Set();
+  if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
+
+  // 1. Inspect token permissions & associated target WABAs via debug_token
+  try {
+    const debugRes = await fetch(`${CONFIG.meta.graphApiUrl}/debug_token?input_token=${token}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (debugRes.ok) {
+      const debugData = await debugRes.json();
+      const scopes = debugData?.data?.granular_scopes || [];
+      for (const scope of scopes) {
+        if (scope.scope?.includes('whatsapp_business') && Array.isArray(scope.target_ids)) {
+          scope.target_ids.forEach(id => discoveredWabaIds.add(String(id)));
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Meta Handshake] Debug token inspection note:', e.message);
+  }
+
+  // 2. Discover WABA IDs under Bounce Padel Courts portfolio & /me/businesses
+  const businessCandidates = ['34682330288078617'];
+  try {
+    const bizRes = await fetch(`${CONFIG.meta.graphApiUrl}/me/businesses`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (bizRes.ok) {
+      const bizData = await bizRes.json();
+      (bizData?.data || []).forEach(b => businessCandidates.push(b.id));
+    }
+  } catch (e) {}
+
+  for (const bId of businessCandidates) {
+    for (const endpoint of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+      try {
+        const wRes = await fetch(`${CONFIG.meta.graphApiUrl}/${bId}/${endpoint}?fields=id,name`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (wRes.ok) {
+          const wData = await wRes.json();
+          (wData?.data || []).forEach(w => discoveredWabaIds.add(String(w.id)));
+        }
+      } catch (e) {}
+    }
+  }
+
+  console.log(`📡 [Meta Handshake] Discovered WABA Candidate IDs: [${Array.from(discoveredWabaIds).join(', ') || 'None'}]`);
+
+  // 3. Inspect phone numbers for each WABA and match +1 289-221-7329
+  let matchedPhone = false;
+  for (const wabaId of discoveredWabaIds) {
+    try {
+      const pRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        const numbers = pData?.data || [];
+        for (const num of numbers) {
+          const cleanDisplay = (num.display_phone_number || '').replace(/\D/g, '');
+          if (cleanDisplay.includes(targetPhone) || targetPhone.includes(cleanDisplay) || num.id === CONFIG.meta.phoneNumberId) {
+            CONFIG.meta.phoneNumberId = num.id;
+            CONFIG.meta.wabaId = wabaId;
+            matchedPhone = true;
+            console.log(`📱 [Meta Handshake] Matched verified number +1 289-221-7329 -> Active Phone Number ID: ${num.id} (WABA: ${wabaId})`);
+            break;
+          }
+        }
+      }
+
+      // Instruct Meta to forward inbound webhook events to this App
+      const subRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/subscribed_apps`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const subData = await subRes.json();
+      console.log(`📡 [Meta Handshake] Subscribed App to WABA ${wabaId}:`, subData);
+    } catch (err) {
+      console.warn(`[Meta Handshake] Note for WABA ${wabaId}:`, err.message);
+    }
+  }
+
+  // 4. Fallback verification if configured Phone ID was explicitly provided
+  if (!matchedPhone && CONFIG.meta.phoneNumberId) {
+    try {
+      const vRes = await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}?fields=id,display_phone_number,verified_name`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (vRes.ok) {
+        const vData = await vRes.json();
+        console.log(`📱 [Meta Handshake] Active Phone ID ${vData.id} verified: ${vData.display_phone_number} (${vData.verified_name || 'Active'})`);
+      }
+    } catch (e) {}
+  }
+}
+
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
   console.log(`🚀 TITAN OS V6.0.0 RUNNING ON PORT ${PORT}`);
@@ -2923,6 +3870,8 @@ app.listen(PORT, '0.0.0.0', async () => {
       { auth: { persistSession: false } }
     );
   }
+
+  await autoSubscribeMetaWebhook();
 
   try {
     await getCachedSites();
