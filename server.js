@@ -1129,7 +1129,6 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
  */
 async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId, worker, dispatchTarget, fromPhone, nlp = {} }) {
   const openAssignments = await getCachedOpenAssignments();
-    await refreshInventoryCache();
   const workerName = worker?.fields?.['Full Name'] || 'Bob';
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
@@ -1943,7 +1942,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = '
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
   const openTickets = await getCachedOpenAssignments();
-    await refreshInventoryCache();
+  await refreshInventoryCache();
 
   if (ticketId) {
     const cleanNum = parseInt(String(ticketId).replace(/\D/g, ''));
@@ -2150,7 +2149,6 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
   const lastNote = targetSite.fields['Last Note'] || 'No notes logged';
 
   const allOpenAssignments = await getCachedOpenAssignments();
-    await refreshInventoryCache();
   const linkedAssignments = allOpenAssignments.filter(record => {
     const s = record.fields['Sites'] || record.fields['Site'] || [];
     const siteIds = Array.isArray(s) ? s : [s];
@@ -2616,7 +2614,8 @@ async function refreshInventoryCache() {
       committed: parseFloat(r.fields['Committed']) || 0,
       available: parseFloat(r.fields['Available']) || 0,
       category: r.fields['Category'] || 'Uncategorized',
-      cost: parseFloat(r.fields['Unit Cost']) || 0
+      cost: parseFloat(r.fields['Unit Cost']) || 0,
+      bomQty: parseFloat(r.fields['Standard BOM Qty']) || 0
     }));
     console.log(`📦 [Inventory Engine] Cached ${memoryInventory.length} SKUs in RAM`);
   } catch (err) {
@@ -2626,16 +2625,46 @@ async function refreshInventoryCache() {
 
 // 2. Automated Milestone BOM Deduction
 async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
-  // Deduct standard hardware kit when Gate 2 (Steel) is verified
+  const siteName = siteRecord.fields['Site Name'] || 'Unknown Site';
+  let deductedItems = [];
+
+  // Deduct standard hardware/steel kit when Gate 2 (Steel) is verified
   if (clearedGate === 'Gate 2') {
-    console.log(`⚙️ [BOM Engine] Gate 2 cleared at ${siteRecord.fields['Site Name']}. Deducting standard Steel/Fastener kit.`);
-    // Future: Add specific Airtable updates for steel/fastener kit IDs here
+    console.log(`⚙️ [BOM Engine] Gate 2 cleared at ${siteName}. Deducting Steel & Fasteners.`);
+    
+    for (const item of memoryInventory) {
+      if (['Steel Inventory', 'Fasteners', 'Consumables'].includes(item.category) && item.bomQty > 0) {
+        const newQty = Math.max(0, item.qty - item.bomQty);
+        item.qty = newQty; 
+        
+        await airtableWriteWithAutoDrop('Inventory', { 'Quantity on hand': newQty }, item.id);
+        deductedItems.push(`${item.name} (-${item.bomQty})`);
+      }
+    }
   }
   
   // Deduct standard glass/turf kit when Gate 4 (Glass) is verified
   if (clearedGate === 'Gate 4') {
-    console.log(`⚙️ [BOM Engine] Gate 4 cleared at ${siteRecord.fields['Site Name']}. Shifting Glass from Committed to Consumed.`);
-    // Future: Add specific Airtable updates shifting Committed -> Consumed here
+    console.log(`⚙️ [BOM Engine] Gate 4 cleared at ${siteName}. Shifting Glass/Turf from Committed to Consumed.`);
+    
+    for (const item of memoryInventory) {
+      if (['Glass', 'Turf'].includes(item.category) && item.bomQty > 0) {
+        const newQty = Math.max(0, item.qty - item.bomQty);
+        const newCommitted = Math.max(0, item.committed - item.bomQty);
+        item.qty = newQty;
+        item.committed = newCommitted;
+        
+        await airtableWriteWithAutoDrop('Inventory', { 
+          'Quantity on hand': newQty,
+          'Committed': newCommitted 
+        }, item.id);
+        deductedItems.push(`${item.name} (-${item.bomQty})`);
+      }
+    }
+  }
+
+  if (deductedItems.length > 0) {
+    console.log(`✅ [BOM Engine] Successfully deducted: ${deductedItems.join(', ')}`);
   }
 }
 
