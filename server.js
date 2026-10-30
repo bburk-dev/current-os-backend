@@ -1129,6 +1129,7 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
  */
 async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId, worker, dispatchTarget, fromPhone, nlp = {} }) {
   const openAssignments = await getCachedOpenAssignments();
+    await refreshInventoryCache();
   const workerName = worker?.fields?.['Full Name'] || 'Bob';
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
@@ -1837,6 +1838,42 @@ async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = '
 
     let celebrationCard = null;
 
+    
+    // META WHATSAPP UTILITY TEMPLATE OVERRIDE (milestone_progress_update)
+    const sendMetaTemplate = async (targetPhone, clientName, gateCleared, progress, techName, notes) => {
+      let cleanDestination = String(targetPhone).replace(/\D/g, '');
+      if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+      
+      const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: cleanDestination,
+        type: 'template',
+        template: {
+          name: 'milestone_progress_update',
+          language: { code: 'en' },
+          components: [{
+            type: 'body',
+            parameters: [
+              { type: 'text', text: String(clientName).slice(0, 30) },
+              { type: 'text', text: String(gateCleared).slice(0, 30) },
+              { type: 'text', text: String(progress).slice(0, 20) },
+              { type: 'text', text: String(techName).slice(0, 20) },
+              { type: 'text', text: String(notes).slice(0, 100) }
+            ]
+          }]
+        }
+      };
+      
+      try {
+        await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } catch (e) { console.error('Meta Template Error:', e); }
+    };
+    
     if (highestGate === 1) {
       celebrationCard = `🎾 *BOUNCE PADEL | PROGRESS UPDATE*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1906,6 +1943,7 @@ async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = '
 
 async function findActiveTicketForSite(siteId, ticketId = null) {
   const openTickets = await getCachedOpenAssignments();
+    await refreshInventoryCache();
 
   if (ticketId) {
     const cleanNum = parseInt(String(ticketId).replace(/\D/g, ''));
@@ -2112,6 +2150,7 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
   const lastNote = targetSite.fields['Last Note'] || 'No notes logged';
 
   const allOpenAssignments = await getCachedOpenAssignments();
+    await refreshInventoryCache();
   const linkedAssignments = allOpenAssignments.filter(record => {
     const s = record.fields['Sites'] || record.fields['Site'] || [];
     const siteIds = Array.isArray(s) ? s : [s];
@@ -2554,6 +2593,80 @@ async function handleAssetQuery(nlp, dispatchTarget) {
     await sendWhatsAppMessage(dispatchTarget, `⚠️ Equipment ledger lookup failed.`);
   }
 }
+
+
+// ====================================================================
+// TITAN OS V6.0.0 — INVENTORY & ASSET STATE ENGINE
+// ====================================================================
+
+let memoryInventory = [];
+
+// 1. Refresh Cache with New ATP Columns
+async function refreshInventoryCache() {
+  try {
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Inventory?maxRecords=200`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    
+    memoryInventory = data.records.map(r => ({
+      id: r.id,
+      name: r.fields['Item Name'] || '',
+      qty: parseFloat(r.fields['Quantity on hand']) || 0,
+      committed: parseFloat(r.fields['Committed']) || 0,
+      available: parseFloat(r.fields['Available']) || 0,
+      category: r.fields['Category'] || 'Uncategorized',
+      cost: parseFloat(r.fields['Unit Cost']) || 0
+    }));
+    console.log(`📦 [Inventory Engine] Cached ${memoryInventory.length} SKUs in RAM`);
+  } catch (err) {
+    console.error('❌ [Inventory Engine] Failed to cache inventory:', err.message);
+  }
+}
+
+// 2. Automated Milestone BOM Deduction
+async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
+  // Deduct standard hardware kit when Gate 2 (Steel) is verified
+  if (clearedGate === 'Gate 2') {
+    console.log(`⚙️ [BOM Engine] Gate 2 cleared at ${siteRecord.fields['Site Name']}. Deducting standard Steel/Fastener kit.`);
+    // Future: Add specific Airtable updates for steel/fastener kit IDs here
+  }
+  
+  // Deduct standard glass/turf kit when Gate 4 (Glass) is verified
+  if (clearedGate === 'Gate 4') {
+    console.log(`⚙️ [BOM Engine] Gate 4 cleared at ${siteRecord.fields['Site Name']}. Shifting Glass from Committed to Consumed.`);
+    // Future: Add specific Airtable updates shifting Committed -> Consumed here
+  }
+}
+
+// 3. Spoken Exception Parser (For extra materials used on site)
+async function processSpokenInventoryException(spokenText) {
+  const prompt = `
+  Analyze this message: "${spokenText}"
+  Match extra consumable materials against this catalog: ${JSON.stringify(memoryInventory.map(i => ({ id: i.id, name: i.name })))}
+  Return JSON: { "matched": boolean, "items": [ { "id": "Airtable ID", "quantity_used": Number } ] }
+  `;
+
+  const payload = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.0, responseMimeType: "application/json" }
+  };
+
+  try {
+    const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    return JSON.parse(raw);
+  } catch (e) {
+    return { matched: false, items: [] };
+  }
+}
+
 
 // ====================================================================
 // 14. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
@@ -2999,6 +3112,11 @@ async function processMediaBatch(batch) {
       if (isNewMilestone) {
         console.log(`🎾 [Joy Cannon Triggered] Firing Gate ${highestGate} for ${courtLabel}`);
         await fireInstallationJoyCannon(targetedSite, highestGate, workerName);
+      }
+      
+      // Check for BOM deductions
+      if (highestGate === 2 || highestGate === 4) {
+        await processMilestoneBOMDeduction(targetedSite, `Gate ${highestGate}`);
       }
     }
 
@@ -3555,5 +3673,6 @@ app.listen(PORT, '0.0.0.0', async () => {
     await getCachedWorkers();
     await getCachedContacts();
     await getCachedOpenAssignments();
+    await refreshInventoryCache();
   } catch (err) {}
 });
