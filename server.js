@@ -337,7 +337,7 @@ ROUTING INTENTS:
 15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
 16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
 17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
-18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, or suppliers of a specific court.
+18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, model/court type, or suppliers of a specific court.
 19. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
 20. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
 
@@ -373,9 +373,8 @@ DATABASE FIELD MAPPING OVERRIDES:
 "turf_color": "Blue" | "Green" | "Terracotta" | null
 "turf_supplier": "Real Turf" | "Mondo" | "House" | null
 "year_installed": number | null
-"model_type": "Standard" | "Hurricane" | "Indoor" | null
+"model_type": "Standard" | "Hurricane" | "Indoor" | "Outdoor Super Panoramic" | "Indoor Super Panoramic" | "Hurricane Super Panoramic" | "Pickleball" | "Sport Court" | "Decorative" | null
 "glass_thickness": "10mm" | "12mm" | null
-"court_type": "Padel" | "Pickleball" | "Sport Court" | "Decorative" | null
 
 OUTPUT FORMAT (JSON ONLY):
 {
@@ -418,7 +417,6 @@ OUTPUT FORMAT (JSON ONLY):
   "year_installed": number | null,
   "model_type": "string or null",
   "glass_thickness": "string or null",
-  "court_type": "string or null",
   "transcript_en": "Clean English transcript",
   "transcript_es": "Clean Spanish transcript"
 }
@@ -590,6 +588,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
   return null;
 }
 
+// V6 Native Supabase Upload SDK implementation
 async function uploadToSupabase(buffer, mimeType) {
   if (!buffer || !CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return { storagePath: null, signedUrl: null };
   
@@ -808,7 +807,7 @@ function evaluateReadinessGate(siteRecord) {
   }
 
   const deposit = f['Deposit Status'] || '';
-  const hasDeposit = (deposit === '50% Deposit Received' || deposit === 'Paid in Full');
+  const hasDeposit = (deposit === '50% Deposit Received' || deposit === 'Paid in Full' || deposit === '40% Delivery Payment' || deposit === '10% Final Payment');
 
   let slabCured = false;
   let cureMsg = 'Awaiting Foundation Pour';
@@ -844,12 +843,12 @@ function evaluateReadinessGate(siteRecord) {
   if (hasDeposit && slabCured && roadsOpen) {
     return {
       status: 'READY TO MOBILIZE 🟢',
-      details: `${cureMsg} • ${roadMsg} • 50% Deposit Cleared`,
+      details: `${cureMsg} • ${roadMsg} • Deposit Cleared`,
       isReady: true
     };
   } else {
     const blockers = [];
-    if (!hasDeposit) blockers.push('Deposit Pending (Need 50%)');
+    if (!hasDeposit) blockers.push('Deposit Pending');
     if (!slabCured) blockers.push(cureMsg);
     if (!roadsOpen) blockers.push(roadMsg);
     return {
@@ -2425,7 +2424,7 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
   if (nlp.year_installed) { updatePayload['Year Installed'] = nlp.year_installed; updateNotes.push(`Year: ${nlp.year_installed}`); }
   if (nlp.model_type) { updatePayload['Model Type'] = nlp.model_type; updateNotes.push(`Model: ${nlp.model_type}`); }
   if (nlp.glass_thickness) { updatePayload['Glass Thickness'] = nlp.glass_thickness; updateNotes.push(`Glass: ${nlp.glass_thickness}`); }
-  if (nlp.court_type) { updatePayload['Court Type'] = nlp.court_type; updateNotes.push(`Type: ${nlp.court_type}`); }
+  if (nlp.court_type) { updatePayload['Model Type'] = nlp.court_type; updateNotes.push(`Type: ${nlp.court_type}`); } // Maps Court Type requests to the Model Type field
   if (nlp.a_frames_retrieved) { updatePayload['A-Frames Retrieved'] = true; updateNotes.push(`A-Frames: Picked up`); }
 
   if (Object.keys(updatePayload).length === 0) {
@@ -2475,7 +2474,7 @@ async function handleSpokenSpecsQuery(queriedName, fallbackSite, dispatchTarget)
   }
 
   const siteName = targetSite.fields['Site Name'] || 'Assigned Court';
-  const courtType = targetSite.fields['Court Type'] || 'Padel Court';
+  const courtType = targetSite.fields['Model Type'] || 'Padel Court'; 
   const steelColor = targetSite.fields['Steel Color'] || 'Unspecified';
   const turfColor = targetSite.fields['Turf Color'] || 'Unspecified';
   const turfSupplier = targetSite.fields['Turf Supplier'] || 'Unspecified';
