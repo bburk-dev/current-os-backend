@@ -582,6 +582,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
   return null;
 }
 
+// V6 Native Supabase Upload SDK implementation
 async function uploadToSupabase(buffer, mimeType) {
   if (!buffer || !CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return { storagePath: null, signedUrl: null };
   
@@ -872,8 +873,7 @@ async function classifyVisualMediaIntent(items) {
     contents: [{ parts: contentParts }],
     generationConfig: {
       temperature: 0.0,
-      responseMimeType: 'application/json',
-      thinkingConfig: { thinkingBudget: 0 }
+      responseMimeType: 'application/json'
     }
   };
 
@@ -1262,8 +1262,7 @@ OUTPUT JSON ONLY:
     ],
     generationConfig: {
       temperature: 0.0,
-      responseMimeType: 'application/json',
-      thinkingConfig: { thinkingBudget: 0 }
+      responseMimeType: 'application/json'
     }
   };
 
@@ -2531,8 +2530,7 @@ async function triageSpokenOrTextNLP(rawInput, isAudio = false, audioItems = [])
     contents: [{ parts: contentParts }],
     generationConfig: {
       temperature: 0.0,
-      responseMimeType: 'application/json',
-      thinkingConfig: { thinkingBudget: 0 }
+      responseMimeType: 'application/json'
     }
   };
 
@@ -2876,8 +2874,7 @@ CRITICAL MANDATE: Evaluate ONLY the foreground court based STRICTLY on what is v
     contents: [{ parts: contentParts }],
     generationConfig: {
       temperature: 0.0,
-      responseMimeType: 'application/json',
-      thinkingConfig: { thinkingBudget: 0 }
+      responseMimeType: 'application/json'
     }
   };
 
