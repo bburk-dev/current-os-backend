@@ -1,5 +1,6 @@
 /**
  * TITAN OS V6.0.0 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * Model: Gemini 2.5 Pro
  * 
  * Production Build Features:
  * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
@@ -110,7 +111,6 @@ const CONFIG = {
   }
 };
 
-// Initialize V6 Native Supabase Client
 const supabase = createClient(
   CONFIG.supabase.url,
   CONFIG.supabase.serviceRoleKey,
@@ -123,7 +123,294 @@ const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'FINANCE', 'LOGISTICS', 'PRODUCTION', '
 
 const lastDroppedCoordinates = new Map();
 const userActiveSiteMap = new Map(); 
-const dailyEasterEggTracker = new Map(); // Tracks Easter Eggs sent today
+const dailyEasterEggTracker = new Map(); 
+
+// ====================================================================
+// 1A. GLOBAL PROMPTS & CONSTANTS
+// ====================================================================
+const GATE_NAMES = {
+  1: 'Foundation & Slab',
+  2: 'Steel Frame',
+  3: 'Mesh Panels',
+  4: 'Glass Installed',
+  5: 'Turf Laid',
+  6: 'Sand Infill',
+  7: 'Net & Posts',
+  8: 'Clean & Handover'
+};
+const TOTAL_GATES = 8;
+
+const COMMAND_MAP = {
+  '/s': 'STATUS',
+  '/sum': 'STATUS',
+  '/status': 'STATUS',
+  '/summary': 'STATUS',
+  '/t': 'TICKET_QUERY',
+  '/ticket': 'TICKET_QUERY',
+  '/tickets': 'TICKET_QUERY',
+  '/w': 'WEATHER',
+  '/weather': 'WEATHER',
+  '/clima': 'WEATHER',
+  '/m': 'MODE_MAINTENANCE',
+  '/maint': 'MODE_MAINTENANCE',
+  '/maintenance': 'MODE_MAINTENANCE',
+  '/i': 'MODE_INSTALLATION',
+  '/install': 'MODE_INSTALLATION',
+  '/l': 'LINK_SITE',
+  '/link': 'LINK_SITE',
+  '/map': 'LOCATION',
+  '/loc': 'LOCATION',
+  '/location': 'LOCATION',
+  '/gps': 'LOCATION',
+  '/g': 'READINESS_GATE_CHECK',
+  '/gate': 'READINESS_GATE_CHECK',
+  '/r': 'READINESS_GATE_CHECK',
+  '/readiness': 'READINESS_GATE_CHECK',
+  '/video': 'MEDIA_RETRIEVAL',
+  '/media': 'MEDIA_RETRIEVAL',
+  '/ar': 'AR_LOOKUP', 
+  '/invoice': 'INVOICE_APPROVAL',
+  '/specs': 'TECH_SPECS',
+  '/border': 'BORDER_CLEARANCE',
+  '/carm': 'BORDER_CLEARANCE',
+  '/help': 'HELP',
+  '/?': 'HELP'
+};
+
+const VISUAL_TRIAGE_PROMPT = `
+You are the Titan OS Universal Visual Triage Engine for Bounce Padel.
+Analyze the provided image(s) or video frames to classify the primary operational subject.
+
+CATEGORIES:
+1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, fuel, Fastenal, restaurants, lumber, supplies, equipment rental), invoices, register slips.
+2. "COMMERCIAL_LEAD": Screenshots of emails, text messages, quote inquiries, client forwards, RFPs, business cards, or partner forwards (Mondo, club developers).
+3. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, frame, net, concrete pad, or sports facility walkaround.
+4. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading, shipping containers, inventory logs.
+5. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, random memes with no business context.
+
+OUTPUT FORMAT (JSON ONLY):
+{
+  "media_category": "FINANCIAL_RECEIPT" | "COMMERCIAL_LEAD" | "COURT_FACILITY" | "FREIGHT_LOGISTICS" | "IRRELEVANT_NOISE",
+  "confidence": number,
+  "lead_contact_name": string or null,
+  "company_or_club": string or null,
+  "phone": string or null,
+  "email": string or null,
+  "address": string or null,
+  "project_description": string or null,
+  "referring_partner": string or null,
+  "grand_total": number or null,
+  "primary_currency": "CAD" | "USD" | null,
+  "bol_number": string or null,
+  "carrier_name": string or null,
+  "freight_contents": string or null,
+  "delivery_status": string or null,
+  "summary": "string or null",
+  "receipts": []
+}
+`;
+
+const INDUSTRIAL_SYSTEM_PROMPT = `
+You are the Titan OS Forensic Inspection Engine for Bounce Padel.
+
+SINGLE-COURT EVALUATION MANDATE:
+Evaluate strictly the single primary court in the foreground being inspected.
+DO NOT evaluate background courts or adjacent courts. Disregard courts seen in the distance.
+
+PADEL COURT 8-GATE PHYSICAL CONSTRUCTION RUBRIC (SUPER PANORAMIC SPEC):
+When inspecting video frames, visually identify completed physical stages:
+- Gate 1: "Foundation & Slab" (Cured concrete pad, existing sport court, or existing tennis foundation)
+- Gate 2: "Steel Frame" (Vertical steel posts and perimeter frame beams bolted upright. NOTE: Super Panoramic courts do NOT have corner posts)
+- Gate 3: "Mesh Panels" (Lower and upper wire mesh fencing panels bolted to steel posts)
+- Gate 4: "Glass Installed" (Tempered glass panels mounted and secured via glass tabs. NOTE: Do not look for frame channels)
+- Gate 5: "Turf Laid" (Synthetic turf rolled out, seamed, glued, and white regulation boundary lines cut in. Turf can be ANY color)
+- Gate 6: "Sand Infill" (Silica sand distributed and brushed evenly across turf carpet fibers)
+- Gate 7: "Net & Posts" (Center net posts mounted, regulation net installed and tensioned)
+- Gate 8: "Clean & Handover" (STRICT: Construction tools, trash, and active debris MUST be entirely cleared. Court must be pristine and ready for tournament play).
+
+FRICTIONLESS PROGRESSION & PUNCH LIST QA:
+- Job sites operate in parallel. If multiple physical gates are happening at once (e.g. turf and nets), list ALL of them in the "in_progress_gates" array.
+- Evaluate the qa_checklist items (bolts, entrance plates, bolt caps, silicone, doors, jobsite cleanliness).
+- CRITICAL: Pending cosmetic or hardware punch list items (missing bolt caps, entrance plates, or pending cleanup) ARE NOT blocking gates. Allow milestone progression to advance based on physical construction gates even if punch list items remain pending.
+
+SPECIFIC QUALITY AUDIT CHECKS:
+- "entrance_plates_installed": Look ONLY at the bottom threshold of the door openings for "Bounce Padel Courts" branded plates. Do NOT confuse with corner plates.
+- "anchor_bolts_fully_installed": Look closely at the square green base plates at the bottom of the structural columns holding up the glass and mesh. If the holes are empty, anchor bolts are pending.
+- "black_bolt_caps_installed": Look at the bolts holding the green steel frame together. Do they have black plastic caps covering them?
+- "silicone_sealant_applied": Is there visible silicone along the glass panel joints?
+- "doors_oriented_correctly": Check door orientations. Doors must be RIGHT and RIGHT (not left and right). If a left door is installed, flag it.
+- "jobsite_is_clean": Are there tools, debris, cords, or ladders left on the court? (If yes, this is false).
+
+SMART VERBATIM: Purge all speech hesitations ("uh", "um", stutters). Disregard ambient jobsite noise.
+
+COLLABORATIVE TONE DIRECTIVE:
+Never shame the installers. Do not use dictatorial terms like "ACTION REQUIRED", "FAIL", "MISSING", or "Address immediately". 
+Use supportive, professional terms like "Pending", "To-Do", "Awaiting", or "Punch list". Ensure the "whatsapp_status_text" observation is friendly and collaborative.
+
+OUTPUT SPECIFICATION (JSON ONLY):
+Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_LANGUAGE provided in the audit context. All other JSON fields MUST remain strictly in English for the HQ database.
+{
+  "qa_checklist": {
+    "entrance_plates_installed": boolean,
+    "anchor_bolts_fully_installed": boolean,
+    "black_bolt_caps_installed": boolean,
+    "silicone_sealant_applied": boolean,
+    "doors_oriented_correctly": boolean,
+    "jobsite_is_clean": boolean
+  },
+  "transcript_en": "Clean polished English transcript or visual scene summary",
+  "transcript_es": "Transcripción limpia o resumen visual profesional en español",
+  "spoken_court_name": "string or null",
+  "spoken_ticket_id": integer or null,
+  "video_phase": "INSTALLATION_SWEEP" | "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT",
+  "verified_gates": [1, 2, 3],
+  "in_progress_gates": [4, 5],
+  "highest_gate": 5,
+  "defect_origin": "FABRICATION" | "SITE_CONDITION" | "TRANSIT_DAMAGE" | null,
+  "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | "DOORS" | null,
+  "blockers_detected": ["Specific impediment, dimensional error, or pending hardware in English"],
+  "work_verified": ["Specific verified stage completed in English"],
+  "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
+  "site_conditions": "Short string in English",
+  "action_items": ["Pending black bolt caps", "Pending entrance plates", "Silicone pending", "Swap left door for right door"],
+  "summary": "1-2 sentence concise executive summary of visible court progress or defect",
+  "whatsapp_status_text": "Plaintext friendly observation"
+}
+`;
+
+const MAINTENANCE_TRIAGE_PROMPT = `
+You are the Titan OS Maintenance & VIP Field Concierge Engine.
+
+CRITICAL DIRECTIVE:
+1. "SMART VERBATIM": Purge speech hesitations ("uh", "ah", "um").
+2. DUAL-TRACK BILINGUAL OUTPUT: Provide both transcript_en and transcript_es.
+
+OUTPUT SPECIFICATION (JSON ONLY):
+Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_LANGUAGE provided in the audit context. All other JSON fields (summary, blockers, action_items) MUST remain strictly in English for the HQ database.
+{
+  "transcript_en": "Clean polished English transcript without filler words",
+  "transcript_es": "Transcripción limpia y profesional en español sin muletillas",
+  "spoken_court_name": "string or null",
+  "spoken_ticket_id": integer or null,
+  "video_phase": "INTAKE_BASELINE" | "COMPLETION_CLOSEOUT" | "GENERAL_AUDIT",
+  "resolution_summary": "string in English",
+  "blockers_detected": ["Specific impediment in English"],
+  "work_verified": ["Specific verified completed task in English"],
+  "task_category": "string or null",
+  "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
+  "priority": "Critical" | "High" | "Medium" | "Low",
+  "suggested_worker_name": "string or null",
+  "status_observed": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
+  "hazard_detected": boolean,
+  "defects_identified": ["Specific defect in English"],
+  "action_items": ["Action item in English"],
+  "site_conditions": "Short string in English",
+  "worker_summary": "1-2 sentence executive summary in English",
+  "whatsapp_status_text": "Plaintext friendly observation"
+}
+`;
+
+const INTENT_CLASSIFICATION_PROMPT = `
+You are the Titan OS Ambient Intelligence Scribe & Operational Dispatcher for Bounce Padel.
+Classify incoming spoken audio transcripts or text messages.
+
+ROUTING INTENTS:
+1. "LOCATION_QUERY": User is asking for the location, directions, pin, map, or address of a court.
+2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions.
+3. "STATUS_QUERY": User is asking about general progress, gates, or status of a court.
+4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks.
+5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
+6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
+7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker.
+8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on the Sites table (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness).
+9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
+10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
+11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies.
+12. "FREIGHT_UPDATE": Driver or warehouse staff providing transit updates, crate counts, or BOL arrivals.
+13. "HISTORICAL_REFERENCE": User is sharing an old photo, throwback, or past memory. Disregard physical evaluation.
+14. "MEDIA_RETRIEVAL": User is asking to see, view, or retrieve the latest video walkthrough, photo, or media for a specific site/court.
+15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
+16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
+17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
+18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, or suppliers of a specific court.
+
+Extract:
+"queried_court_name": string or null,
+"referenced_ticket_id": integer or null,
+"referenced_entity_name": string or null,
+"reassign_site_name": string or null,
+"assign_worker_name": string or null,
+"ticket_status_update": string or null,
+"update_note": string or null,
+"freight_bol": string or null,
+"freight_integer_count": number or null,
+"freight_status": "In Transit" | "Delivered" | "Damaged" | null,
+"requested_items": "string describing what is missing or needed or null",
+"qbo_estimate_number": string or null,
+"qbo_invoice_percentage": number or null,
+"qbo_customer_name": string or null,
+"qbo_amount": number or null,
+"qbo_line_items": string or null,
+
+DATABASE FIELD MAPPING OVERRIDES:
+"workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT" | "EXECUTIVE" | "PRODUCTION" | "LOGISTICS" | "INVENTORY" | "PLANNING" | null
+"site_status_update": "PLANNING" | "ACTIVE" | "PAUSED" | "COMPLETE" | "BLOCKED_WEATHER" | "BLOCKED_PARTS" | "END_OF_DAY" | "OPEN_FOR_PLAY" | "WINTERIZED_CLOSED" | "UNDER_MAINTENANCE" | "IN_CONSTRUCTION" | null
+"deposit_status": "Pending Deposit" | "50% Deposit Received" | "Paid in Full" | null
+"foundation_type": "Poured Concrete Slab" | "Existing Tennis Conversion" | "Indoor Commercial Slab" | "Post-Tensioned Slab" | null
+"slab_pour_date": "YYYY-MM-DD" | null
+"assigned_crew": "Team Alpha" | "Team Beta" | "Logistics" | "Unassigned" | null
+"manufacturer": "BPC" | "Mejor Set" | "AFP" | "Chinese" | "Padel Tech" | "Spanish" | null
+"steel_color": "Black" | "Pearl Mouse" | "Blue" | "Green" | null
+"turf_color": "Blue" | "Green" | "Terracotta" | null
+"turf_supplier": "Real Turf" | "Mondo" | "House" | null
+"year_installed": number | null
+"model_type": "Standard" | "Hurricane" | "Indoor" | null
+"glass_thickness": "10mm" | "12mm" | null
+
+OUTPUT FORMAT (JSON ONLY):
+{
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY",
+  "queried_court_name": "string or null",
+  "matched_site_name": "string or null",
+  "ticket_id": integer or null,
+  "referenced_ticket_id": integer or null,
+  "referenced_entity_name": "string or null",
+  "reassign_site_name": "string or null",
+  "assign_worker_name": "string or null",
+  "ticket_status_update": "string or null",
+  "update_note": "string or null",
+  "resolution_summary": "string in English or null",
+  "dark_matter_category": "Logistics" | "Site Conditions" | "Hardware" | null,
+  "distilled_context": "string or null",
+  "urgency": "LOW" | "MEDIUM" | "HIGH" | null,
+  "gravity_score": integer | null,
+  "freight_bol": "string or null",
+  "freight_integer_count": number | null,
+  "freight_status": "string or null",
+  "requested_items": "string or null",
+  "qbo_estimate_number": "string or null",
+  "qbo_invoice_percentage": number | null,
+  "qbo_customer_name": "string or null",
+  "qbo_amount": number | null,
+  "qbo_line_items": "string or null",
+  "workflow_mode": "string or null",
+  "site_status_update": "string or null",
+  "deposit_status": "string or null",
+  "foundation_type": "string or null",
+  "slab_pour_date": "string or null",
+  "assigned_crew": "string or null",
+  "manufacturer": "string or null",
+  "steel_color": "string or null",
+  "turf_color": "string or null",
+  "turf_supplier": "string or null",
+  "year_installed": number | null,
+  "model_type": "string or null",
+  "glass_thickness": "string or null",
+  "transcript_en": "Clean English transcript",
+  "transcript_es": "Clean Spanish transcript"
+}
+`;
+
 
 // ====================================================================
 // 2. IN-MEMORY CACHE-ASIDE ENGINE
@@ -156,6 +443,7 @@ async function getCachedSites(forceRefresh = false) {
   if (!forceRefresh && memoryCache.sites && (now - memoryCache.sitesLastFetched < CACHE_TTL_MS)) {
     return memoryCache.sites;
   }
+
   try {
     const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?maxRecords=100`;
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
@@ -176,6 +464,7 @@ async function getCachedWorkers(forceRefresh = false) {
   if (!forceRefresh && memoryCache.workers && (now - memoryCache.workersLastFetched < CACHE_TTL_MS)) {
     return memoryCache.workers;
   }
+
   try {
     let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Workers?maxRecords=100`;
     let res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
@@ -200,6 +489,7 @@ async function getCachedContacts(forceRefresh = false) {
   if (!forceRefresh && memoryCache.contacts && (now - memoryCache.contactsLastFetched < CACHE_TTL_MS)) {
     return memoryCache.contacts;
   }
+
   try {
     const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Contacts?maxRecords=100`;
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
@@ -218,6 +508,7 @@ async function getCachedOpenAssignments(forceRefresh = false) {
   if (!forceRefresh && memoryCache.assignments && (now - memoryCache.assignmentsLastFetched < ASSIGNMENTS_CACHE_TTL_MS)) {
     return memoryCache.assignments;
   }
+
   try {
     const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
     const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc&maxRecords=100`;
@@ -456,6 +747,26 @@ async function streamToDarkMatterVault({
   }
 }
 
+async function fetchRecentDarkMatter(siteNameOrId, limit = 5) {
+  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return [];
+  try {
+    const filter = siteNameOrId.startsWith('rec')
+      ? `site_id=eq.${siteNameOrId}`
+      : `site_name=ilike.*${encodeURIComponent(siteNameOrId.trim())}*`;
+
+    const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?${filter}&order=created_at.desc&limit=${limit}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: getSupabaseHeaders('application/json')
+    });
+
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (err) {
+    return [];
+  }
+}
+
 // ====================================================================
 // 4. SPRING MOBILIZATION GATE ENGINE
 // ====================================================================
@@ -544,40 +855,6 @@ function evaluateReadinessGate(siteRecord) {
 // ====================================================================
 // 5. UNIVERSAL VISUAL TRIAGE ENGINE (RECEIPTS, LEADS, FREIGHT)
 // ====================================================================
-
-const VISUAL_TRIAGE_PROMPT = `
-You are the Titan OS Universal Visual Triage Engine for Bounce Padel.
-Analyze the provided image(s) or video frames to classify the primary operational subject.
-
-CATEGORIES:
-1. "FINANCIAL_RECEIPT": Store receipts (Home Depot, Lowe's, fuel, Fastenal, restaurants, lumber, supplies, equipment rental), invoices, register slips.
-2. "COMMERCIAL_LEAD": Screenshots of emails, text messages, quote inquiries, client forwards, RFPs, business cards, or partner forwards (Mondo, club developers).
-3. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, frame, net, concrete pad, or sports facility walkaround.
-4. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading, shipping containers, inventory logs.
-5. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, random memes with no business context.
-
-OUTPUT FORMAT (JSON ONLY):
-{
-  "media_category": "FINANCIAL_RECEIPT" | "COMMERCIAL_LEAD" | "COURT_FACILITY" | "FREIGHT_LOGISTICS" | "IRRELEVANT_NOISE",
-  "confidence": number,
-  "lead_contact_name": string or null,
-  "company_or_club": string or null,
-  "phone": string or null,
-  "email": string or null,
-  "address": string or null,
-  "project_description": string or null,
-  "referring_partner": string or null,
-  "grand_total": number or null,
-  "primary_currency": "CAD" | "USD" | null,
-  "bol_number": string or null,
-  "carrier_name": string or null,
-  "freight_contents": string or null,
-  "delivery_status": string or null,
-  "summary": "string or null",
-  "receipts": []
-}
-`;
-
 async function classifyVisualMediaIntent(items) {
   const contentParts = [{ text: "Determine the primary subject of these images. If receipts, extract financial data. If email/lead screenshot, extract all contact and project details. If freight, extract shipping metadata." }];
 
@@ -702,6 +979,313 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
   await sendWhatsAppMessage(dispatchTarget, receiptCard);
 }
 
+async function handleCommercialLeadBatch({ items, storageResults, visualTriage, worker, dispatchTarget, fromPhone, callerIdentity }) {
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const leadName = visualTriage.lead_contact_name || 'Inbound Prospect';
+  const company = visualTriage.company_or_club || 'Padel Venue Lead';
+  const phone = visualTriage.phone || 'N/A';
+  const email = visualTriage.email || 'N/A';
+  const address = visualTriage.address || 'N/A';
+  const scope = visualTriage.project_description || visualTriage.summary || 'Court installation / turf replacement request';
+  const partner = visualTriage.referring_partner || 'Direct Intake';
+
+  const title = company !== 'Padel Venue Lead' ? `${company} (${leadName})` : leadName;
+
+  const validStorage = storageResults.filter(s => s && s.signedUrl);
+  const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
+
+  let formattedNotes = `[COMMERCIAL LEAD — ${title}]\n` +
+    `• Contact: ${leadName}\n` +
+    `• Company / Club: ${company}\n` +
+    `• Phone: ${phone}\n` +
+    `• Email: ${email}\n` +
+    `• Address: ${address}\n` +
+    `• Partner Referral: ${partner}\n` +
+    `• Project Scope: ${scope}\n\n` +
+    `INBOUND MEDIA URLS:\n` + validStorage.map(s => `• ${s.signedUrl}`).join('\n');
+
+  const assignmentPayload = {
+    'Date': todayStr,
+    'Assignment Type': 'Sales',
+    'Task Category': 'Commercial Sales',
+    'Priority': 'High',
+    'Source': 'Email Screenshot Lead Intake',
+    'Status': 'Open',
+    'Notes': formattedNotes
+  };
+
+  if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
+  if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+
+  const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+  const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'LEAD';
+
+  streamToDarkMatterVault({
+    siteId: null,
+    siteName: company,
+    senderPhone: fromPhone,
+    senderName: workerName,
+    rawText: formattedNotes,
+    category: 'Commercial Sales Lead',
+    distilledContext: `Lead: ${leadName} (${company}) via ${partner} — Scope: ${scope}`,
+    urgency: 'HIGH',
+    gravityScore: 4,
+    actionableFollowup: `Sales Ticket ${ticketId}`
+  }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
+
+  let leadCard = `💼 *TITAN OS | COMMERCIAL LEAD LOGGED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `👤 *Prospect:* ${leadName}\n` +
+    `🏟️ *Club / Org:* ${company}\n` +
+    `📞 *Phone:* ${phone}\n` +
+    `✉️ *Email:* ${email}\n` +
+    `📍 *Location:* ${address}\n` +
+    `🤝 *Partner Referral:* ${partner}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *Project Scope:*\n${scope}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎫 *Ticket ${ticketId} Created* (Indexed under Daily Assignments -> Sales)`;
+
+  await sendWhatsAppMessage(dispatchTarget, leadCard);
+}
+
+async function handleFreightLogisticsBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity }) {
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Logistics Tech';
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const bol = visualTriage.bol_number || 'N/A';
+  const carrier = visualTriage.carrier_name || 'N/A';
+  const contents = visualTriage.freight_contents || visualTriage.summary || 'Unspecified freight items';
+  const status = visualTriage.delivery_status || 'In Transit';
+
+  const validStorage = storageResults.filter(s => s && s.signedUrl);
+  const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
+
+  let formattedNotes = `[FREIGHT LOGISTICS INTAKE — ${carrier}]\n` +
+    `• BOL / Tracking: ${bol}\n` +
+    `• Status: ${status}\n` +
+    `• Contents: ${contents}\n` +
+    `• Logged By: ${workerName}\n\n` +
+    `MEDIA URLS:\n` + validStorage.map(s => `• ${s.signedUrl}`).join('\n');
+
+  const assignmentPayload = {
+    'Date': todayStr,
+    'Assignment Type': 'Task',
+    'Task Category': 'Logistics',
+    'Priority': 'Medium',
+    'Source': 'Freight Media Intake',
+    'Status': status.toLowerCase().includes('deliver') ? 'Complete' : 'In Progress',
+    'Notes': formattedNotes
+  };
+
+  if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
+  if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+  if (site?.id) assignmentPayload['Sites'] = [site.id];
+
+  const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+  const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'FRT';
+
+  streamToDarkMatterVault({
+    siteId: site?.id || null,
+    siteName: site?.fields?.['Site Name'] || 'Logistics Hub',
+    senderPhone: fromPhone,
+    senderName: workerName,
+    rawText: formattedNotes,
+    category: 'Freight & Logistics',
+    distilledContext: `Freight [${bol}]: ${contents} (${status})`,
+    urgency: 'MEDIUM',
+    gravityScore: 3,
+    actionableFollowup: `Freight ${ticketId}`
+  }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
+
+  let freightCard = `🚚 *TITAN OS | FREIGHT & LOGISTICS LOGGED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📦 *BOL / Tracking:* ${bol}\n` +
+    `🚛 *Carrier:* ${carrier}\n` +
+    `📊 *Status:* ${status}\n` +
+    `👤 *Logged By:* ${workerName}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *Contents:*\n${contents}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎫 *Logistics Ref:* ${ticketId}`;
+
+  await sendWhatsAppMessage(dispatchTarget, freightCard);
+}
+
+/**
+ * CONVERSATIONAL TICKET & LEAD UPDATE HANDLER (WITH RELATIONAL REASSIGNMENT)
+ */
+async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId, worker, dispatchTarget, fromPhone, nlp = {} }) {
+  const openAssignments = await getCachedOpenAssignments();
+  const workerName = worker?.fields?.['Full Name'] || 'Bob';
+  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  let targetTicket = null;
+
+  const regexTicket = rawText.match(/#(\d+)/) || rawText.match(/ticket\s*#?(\d+)/i);
+  const parsedTicketNum = explicitTicketId || nlp.referenced_ticket_id || nlp.ticket_id || (regexTicket ? parseInt(regexTicket[1]) : null);
+
+  if (parsedTicketNum) {
+    const cleanNum = parseInt(String(parsedTicketNum).replace(/\D/g, ''));
+    targetTicket = openAssignments.find(a => a.fields['Assignment ID'] === cleanNum || a.id === String(parsedTicketNum));
+  }
+
+  if (!targetTicket && entityName) {
+    const cleanEntity = entityName.toLowerCase().trim();
+    targetTicket = openAssignments.find(a => {
+      const notes = (a.fields['Notes'] || '').toLowerCase();
+      const cat = (a.fields['Task Category'] || '').toLowerCase();
+      return notes.includes(cleanEntity) || cat.includes(cleanEntity);
+    });
+  }
+
+  if (!targetTicket && openAssignments.length > 0) {
+    targetTicket = openAssignments[0];
+  }
+
+  if (!targetTicket) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate an open ticket or lead to update.`);
+    return false;
+  }
+
+  const existingNotes = targetTicket.fields['Notes'] || '';
+  const cleanUpdate = rawText.trim();
+  const appendedNotes = `${existingNotes}\n\n[UPDATE - ${workerName} at ${timeStr}]:\n${cleanUpdate}`.trim();
+
+  const updatePayload = {
+    'Notes': appendedNotes
+  };
+
+  let reassignedSiteName = null;
+  const siteCandidate = nlp.reassign_site_name || nlp.queried_court_name || nlp.referenced_entity_name || nlp.matched_site_name;
+  
+  let targetSite = null;
+  if (siteCandidate) {
+    targetSite = await lookupSite(null, siteCandidate);
+  } else {
+    const siteMatch = rawText.match(/(?:re-?assign|assign|move|transfer)\s+(?:to\s+)?(?:site\s+)?([a-zA-Z0-9\s'-]+)/i);
+    if (siteMatch) {
+      targetSite = await lookupSite(null, siteMatch[1].trim());
+    }
+  }
+
+  if (targetSite) {
+    updatePayload['Sites'] = [targetSite.id];
+    reassignedSiteName = targetSite.fields['Site Name'];
+  }
+
+  let assignedWorkerName = null;
+  const workerCandidate = nlp.assign_worker_name;
+  if (workerCandidate) {
+    const workers = await getCachedWorkers();
+    const matchedWorker = workers.find(w => {
+      const wName = (w.fields['Full Name'] || w.fields['Worker Name'] || '').toLowerCase();
+      return wName.includes(workerCandidate.toLowerCase());
+    });
+    if (matchedWorker) {
+      updatePayload['Worker'] = [matchedWorker.id];
+      assignedWorkerName = matchedWorker.fields['Full Name'] || matchedWorker.fields['Worker Name'];
+    }
+  }
+
+  if (nlp.ticket_status_update) {
+    updatePayload['Status'] = nlp.ticket_status_update;
+  }
+
+  await airtableWriteWithAutoDrop('Daily Assignments', updatePayload, targetTicket.id);
+  invalidateAirtableCache('assignments');
+
+  const ticketId = targetTicket.fields['Assignment ID'] ? `#${targetTicket.fields['Assignment ID']}` : 'TICKET';
+  const type = targetTicket.fields['Assignment Type'] || 'Task';
+
+  let confirmCard = `📝 *TITAN OS | ${type.toUpperCase()} UPDATED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎫 *Ticket:* ${ticketId}\n` +
+    `👤 *Logged By:* ${workerName}\n` +
+    `⏱️ *Time:* ${timeStr}\n` +
+    (reassignedSiteName ? `🏟️ *Reassigned Site:* ${reassignedSiteName}\n` : '') +
+    (assignedWorkerName ? `👷 *Assigned Tech:* ${assignedWorkerName}\n` : '') +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *Added Note:*\n"${cleanUpdate}"\n\n` +
+    `✅ *Airtable ledger updated.*`;
+
+  await sendWhatsAppMessage(dispatchTarget, confirmCard);
+  return true;
+}
+
+// ====================================================================
+// 6. DECOUPLED BLIND VISION CLASSIFIER
+// ====================================================================
+
+async function inspectBlindVisualGroundTruth(mediaItem) {
+  const systemInstruction = `
+You are the Titan OS Ground Truth Vision Gate.
+Classify the physical environment visible in these video frames with complete neutrality.
+
+STRICT GROUND TRUTH RULES:
+1. PADEL COURT VERIFICATION:
+   - A valid padel court MUST show clear structural padel elements:
+     * Synthetic turf carpet (TURF MAY BE ANY COLOR: blue, green, terracotta, black, red, etc.) with inlaid white lines
+     * Structural tempered glass panels mounted to steel posts/columns
+     * Electro-welded wire mesh panels
+     * Structural posts or net posts
+   - If the video shows:
+     * Residential patio, backyard, deck, lawn furniture, BBQ, or house siding
+     * Office desk, computer screens, indoor living room, drywall, or kitchen
+     * Truck cab, vehicle dashboard, steering wheel, or parking lot
+     * YOU MUST CLASSIFY: is_padel_court: false
+
+OUTPUT JSON ONLY:
+{
+  "is_padel_court": boolean,
+  "detected_scene": "Concise factual description in English of what is actually visible",
+  "confidence": number
+}
+`;
+
+  const payload = {
+    system_instruction: { parts: [{ text: systemInstruction }] },
+    contents: [
+      {
+        parts: [
+          {
+            inline_data: {
+              mime_type: mediaItem.mimeType,
+              data: mediaItem.buffer.toString('base64')
+            }
+          },
+          { text: "Examine ONLY visual frames. Disregard any audio. Is this physically inside or at the apron of a padel court?" }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.0,
+      responseMimeType: 'application/json',
+      thinkingConfig: { thinkingBudget: 0 }
+    }
+  };
+
+  try {
+    const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) return { is_padel_court: true, detected_scene: 'Bypassed on API error' };
+
+    const data = await res.json();
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const parsed = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    return parsed;
+  } catch (err) {
+    return { is_padel_court: true, detected_scene: 'Bypassed on parse error' };
+  }
+}
+
 // ====================================================================
 // 6. SITE CONTEXT BINDING & CHECK-IN
 // ====================================================================
@@ -741,6 +1325,7 @@ async function bindSiteContext(site, worker, callerIdentity, dispatchTarget, fro
 
   await sendWhatsAppMessage(dispatchTarget, checkinCard);
 }
+
 
 // ====================================================================
 // 8. GEOSPATIAL & METEOROLOGICAL TELEMETRY (CRANE-FREE TRIPWIRES)
@@ -902,6 +1487,7 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   const warnings = [];
   const dewDelta = weather.temp - weather.dewPoint;
 
+  // 1. CRITICAL SAFETY & CHEMICAL LOCKOUTS (Proactive Push-Worthy)
   if (weather.weatherCode >= 95 && weather.weatherCode <= 99) {
     criticalAlerts.push(`⛈️ *SEVERE WEATHER / LIGHTNING:* Evacuate court frame. Immediate safety stand-down.`);
   }
@@ -912,6 +1498,7 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
     criticalAlerts.push(`❄️ *TURF GLUE CURE HOLD (${weather.temp}°C):* Polyurethane adhesive failure risk. Do not glue turf seams.`);
   }
 
+  // 2. STANDARD OPERATIONAL TRIPWIRES (Morning Pin-Drop Briefing Only)
   if (weather.windGusts > 37 && weather.windGusts <= 60) {
     holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h):* Suction cup glass installation prohibited.`);
   } else if (weather.windGusts > 28) {
@@ -1921,107 +2508,6 @@ async function handleSpokenSpecsQuery(queriedName, fallbackSite, dispatchTarget)
 // 14. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
 
-const INTENT_CLASSIFICATION_PROMPT = `
-You are the Titan OS Ambient Intelligence Scribe & Operational Dispatcher for Bounce Padel.
-Classify incoming spoken audio transcripts or text messages.
-
-ROUTING INTENTS:
-1. "LOCATION_QUERY": User is asking for the location, directions, pin, map, or address of a court.
-2. "WEATHER_QUERY": User is asking about weather, wind, rain, or site conditions.
-3. "STATUS_QUERY": User is asking about general progress, gates, or status of a court.
-4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks.
-5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
-6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
-7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker.
-8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on the Sites table (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness).
-9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
-10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
-11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies.
-12. "FREIGHT_UPDATE": Driver or warehouse staff providing transit updates, crate counts, or BOL arrivals.
-13. "HISTORICAL_REFERENCE": User is sharing an old photo, throwback, or past memory. Disregard physical evaluation.
-14. "MEDIA_RETRIEVAL": User is asking to see, view, or retrieve the latest video walkthrough, photo, or media for a specific site/court.
-15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
-16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
-17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
-18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, or suppliers of a specific court.
-
-Extract:
-"queried_court_name": string or null,
-"referenced_ticket_id": integer or null,
-"referenced_entity_name": string or null,
-"reassign_site_name": string or null,
-"assign_worker_name": string or null,
-"ticket_status_update": string or null,
-"update_note": string or null,
-"freight_bol": string or null,
-"freight_integer_count": number or null,
-"freight_status": "In Transit" | "Delivered" | "Damaged" | null,
-"requested_items": "string describing what is missing or needed or null",
-"qbo_estimate_number": string or null,
-"qbo_invoice_percentage": number or null,
-"qbo_customer_name": string or null,
-"qbo_amount": number or null,
-"qbo_line_items": string or null,
-
-DATABASE FIELD MAPPING OVERRIDES:
-"workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT" | "EXECUTIVE" | "PRODUCTION" | "LOGISTICS" | "INVENTORY" | "PLANNING" | null
-"site_status_update": "PLANNING" | "ACTIVE" | "PAUSED" | "COMPLETE" | "BLOCKED_WEATHER" | "BLOCKED_PARTS" | "END_OF_DAY" | "OPEN_FOR_PLAY" | "WINTERIZED_CLOSED" | "UNDER_MAINTENANCE" | "IN_CONSTRUCTION" | null
-"deposit_status": "Pending Deposit" | "50% Deposit Received" | "Paid in Full" | null
-"foundation_type": "Poured Concrete Slab" | "Existing Tennis Conversion" | "Indoor Commercial Slab" | "Post-Tensioned Slab" | null
-"slab_pour_date": "YYYY-MM-DD" | null
-"assigned_crew": "Team Alpha" | "Team Beta" | "Logistics" | "Unassigned" | null
-"manufacturer": "BPC" | "Mejor Set" | "AFP" | "Chinese" | "Padel Tech" | "Spanish" | null
-"steel_color": "Black" | "Pearl Mouse" | "Blue" | "Green" | null
-"turf_color": "Blue" | "Green" | "Terracotta" | null
-"turf_supplier": "Real Turf" | "Mondo" | "House" | null
-"year_installed": number | null
-"model_type": "Standard" | "Hurricane" | "Indoor" | null
-"glass_thickness": "10mm" | "12mm" | null
-
-OUTPUT FORMAT (JSON ONLY):
-{
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY",
-  "queried_court_name": "string or null",
-  "matched_site_name": "string or null",
-  "ticket_id": integer or null,
-  "referenced_ticket_id": integer or null,
-  "referenced_entity_name": "string or null",
-  "reassign_site_name": "string or null",
-  "assign_worker_name": "string or null",
-  "ticket_status_update": "string or null",
-  "update_note": "string or null",
-  "resolution_summary": "string in English or null",
-  "dark_matter_category": "Logistics" | "Site Conditions" | "Hardware" | null,
-  "distilled_context": "string or null",
-  "urgency": "LOW" | "MEDIUM" | "HIGH" | null,
-  "gravity_score": integer | null,
-  "freight_bol": "string or null",
-  "freight_integer_count": number | null,
-  "freight_status": "string or null",
-  "requested_items": "string or null",
-  "qbo_estimate_number": "string or null",
-  "qbo_invoice_percentage": number | null,
-  "qbo_customer_name": "string or null",
-  "qbo_amount": number | null,
-  "qbo_line_items": "string or null",
-  "workflow_mode": "string or null",
-  "site_status_update": "string or null",
-  "deposit_status": "string or null",
-  "foundation_type": "string or null",
-  "slab_pour_date": "string or null",
-  "assigned_crew": "string or null",
-  "manufacturer": "string or null",
-  "steel_color": "string or null",
-  "turf_color": "string or null",
-  "turf_supplier": "string or null",
-  "year_installed": number | null,
-  "model_type": "string or null",
-  "glass_thickness": "string or null",
-  "transcript_en": "Clean English transcript",
-  "transcript_es": "Clean Spanish transcript"
-}
-`;
-
 async function triageSpokenOrTextNLP(rawInput, isAudio = false, audioItems = []) {
   const activeSites = await getAllActiveSitesList();
   const siteListStr = activeSites.join(', ');
@@ -2452,7 +2938,15 @@ async function processMediaBatch(batch) {
 
   if (!hasVideo) {
     const visualTriage = await classifyVisualMediaIntent(items);
-    if (visualTriage.media_category === 'FINANCIAL_RECEIPT') return;
+    if (visualTriage.media_category === 'FINANCIAL_RECEIPT') {
+       return await handleFinancialReceiptBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity });
+    }
+    if (visualTriage.media_category === 'COMMERCIAL_LEAD') {
+       return await handleCommercialLeadBatch({ items, storageResults, visualTriage, worker, dispatchTarget, fromPhone, callerIdentity });
+    }
+    if (visualTriage.media_category === 'FREIGHT_LOGISTICS') {
+       return await handleFreightLogisticsBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity });
+    }
   }
 
   if (hasVideo) {
