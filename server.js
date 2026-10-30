@@ -3441,6 +3441,7 @@ async function autoSubscribeMetaWebhook() {
   const discoveredWabaIds = new Set();
   if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
 
+  // 1. Inspect token permissions & associated target WABAs via debug_token
   try {
     const debugRes = await fetch(`${CONFIG.meta.graphApiUrl}/debug_token?input_token=${token}`, {
       headers: { 'Authorization': `Bearer ${token}` }
@@ -3458,6 +3459,7 @@ async function autoSubscribeMetaWebhook() {
     console.warn('[Meta Handshake] Debug token inspection note:', e.message);
   }
 
+  // 2. Discover WABA IDs under Bounce Padel Courts portfolio & /me/businesses
   const businessCandidates = ['34682330288078617'];
   try {
     const bizRes = await fetch(`${CONFIG.meta.graphApiUrl}/me/businesses`, {
@@ -3485,6 +3487,7 @@ async function autoSubscribeMetaWebhook() {
 
   console.log(`📡 [Meta Handshake] Discovered WABA Candidate IDs: [${Array.from(discoveredWabaIds).join(', ') || 'None'}]`);
 
+  // 3. Inspect phone numbers for each WABA and match +1 289-221-7329
   let matchedPhone = false;
   for (const wabaId of discoveredWabaIds) {
     try {
@@ -3507,6 +3510,7 @@ async function autoSubscribeMetaWebhook() {
         }
       }
 
+      // Instruct Meta to forward inbound webhook events to this App
       const subRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/subscribed_apps`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
@@ -3518,6 +3522,7 @@ async function autoSubscribeMetaWebhook() {
     }
   }
 
+  // 4. Fallback verification if configured Phone ID was explicitly provided
   if (!matchedPhone && CONFIG.meta.phoneNumberId) {
     try {
       const vRes = await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}?fields=id,display_phone_number,verified_name`, {
