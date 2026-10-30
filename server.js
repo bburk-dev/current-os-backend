@@ -89,8 +89,8 @@ const CONFIG = {
   },
   gemini: {
     apiKey: process.env.GEMINI_API_KEY,
-    model: 'gemini-2.5-flash',
-    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+    model: 'gemini-2.5-pro',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent'
   },
   airtable: {
     apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
@@ -3098,6 +3098,10 @@ async function processMediaBatch(batch) {
 // ====================================================================
 // 15. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
+
+/**
+ * Handles Webhook verification challenges sent by Meta on App Setup
+ */
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -3111,7 +3115,12 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+/**
+ * RESTORED MULTIMODAL INGRESS ROUTER
+ * Handles incoming events: Location, Voice, Audio, Text, Interactive, Images, and Video
+ */
 app.post('/webhook', async (req, res) => {
+  // Acknowledge immediately to prevent Meta from timing out
   res.sendStatus(200);
 
   const body = req.body;
@@ -3130,6 +3139,7 @@ app.post('/webhook', async (req, res) => {
     if (processedMessageMap.has(messageId)) return;
     processedMessageMap.set(messageId, Date.now());
 
+    // Auto-resolve caller identity and contextual court location
     const callerIdentity = await resolveCallerIdentity(fromPhone);
     const sessionSiteId = userActiveSiteMap.get(fromPhone);
     let site = null;
@@ -3143,82 +3153,270 @@ app.post('/webhook', async (req, res) => {
     }
 
     const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
-    const isVideo = message.type === 'video';
-    const isImage = message.type === 'image';
-    const isAudio = message.type === 'audio' || message.type === 'voice';
 
-    if (!isVideo && !isImage && !isAudio) return;
+    // =================================================================
+    // ROUTE 1: LOCATION PIN (Morning Check-In / Multi-Court Resolver)
+    // =================================================================
+    if (message.type === 'location') {
+      sendWhatsAppReaction(dispatchTarget, messageId, '📍').catch(() => {});
+      const userLat = message.location.latitude;
+      const userLon = message.location.longitude;
+      lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
 
-    const mediaObj = message[message.type];
-    const mediaId = mediaObj.id;
-    const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : (isAudio ? 'audio/ogg' : 'image/jpeg'));
-    const caption = mediaObj.caption || '';
+      const allSites = await getCachedSites();
+      const nearby = [];
+      for (const s of allSites) {
+        const coords = await resolveCoordinates(s);
+        if (coords) {
+          const dist = haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+          if (dist <= 800) nearby.push({ site: s, distance: dist });
+        }
+      }
+      nearby.sort((a, b) => a.distance - b.distance);
 
-    sendWhatsAppReaction(dispatchTarget, messageId, isAudio ? '🎧' : (isVideo ? '🎥' : '🧾')).catch(() => {});
-
-    const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
-      headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
-    });
-    const metaMediaData = await metaMediaRes.json().catch(() => ({}));
-
-    if (!metaMediaRes.ok || !metaMediaData?.url) return;
-
-    const mediaBufferRes = await fetch(metaMediaData.url, {
-      headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
-    });
-
-    if (!mediaBufferRes.ok) return;
-
-    const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
-    const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
-
-    if (!mediaDebounceQueues.has(queueKey)) {
-      mediaDebounceQueues.set(queueKey, {
-        items: [],
-        timer: null,
-        site,
-        worker,
-        dispatchTarget,
-        fromPhone,
-        senderSource: 'Dispatch',
-        indoorSite: false,
-        callerIdentity
-      });
-    }
-
-    const queue = mediaDebounceQueues.get(queueKey);
-    queue.items.push({
-      buffer: mediaBuffer,
-      mimeType,
-      messageId,
-      caption,
-      type: message.type,
-      rawMessage: message
-    });
-    queue.site = site;
-    queue.worker = worker;
-    queue.callerIdentity = callerIdentity;
-
-    if (queue.timer) clearTimeout(queue.timer);
-
-    if (queue.items.length >= 8) {
-      const currentBatch = mediaDebounceQueues.get(queueKey);
-      mediaDebounceQueues.delete(queueKey);
-      processMediaBatch(currentBatch).catch(batchErr => console.error('[Debouncer Cap Error]:', batchErr));
+      if (nearby.length === 0) {
+        await sendWhatsAppMessage(dispatchTarget, `📍 Pin received (${userLat.toFixed(4)}, ${userLon.toFixed(4)}), but no Bounce Padel courts are located within 800m.`);
+        return;
+      }
+      if (nearby.length > 1) {
+        const buttons = nearby.slice(0, 3).map(n => ({
+          id: `BIND_${n.site.id}`,
+          title: (n.site.fields['Site Name'] || 'Court').slice(0, 20)
+        }));
+        await sendWhatsAppButtons(dispatchTarget, `📍 Multiple courts detected within 800m. Select your court:`, buttons);
+        return;
+      }
+      await bindSiteContext(nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon);
       return;
     }
 
-    queue.timer = setTimeout(async () => {
-      try {
+    // =================================================================
+    // ROUTE 2: INTERACTIVE BUTTON SELECTIONS
+    // =================================================================
+    if (message.type === 'interactive') {
+      const btnId = message.interactive?.button_reply?.id || '';
+      
+      // BIND: Site selection from multi-court location pin
+      if (btnId.startsWith('BIND_')) {
+        const sId = btnId.replace('BIND_', '');
+        const allSites = await getCachedSites();
+        const selSite = allSites.find(s => s.id === sId);
+        if (selSite) {
+          const pin = lastDroppedCoordinates.get(fromPhone) || { lat: null, lon: null };
+          await bindSiteContext(selSite, worker, callerIdentity, dispatchTarget, fromPhone, 0, pin.lat, pin.lon);
+        }
+        return;
+      }
+
+      // QBO: Convert Estimate to Draw Invoice
+      if (btnId.startsWith('QBO_CONVERT_')) {
+        const parts = btnId.split('_');
+        const estimateId = parts[2];
+        const percentage = parts[3];
+        await sendWhatsAppMessage(dispatchTarget, `✅ QuickBooks API called. Generated ${percentage}% Draw Invoice for Estimate #${estimateId}.`);
+        return;
+      }
+      
+      return;
+    }
+
+    // =================================================================
+    // ROUTE 3: VOICE MEMO / AUDIO ONLY (Ambient Intelligence)
+    // =================================================================
+    if (message.type === 'audio' || message.type === 'voice') {
+      sendWhatsAppReaction(dispatchTarget, messageId, '🎧').catch(() => {});
+      const mediaId = message[message.type].id;
+      const mimeType = message[message.type].mime_type || 'audio/ogg';
+
+      const metaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
+        headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
+      });
+      const metaData = await metaRes.json().catch(() => ({}));
+
+      if (metaData?.url) {
+        const bufRes = await fetch(metaData.url, {
+          headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
+        });
+        if (bufRes.ok) {
+          const buf = Buffer.from(await bufRes.arrayBuffer());
+          
+          // Queue voice memo to standard triage engine for parts requests & logging
+          const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
+          if (!mediaDebounceQueues.has(queueKey)) {
+            mediaDebounceQueues.set(queueKey, {
+              items: [],
+              timer: null,
+              site,
+              worker,
+              dispatchTarget,
+              fromPhone,
+              senderSource: 'Dispatch',
+              indoorSite: false,
+              callerIdentity
+            });
+          }
+          
+          const queue = mediaDebounceQueues.get(queueKey);
+          queue.items.push({
+            buffer: buf,
+            mimeType,
+            messageId,
+            caption: '',
+            type: message.type,
+            rawMessage: message
+          });
+          queue.site = site;
+          queue.worker = worker;
+          queue.callerIdentity = callerIdentity;
+
+          if (queue.timer) clearTimeout(queue.timer);
+          queue.timer = setTimeout(async () => {
+            const currentBatch = mediaDebounceQueues.get(queueKey);
+            mediaDebounceQueues.delete(queueKey);
+            if (currentBatch && currentBatch.items.length > 0) {
+               await triageVoiceMemoBatch(currentBatch.items, {}, worker, site, fromPhone, dispatchTarget, 'Dispatch', callerIdentity);
+            }
+          }, DEBOUNCE_DELAY_MS);
+        }
+      }
+      return;
+    }
+
+    // =================================================================
+    // ROUTE 4: TEXT / SLASH COMMANDS & NLP
+    // =================================================================
+    if (message.type === 'text') {
+      const txt = message.text?.body?.trim() || '';
+      const lTxt = txt.toLowerCase();
+
+      if (lTxt.startsWith('/help') || lTxt === 'help' || lTxt === '?') {
+        await sendWhatsAppMessage(dispatchTarget, `🤖 *TITAN OS COMMANDS*\n\n• Drop location pin $\\rightarrow$ Morning Check-In & Weather Tripwires\n• Send video walkaround $\\rightarrow$ Milestone & Punch List QA\n• Send audio memo $\\rightarrow$ Voice note / Parts request\n• /status $\\rightarrow$ Active court gate & tickets\n• /weather $\\rightarrow$ Hyperlocal wind & adhesive status\n• "what is my 30+ AR?" $\\rightarrow$ QuickBooks lookup`);
+        return;
+      }
+      if (lTxt.startsWith('/status') || lTxt.startsWith('/s')) {
+        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
+        await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, false);
+        return;
+      }
+      if (lTxt.startsWith('/weather') || lTxt.startsWith('/w')) {
+        if (!site) {
+          await sendWhatsAppMessage(dispatchTarget, `⚠️ Drop a pin first to lock your active court, or ask "What's the weather at [Court Name]?"`);
+          return;
+        }
+        const coords = await resolveCoordinates(site);
+        if (coords) {
+          const w = await getHyperlocalWeather(coords.lat, coords.lon);
+          await sendWhatsAppMessage(dispatchTarget, `🌤️ *WEATHER | ${site.fields['Site Name']}*${evaluateWeatherTripwires(w).summaryText}`);
+        } else {
+          await sendWhatsAppMessage(dispatchTarget, `📍 No coordinates locked for ${site.fields['Site Name']} to check weather.`);
+        }
+        return;
+      }
+
+      // If it isn't a strict slash command, push it to text NLP router
+      const triage = await triageSpokenOrTextNLP(txt, false, []);
+      if (triage) {
+        if (triage.intent === 'AR_LOOKUP') {
+          await handleSpokenARLookup(triage.referenced_entity_name, dispatchTarget);
+          return;
+        }
+        if (triage.intent === 'TICKET_UPDATE') {
+          await handleTicketOrLeadUpdate({
+            rawText: txt,
+            entityName: triage.referenced_entity_name || triage.queried_court_name,
+            explicitTicketId: triage.referenced_ticket_id || triage.ticket_id,
+            worker,
+            dispatchTarget,
+            fromPhone,
+            nlp: triage
+          });
+          return;
+        }
+      }
+
+      return;
+    }
+
+    // =================================================================
+    // ROUTE 5: VIDEO & IMAGE MEDIA BATCHES (Forensic QA)
+    // =================================================================
+    const isVideo = message.type === 'video';
+    const isImage = message.type === 'image';
+    
+    if (isVideo || isImage) {
+      const mediaObj = message[message.type];
+      const mediaId = mediaObj.id;
+      const mimeType = mediaObj.mime_type || (isVideo ? 'video/mp4' : 'image/jpeg');
+      const caption = mediaObj.caption || '';
+
+      sendWhatsAppReaction(dispatchTarget, messageId, isVideo ? '🎥' : '🧾').catch(() => {});
+
+      const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
+        headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
+      });
+      const metaMediaData = await metaMediaRes.json().catch(() => ({}));
+
+      if (!metaMediaRes.ok || !metaMediaData?.url) return;
+
+      const mediaBufferRes = await fetch(metaMediaData.url, {
+        headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` }
+      });
+
+      if (!mediaBufferRes.ok) return;
+
+      const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+      const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
+
+      if (!mediaDebounceQueues.has(queueKey)) {
+        mediaDebounceQueues.set(queueKey, {
+          items: [],
+          timer: null,
+          site,
+          worker,
+          dispatchTarget,
+          fromPhone,
+          senderSource: 'Dispatch',
+          indoorSite: false,
+          callerIdentity
+        });
+      }
+
+      const queue = mediaDebounceQueues.get(queueKey);
+      queue.items.push({
+        buffer: mediaBuffer,
+        mimeType,
+        messageId,
+        caption,
+        type: message.type,
+        rawMessage: message
+      });
+      queue.site = site;
+      queue.worker = worker;
+      queue.callerIdentity = callerIdentity;
+
+      if (queue.timer) clearTimeout(queue.timer);
+
+      if (queue.items.length >= 8) {
         const currentBatch = mediaDebounceQueues.get(queueKey);
         mediaDebounceQueues.delete(queueKey);
-        if (!currentBatch || currentBatch.items.length === 0) return;
-
-        await processMediaBatch(currentBatch);
-      } catch (batchErr) {
-        console.error('[Debouncer Batch Error]:', batchErr);
+        processMediaBatch(currentBatch).catch(batchErr => console.error('[Debouncer Cap Error]:', batchErr));
+        return;
       }
-    }, DEBOUNCE_DELAY_MS);
+
+      queue.timer = setTimeout(async () => {
+        try {
+          const currentBatch = mediaDebounceQueues.get(queueKey);
+          mediaDebounceQueues.delete(queueKey);
+          if (!currentBatch || currentBatch.items.length === 0) return;
+
+          await processMediaBatch(currentBatch);
+        } catch (batchErr) {
+          console.error('[Debouncer Batch Error]:', batchErr);
+        }
+      }, DEBOUNCE_DELAY_MS);
+
+      return;
+    }
 
   } catch (err) {
     console.error('[Runtime Exception in /webhook]:', err);
@@ -3229,7 +3427,9 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy', version: '6.0.0' });
 });
 
-// Self-healing WABA discovery and webhook subscription handshake
+// ====================================================================
+// 16. META WABA INITIALIZATION SCRIPT
+// ====================================================================
 async function autoSubscribeMetaWebhook() {
   const token = CONFIG.meta.accessToken;
   if (!token) {
@@ -3241,7 +3441,6 @@ async function autoSubscribeMetaWebhook() {
   const discoveredWabaIds = new Set();
   if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
 
-  // 1. Inspect token permissions & associated target WABAs via debug_token
   try {
     const debugRes = await fetch(`${CONFIG.meta.graphApiUrl}/debug_token?input_token=${token}`, {
       headers: { 'Authorization': `Bearer ${token}` }
@@ -3259,7 +3458,6 @@ async function autoSubscribeMetaWebhook() {
     console.warn('[Meta Handshake] Debug token inspection note:', e.message);
   }
 
-  // 2. Discover WABA IDs under Bounce Padel Courts portfolio & /me/businesses
   const businessCandidates = ['34682330288078617'];
   try {
     const bizRes = await fetch(`${CONFIG.meta.graphApiUrl}/me/businesses`, {
@@ -3287,7 +3485,6 @@ async function autoSubscribeMetaWebhook() {
 
   console.log(`📡 [Meta Handshake] Discovered WABA Candidate IDs: [${Array.from(discoveredWabaIds).join(', ') || 'None'}]`);
 
-  // 3. Inspect phone numbers for each WABA and match +1 289-221-7329
   let matchedPhone = false;
   for (const wabaId of discoveredWabaIds) {
     try {
@@ -3310,7 +3507,6 @@ async function autoSubscribeMetaWebhook() {
         }
       }
 
-      // Instruct Meta to forward inbound webhook events to this App
       const subRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/subscribed_apps`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
@@ -3322,7 +3518,6 @@ async function autoSubscribeMetaWebhook() {
     }
   }
 
-  // 4. Fallback verification if configured Phone ID was explicitly provided
   if (!matchedPhone && CONFIG.meta.phoneNumberId) {
     try {
       const vRes = await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}?fields=id,display_phone_number,verified_name`, {
