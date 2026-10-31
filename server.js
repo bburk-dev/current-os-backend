@@ -1,10 +1,10 @@
 /**
- * TITAN OS V6.0.10 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.11 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
- * 43. Explicit /link overrides and Global Fleet Executive Ticket Views (/t all)
  * 44. Executive Maintenance Ticket Rollups
  * 45. Terminology scrub (Fleet/Global -> Maintenance/All) & UTC to EST Timezone Lock
+ * 46. INOC Nomenclature Sync (Nominal -> Operational)
  */
 
 process.on('uncaughtException', (err) => {
@@ -17,7 +17,9 @@ process.on('unhandledRejection', (reason, promise) => {
 
 try {
   require('dotenv').config();
-} catch (e) {}
+} catch (e) {
+  // Render injects environment variables natively
+}
 
 const express = require('express');
 const crypto = require('crypto');
@@ -247,7 +249,7 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
   "qa_component": "TABS" | "POSTS" | "MESH" | "GLASS" | "HARDWARE" | "DOORS" | null,
   "blockers_detected": ["Specific impediment, dimensional error, or pending hardware in English"],
   "work_verified": ["Specific verified stage completed in English"],
-  "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "NOMINAL",
+  "status_observed": "MILESTONE_PROGRESS" | "ACTION_REQUIRED" | "COMMISSIONED" | "OPERATIONAL",
   "site_conditions": "Short string in English",
   "action_items": ["Pending black bolt caps", "Pending entrance plates", "Silicone pending", "Swap left door for right door"],
   "summary": "1-2 sentence concise executive summary of visible court progress or defect",
@@ -277,7 +279,7 @@ Write the "whatsapp_status_text" receipt card strictly in the designated TARGET_
   "assignment_type": "Emergency Repair" | "Service" | "Spot Visit Punch" | "Supply Delivery" | "Sales" | "Expense" | "Audit / Inspection" | "Unknown",
   "priority": "Critical" | "High" | "Medium" | "Low",
   "suggested_worker_name": "string or null",
-  "status_observed": "NOMINAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
+  "status_observed": "OPERATIONAL" | "ACTION_REQUIRED" | "HAZARD_OUT_OF_SERVICE",
   "hazard_detected": boolean,
   "defects_identified": ["Specific defect in English"],
   "action_items": ["Action item in English"],
@@ -1569,7 +1571,7 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
   if (holds.length > 0) summaryText += `\n` + holds.join('\n');
   if (warnings.length > 0) summaryText += `\n` + warnings.join('\n');
   if (isNominal) {
-    summaryText += `\n🟢 *Conditions Nominal:* Wind (${weather.windSpeed} km/h), Temp (${weather.temp}°C), and moisture clear for work.`;
+    summaryText += `\n🟢 *Conditions Clear:* Wind (${weather.windSpeed} km/h), Temp (${weather.temp}°C), and moisture clear for work.`;
   }
 
   return { criticalAlerts, holds, warnings, nominal: isNominal, summaryText };
@@ -2714,7 +2716,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.10 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.11 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3435,7 +3437,7 @@ async function processMediaBatch(batch) {
   if (targetedSite) {
       const updatePayload = {
         'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${forensicAudit.summary || 'Audit logged.'}`,
-        'Last Intent': hasBlockers ? 'ACTION_REQUIRED' : 'NOMINAL',
+        'Last Intent': hasBlockers ? 'ACTION_REQUIRED' : 'OPERATIONAL',
         'Blocker Active': hasBlockers
       };
       
@@ -3867,7 +3869,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.10' });
+  res.status(200).json({ status: 'healthy', version: '6.0.11' });
 });
 
 // ====================================================================
@@ -3976,7 +3978,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.10 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.11 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
