@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.1 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.3 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * Production Build Features:
@@ -28,7 +28,7 @@
  * 23. Technical Specs & Border Clearance Copilot (CBSA C13MM / PAPS BOWB)
  * 24. Asset Specification Tracking & Court Types (Padel, Pickleball, Sport, Decorative)
  * 25. Autonomous Self-Healing Meta WABA Subscription & Dynamic Phone ID Sync
- * 26. Dynamic Morning Easter Eggs (Joke/Recipe/Fact) & Proactive Pulse
+ * 26. Dynamic Morning Easter Eggs (Exclusively Dad Jokes) & Proactive Pulse
  * 27. Multi-Court Location Resolver & Context Bound
  * 28. Bilingual Edge Dispatch (Native translations with English persistence)
  * 29. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
@@ -1231,7 +1231,7 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
 // 6. DECOUPLED BLIND VISION CLASSIFIER
 // ====================================================================
 
-async function inspectBlindVisualGroundTruth(mediaItem) {
+async function inspectBlindVisualGroundTruth(mediaItem, batchText = '', dispatchTarget, targetedSiteOverride, site) {
   const payload = {
     system_instruction: { parts: [{ text: INDUSTRIAL_SYSTEM_PROMPT.split('OUTPUT SPECIFICATION')[0] + '\nClassify the physical environment. Is this a padel court? Output JSON {"is_padel_court": boolean, "detected_scene": string}' }] },
     contents: [
@@ -1265,8 +1265,30 @@ async function inspectBlindVisualGroundTruth(mediaItem) {
 
     const data = await res.json();
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    const parsed = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-    return parsed;
+    const visualTruth = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    
+    if (visualTruth.is_padel_court === false) {
+      console.log(`[Vision Bypass] Partial/Macro photo detected (${visualTruth.detected_scene}). Logging to dark matter instead of blocking.`);
+      
+      const bypassNotes = `[PARTIAL SWEEP LOGGED]: \nDetected Scene: ${visualTruth.detected_scene || 'Unknown Hardware / Macro Shot'}\nCaption: ${batchText || 'No caption provided.'}`;
+      
+      if (targetedSiteOverride || site) {
+         await airtableWriteWithAutoDrop('Sites', {
+          'Last Note': bypassNotes,
+          'Last Intent': 'PARTIAL_MEDIA_LOG'
+        }, (targetedSiteOverride || site).id);
+      }
+      
+      const fallbackCard = `📸 *TITAN OS | PARTIAL MEDIA ARCHIVED*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ *Camera Detected:* ${visualTruth.detected_scene || 'Macro shot / Non-court structure'}\n` +
+        `✅ *Action:* Media has been securely logged to the site ledger.\n\n` +
+        `_Note: To verify a full physical gate milestone, ensure the primary court structure is visible in the frame._`;
+        
+      await sendWhatsAppMessage(dispatchTarget, fallbackCard);
+    }
+    
+    return visualTruth;
   } catch (err) {
     return { is_padel_court: true, detected_scene: 'Bypassed on parse error' };
   }
@@ -1278,6 +1300,10 @@ async function inspectBlindVisualGroundTruth(mediaItem) {
 async function bindSiteContext(site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
   userActiveSiteMap.set(fromPhone, site.id);
+  
+  if (worker && worker.id) {
+    airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id).catch(() => {});
+  }
 
   airtableWriteWithAutoDrop('Sites', {
     'Last Note': `[SITE BOUND] ${workerName} checked in (${Math.round(distanceMeters)}m from court).`,
@@ -1523,15 +1549,8 @@ function evaluateWeatherTripwires(weather, targetGate = null) {
 }
 
 async function generateMorningEasterEgg(workerLanguage = 'English') {
-  const topics = [
-    "a short, clean construction dad joke",
-    "a fun, interesting fact about the sport of Padel to help the crew understand the game",
-    "a quick, high-protein jobsite recipe (like something you can make in a microwave, cooler, or thermos)"
-  ];
-  const selectedTopic = topics[Math.floor(Math.random() * topics.length)];
-
   const prompt = `You are a friendly dispatcher for a Bounce Padel court construction crew. 
-  Generate exactly ONE of the following: ${selectedTopic}. 
+  Generate a short, clean, construction-themed dad joke. 
   Write the response entirely in ${workerLanguage}.
   Keep it brief (1-2 sentences max). Add a relevant emoji at the start. Do not use quotes or conversational filler.`;
 
@@ -2604,14 +2623,13 @@ async function handleAssetQuery(nlp, dispatchTarget) {
   }
 }
 
-
 // ====================================================================
-// TITAN OS V6.0.0 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.3 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
 
-// 1. Refresh Cache with New ATP Columns
+// 1. Refresh Cache with New ATP & Lead Time Columns
 async function refreshInventoryCache() {
   try {
     const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Inventory?maxRecords=200`;
@@ -2627,7 +2645,8 @@ async function refreshInventoryCache() {
       available: parseFloat(r.fields['Available']) || 0,
       category: r.fields['Category'] || 'Uncategorized',
       cost: parseFloat(r.fields['Unit Cost']) || 0,
-      bomQty: parseFloat(r.fields['Standard BOM Qty']) || 0
+      bomQty: parseFloat(r.fields['Standard BOM Qty']) || 0,
+      leadTimeDays: parseFloat(r.fields['Lead Time (Days)']) || 0
     }));
     console.log(`📦 [Inventory Engine] Cached ${memoryInventory.length} SKUs in RAM`);
   } catch (err) {
@@ -2677,12 +2696,12 @@ async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
 
   if (deductedItems.length > 0) {
     console.log(`✅ [BOM Engine] Successfully deducted: ${deductedItems.join(', ')}`);
+    await checkLowStockRadar(CONFIG.meta.targetVerifiedPhone);
   }
 }
 
-
 // 3. Automated ATP Reservation (Triggered on Deposit)
-async function reserveCourtBOM(siteName) {
+async function reserveCourtBOM(siteName, dispatchTarget = null) {
   console.log(`📦 [BOM Engine] Deposit received for ${siteName}. Reserving materials in Committed pipeline.`);
   
   for (const item of memoryInventory) {
@@ -2693,9 +2712,96 @@ async function reserveCourtBOM(siteName) {
       await airtableWriteWithAutoDrop('Inventory', { 'Committed': newCommitted }, item.id);
     }
   }
+
+  // Check low stock tripwires immediately upon committing materials
+  await checkLowStockRadar(dispatchTarget || CONFIG.meta.targetVerifiedPhone);
 }
 
-// 4. Spoken Exception Parser (For extra materials used on site)
+// 4. Low-Stock Reorder Radar (Tripwire Scan)
+async function checkLowStockRadar(dispatchTarget) {
+  if (!dispatchTarget) return;
+  const alerts = [];
+
+  for (const item of memoryInventory) {
+    const avail = item.qty - item.committed;
+    // Trigger when stock is critical for BOM items or long lead items (<= 2 court kits available)
+    if ((item.bomQty > 0 || item.leadTimeDays >= 30) && avail <= 2 && item.qty > 0) {
+      alerts.push(`• *${item.name}:* ${Math.max(0, avail)} Avail (${item.leadTimeDays ? item.leadTimeDays + 'd lead time' : 'Reorder needed'})`);
+    }
+  }
+
+  if (alerts.length > 0) {
+    const alertCard = `⚠️ *TITAN OS | REORDER RADAR ALERT*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `Available buffer has reached critical threshold:\n\n` +
+      alerts.slice(0, 5).join('\n') + `\n\n` +
+      `👉 *Action:* Initiate supplier PO to protect forward installation runway.`;
+    await sendWhatsAppMessage(dispatchTarget, alertCard);
+  }
+}
+
+// 5. Spoken & One-Word Yard Inventory Snapshot (/inv, /inventory, /stock)
+async function handleSpokenInventorySnapshot(dispatchTarget) {
+  await refreshInventoryCache();
+  
+  if (!memoryInventory || memoryInventory.length === 0) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Inventory cache is currently empty or updating.`);
+    return;
+  }
+
+  const turf = memoryInventory.filter(i => (i.category || '').toLowerCase().includes('turf'));
+  const glass = memoryInventory.filter(i => (i.category || '').toLowerCase().includes('glass'));
+  const steel = memoryInventory.filter(i => (i.category || '').toLowerCase().includes('steel'));
+  const lights = memoryInventory.filter(i => (i.category || '').toLowerCase().includes('light'));
+  const keyConsumables = memoryInventory.filter(i => (i.category || '').toLowerCase().includes('consumable') && i.bomQty > 0);
+
+  const formatLine = (item) => {
+    const avail = Math.max(0, item.qty - item.committed);
+    const commStr = item.committed > 0 ? ` (Comm: ${item.committed})` : '';
+    return `• *${item.name}:* ${avail} Avail / ${item.qty} On Hand${commStr}`;
+  };
+
+  let card = `📦 *TITAN OS | YARD & INVENTORY SNAPSHOT*\n` +
+             `━━━━━━━━━━━━━━━━━━━━\n`;
+
+  if (turf.length > 0) {
+    card += `🌱 *Turf Rolls & Kits:*\n` + turf.slice(0, 5).map(formatLine).join('\n') + `\n\n`;
+  }
+
+  if (glass.length > 0) {
+    card += `🪟 *Glass Panes:*\n` + glass.slice(0, 3).map(formatLine).join('\n') + `\n\n`;
+  }
+
+  if (steel.length > 0) {
+    card += `🏗️ *Steel & Frames:*\n` + steel.slice(0, 4).map(formatLine).join('\n') + `\n\n`;
+  }
+
+  if (lights.length > 0) {
+    card += `💡 *LED Lighting:*\n` + lights.slice(0, 2).map(formatLine).join('\n') + `\n\n`;
+  }
+
+  if (keyConsumables.length > 0) {
+    card += `🧪 *Key Consumables:*\n` + keyConsumables.slice(0, 3).map(formatLine).join('\n') + `\n\n`;
+  }
+
+  const lowStock = memoryInventory.filter(i => (i.bomQty > 0 || i.leadTimeDays >= 14) && (i.qty - i.committed) <= 2 && i.qty > 0);
+  if (lowStock.length > 0) {
+    card += `⚠️ *REORDER RADAR (Low Stock):*\n`;
+    lowStock.slice(0, 5).forEach(i => {
+      const avail = Math.max(0, i.qty - i.committed);
+      card += `• *${i.name}:* ${avail} Avail (${i.leadTimeDays ? i.leadTimeDays + 'd lead time' : 'Reorder needed'})\n`;
+    });
+    card += `\n`;
+  }
+
+  card += `━━━━━━━━━━━━━━━━━━━━\n` +
+          `📍 *Node:* Central Warehouse & Inventory\n` +
+          `_Text /inv anytime for live yard status._`;
+
+  await sendWhatsAppMessage(dispatchTarget, card.trim());
+}
+
+// 6. Spoken Exception Parser (For extra materials used on site)
 async function processSpokenInventoryException(spokenText) {
   const prompt = `
   Analyze this message: "${spokenText}"
@@ -2722,7 +2828,6 @@ async function processSpokenInventoryException(spokenText) {
     return { matched: false, items: [] };
   }
 }
-
 
 // ====================================================================
 // 14. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
@@ -2814,6 +2919,11 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
       `• *Mode:* PLANNING\n` +
       `• *Readiness:* HOLD: PRE-CON BLOCKED 🔴\n\n` +
       `📋 Queued for INOC to populate specs & deposit.`);
+    return;
+  }
+
+  if (triage.intent === 'INVENTORY_QUERY') {
+    await handleSpokenInventorySnapshot(dispatchTarget);
     return;
   }
 
@@ -3008,7 +3118,6 @@ async function processMediaBatch(batch) {
   }
 
   if (!hasVisualMedia) {
-    // Only audio/text routing 
     return;
   }
 
@@ -3027,18 +3136,9 @@ async function processMediaBatch(batch) {
 
   if (hasVideo) {
     const videoItem = items.find(item => item.type === 'video');
-    const visualTruth = await inspectBlindVisualGroundTruth(videoItem);
-
-    if (visualTruth.is_padel_court === false) {
-      const rejectionCard = `⛔ *TITAN OS | SWEEP REJECTED*\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `⚠️ *Camera Detected:*\n${visualTruth.detected_scene || 'Non-court environment'}\n\n` +
-        `❌ *Verdict:*\nNo padel court structure detected in video frames.\n\n` +
-        `👉 *Action:* Stand inside or at the court perimeter and film the physical structure.`;
-
-      await sendWhatsAppMessage(dispatchTarget, rejectionCard);
-      return;
-    }
+    const visualTruth = await inspectBlindVisualGroundTruth(videoItem, batchText, dispatchTarget, targetedSiteOverride, site);
+    
+    if (visualTruth.is_padel_court === false) return;
   }
 
   // STAGE 2: MULTIMODAL INGESTION
@@ -3069,7 +3169,6 @@ async function processMediaBatch(batch) {
   const checklist = forensicAudit.qa_checklist || {};
   const hasBlockers = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
     checklist.doors_oriented_correctly === false; 
-    // Notice: Minor punchlist items do not flag hasBlockers to allow frictionless progression.
 
   const isFabricationDefect = forensicAudit.defect_origin === 'FABRICATION' ||
     (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop|door/i.test(b)));
@@ -3090,7 +3189,6 @@ async function processMediaBatch(batch) {
 
     const progressPercent = Math.min(1.0, highestGate / TOTAL_GATES);
     
-    // NEW: Handle parallel in-progress gates array
     const inProgressGates = forensicAudit.in_progress_gates || (forensicAudit.in_progress_gate ? [forensicAudit.in_progress_gate] : (highestGate < TOTAL_GATES ? [highestGate + 1] : []));
     
     const inProgressLabels = inProgressGates.map(g => `${g}. ${GATE_NAMES[g] || 'Task'}`).join(', ');
@@ -3146,7 +3244,7 @@ async function processMediaBatch(batch) {
       const allCleared = Array.from(new Set([...previouslyCleared, ...newlyVerifiedGates]));
 
       const updatePayload = {
-        'Cleared Milestones': allCleared, // Sending array format
+        'Cleared Milestones': allCleared,
         'Current Gate': compactGateStatus,
         'Milestone Timestamps': JSON.stringify(milestoneTimestamps),
         'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${cleanSummary}`,
@@ -3168,11 +3266,11 @@ async function processMediaBatch(batch) {
       if (isNewMilestone) {
         console.log(`🎾 [Joy Cannon Triggered] Firing Gate ${highestGate} for ${courtLabel}`);
         await fireInstallationJoyCannon(targetedSite, highestGate, workerName);
-      }
-      
-      // Check for BOM deductions
-      if (highestGate === 2 || highestGate === 4) {
-        await processMilestoneBOMDeduction(targetedSite, `Gate ${highestGate}`);
+        
+        // Execute BOM deductions strictly on net-new milestone verification
+        if (highestGate === 2 || highestGate === 4) {
+          await processMilestoneBOMDeduction(targetedSite, `Gate ${highestGate}`);
+        }
       }
     }
 
@@ -3198,13 +3296,11 @@ async function processMediaBatch(batch) {
       ? `\n📋 *Punch list logged to Daily Assignments.*`
       : `\n✅ *Progress updated in Sites ledger.*`;
 
-    // Dispatch the strictly formatted UI card (ignores generic AI paragraphs)
     await sendWhatsAppMessage(dispatchTarget, installCard);
-
     return;
   }
 
-  // --- RESTORED MAINTENANCE & GENERAL SWEEP UI CARD FORMATTING ---
+  // MAINTENANCE & GENERAL SWEEP UI CARD FORMATTING
   const phaseMap = {
     'INTAKE_BASELINE': 'MAINTENANCE BASELINE',
     'COMPLETION_CLOSEOUT': 'SERVICE COMPLETED',
@@ -3284,7 +3380,6 @@ app.post('/webhook/gamecam', async (req, res) => {
  * Handles incoming events: Location, Voice, Audio, Text, Interactive, Images, and Video
  */
 app.post('/webhook', async (req, res) => {
-  // Acknowledge immediately to prevent Meta from timing out
   res.sendStatus(200);
 
   const body = req.body;
@@ -3303,7 +3398,6 @@ app.post('/webhook', async (req, res) => {
     if (processedMessageMap.has(messageId)) return;
     processedMessageMap.set(messageId, Date.now());
 
-    // Auto-resolve caller identity and contextual court location
     const callerIdentity = await resolveCallerIdentity(fromPhone);
     const sessionSiteId = userActiveSiteMap.get(fromPhone);
     let site = null;
@@ -3404,7 +3498,6 @@ app.post('/webhook', async (req, res) => {
         if (bufRes.ok) {
           const buf = Buffer.from(await bufRes.arrayBuffer());
           
-          // Queue voice memo to standard triage engine for parts requests & logging
           const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
           if (!mediaDebounceQueues.has(queueKey)) {
             mediaDebounceQueues.set(queueKey, {
@@ -3453,15 +3546,33 @@ app.post('/webhook', async (req, res) => {
       const txt = message.text?.body?.trim() || '';
       const lTxt = txt.toLowerCase();
 
+      // Help
       if (lTxt.startsWith('/help') || lTxt === 'help' || lTxt === '?') {
-        await sendWhatsAppMessage(dispatchTarget, `🤖 *TITAN OS COMMANDS*\n\n• Drop location pin $\\rightarrow$ Morning Check-In & Weather Tripwires\n• Send video walkaround $\\rightarrow$ Milestone & Punch List QA\n• Send audio memo $\\rightarrow$ Voice note / Parts request\n• /status $\\rightarrow$ Active court gate & tickets\n• /weather $\\rightarrow$ Hyperlocal wind & adhesive status\n• "what is my 30+ AR?" $\\rightarrow$ QuickBooks lookup`);
+        await sendWhatsAppMessage(dispatchTarget, `🤖 *TITAN OS COMMANDS*\n\n• Drop location pin ➔ Morning Check-In & Weather Tripwires\n• Send video walkaround ➔ Milestone & Punch List QA\n• Send audio memo ➔ Voice note / Parts request\n• /inv or /inventory ➔ Yard stock on hand & committed materials\n• /status ➔ Active court gate & tickets\n• /t ➔ List open field tickets only\n• /weather ➔ Hyperlocal wind & adhesive status\n• /specs ➔ Technical dimensions & CBSA rules\n• "what is my 30+ AR?" ➔ QuickBooks lookup`);
         return;
       }
+
+      // Quick Win: Direct Inventory Snapshot
+      if (lTxt.startsWith('/inv') || lTxt.startsWith('/inventory') || lTxt.startsWith('/stock') || lTxt === 'inv' || lTxt === 'inventory' || lTxt === 'stock') {
+        await handleSpokenInventorySnapshot(dispatchTarget);
+        return;
+      }
+
+      // Status Queries
       if (lTxt.startsWith('/status') || lTxt.startsWith('/s')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, false);
         return;
       }
+
+      // Ticket-Only Queries
+      if (lTxt.startsWith('/t') || lTxt.startsWith('/ticket')) {
+        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
+        await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, true);
+        return;
+      }
+
+      // Weather Queries
       if (lTxt.startsWith('/weather') || lTxt.startsWith('/w')) {
         if (!site) {
           await sendWhatsAppMessage(dispatchTarget, `⚠️ Drop a pin first to lock your active court, or ask "What's the weather at [Court Name]?"`);
@@ -3477,9 +3588,33 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      // Readiness Queries
+      if (lTxt.startsWith('/r') || lTxt.startsWith('/readiness') || lTxt.startsWith('/gate') || lTxt.startsWith('/g')) {
+        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
+        await handleSpokenReadinessQuery(targetQuery, site, dispatchTarget);
+        return;
+      }
+
+      // AR Queries
+      if (lTxt.startsWith('/ar')) {
+        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
+        await handleSpokenARLookup(targetQuery, dispatchTarget);
+        return;
+      }
+
+      // Technical Specs & Border Clearance Queries
+      if (lTxt.startsWith('/specs') || lTxt.startsWith('/border') || lTxt.startsWith('/carm') || /carm|border|pars|paps|customs/i.test(lTxt)) {
+        const handled = handleTechnicalSpecsQuery(txt, dispatchTarget);
+        if (handled) return;
+      }
+
       // If it isn't a strict slash command, push it to text NLP router
       const triage = await triageSpokenOrTextNLP(txt, false, []);
       if (triage) {
+        if (triage.intent === 'INVENTORY_QUERY') {
+          await handleSpokenInventorySnapshot(dispatchTarget);
+          return;
+        }
         if (triage.intent === 'AR_LOOKUP') {
           await handleSpokenARLookup(triage.referenced_entity_name, dispatchTarget);
           return;
@@ -3597,7 +3732,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.0' });
+  res.status(200).json({ status: 'healthy', version: '6.0.3' });
 });
 
 // ====================================================================
@@ -3614,7 +3749,6 @@ async function autoSubscribeMetaWebhook() {
   const discoveredWabaIds = new Set();
   if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
 
-  // 1. Inspect token permissions & associated target WABAs via debug_token
   try {
     const debugRes = await fetch(`${CONFIG.meta.graphApiUrl}/debug_token?input_token=${token}`, {
       headers: { 'Authorization': `Bearer ${token}` }
@@ -3632,7 +3766,6 @@ async function autoSubscribeMetaWebhook() {
     console.warn('[Meta Handshake] Debug token inspection note:', e.message);
   }
 
-  // 2. Discover WABA IDs under Bounce Padel Courts portfolio & /me/businesses
   const businessCandidates = ['34682330288078617'];
   try {
     const bizRes = await fetch(`${CONFIG.meta.graphApiUrl}/me/businesses`, {
@@ -3660,7 +3793,6 @@ async function autoSubscribeMetaWebhook() {
 
   console.log(`📡 [Meta Handshake] Discovered WABA Candidate IDs: [${Array.from(discoveredWabaIds).join(', ') || 'None'}]`);
 
-  // 3. Inspect phone numbers for each WABA and match +1 289-221-7329
   let matchedPhone = false;
   for (const wabaId of discoveredWabaIds) {
     try {
@@ -3683,7 +3815,6 @@ async function autoSubscribeMetaWebhook() {
         }
       }
 
-      // Instruct Meta to forward inbound webhook events to this App
       const subRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/subscribed_apps`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
@@ -3695,7 +3826,6 @@ async function autoSubscribeMetaWebhook() {
     }
   }
 
-  // 4. Fallback verification if configured Phone ID was explicitly provided
   if (!matchedPhone && CONFIG.meta.phoneNumberId) {
     try {
       const vRes = await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}?fields=id,display_phone_number,verified_name`, {
@@ -3711,7 +3841,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.1 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.3 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
