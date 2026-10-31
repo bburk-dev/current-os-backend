@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.0 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.1 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * Production Build Features:
@@ -37,6 +37,8 @@
  * 32. Collaborative Tone Enforcement & UX Emoji Preservation
  * 33. Frictionless Punch List Progression & Decoupled Gate Advancement
  * 34. Parallel Gate Processing (Array Tracking) & V6 Native Supabase SDK Media Engine
+ * 35. Intelligent BOM Depletion Engine (Gate 2 / 4 Physical Tracking)
+ * 36. Available-to-Promise (ATP) Inventory Reservations (Deposit Triggers)
  */
 
 process.on('uncaughtException', (err) => {
@@ -2449,7 +2451,17 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
 
   if (nlp.workflow_mode) { updatePayload['Workflow Mode'] = nlp.workflow_mode; updateNotes.push(`Workflow Mode: ${nlp.workflow_mode}`); }
   if (nlp.site_status_update) { updatePayload['Site Status'] = nlp.site_status_update; updateNotes.push(`Site Status: ${nlp.site_status_update}`); }
-  if (nlp.deposit_status) { updatePayload['Deposit Status'] = nlp.deposit_status; updateNotes.push(`Deposit: ${nlp.deposit_status}`); }
+  
+  if (nlp.deposit_status) { 
+    updatePayload['Deposit Status'] = nlp.deposit_status; 
+    updateNotes.push(`Deposit: ${nlp.deposit_status}`); 
+    
+    // Automatically reserve the BOM when a deposit clears
+    if (nlp.deposit_status.includes('50%') || nlp.deposit_status.includes('Paid') || nlp.deposit_status.includes('40%')) {
+      await reserveCourtBOM(targetSiteName);
+    }
+  }
+  
   if (nlp.foundation_type) { updatePayload['Foundation Type'] = nlp.foundation_type; updateNotes.push(`Foundation: ${nlp.foundation_type}`); }
   if (nlp.slab_pour_date) { updatePayload['Slab Pour Date'] = nlp.slab_pour_date; updateNotes.push(`Slab Poured: ${nlp.slab_pour_date}`); }
   if (nlp.assigned_crew) { updatePayload['Assigned Crew'] = nlp.assigned_crew; updateNotes.push(`Crew: ${nlp.assigned_crew}`); }
@@ -2668,7 +2680,22 @@ async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
   }
 }
 
-// 3. Spoken Exception Parser (For extra materials used on site)
+
+// 3. Automated ATP Reservation (Triggered on Deposit)
+async function reserveCourtBOM(siteName) {
+  console.log(`📦 [BOM Engine] Deposit received for ${siteName}. Reserving materials in Committed pipeline.`);
+  
+  for (const item of memoryInventory) {
+    if (item.bomQty > 0) {
+      const newCommitted = item.committed + item.bomQty;
+      item.committed = newCommitted;
+      // Airtable calculates 'Available' automatically via formula, so we only write 'Committed'
+      await airtableWriteWithAutoDrop('Inventory', { 'Committed': newCommitted }, item.id);
+    }
+  }
+}
+
+// 4. Spoken Exception Parser (For extra materials used on site)
 async function processSpokenInventoryException(spokenText) {
   const prompt = `
   Analyze this message: "${spokenText}"
@@ -3684,7 +3711,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.0 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.1 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
