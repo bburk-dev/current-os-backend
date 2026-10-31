@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.4 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.5 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * Production Build Features:
@@ -42,6 +42,7 @@
  * 37. Instant Yard Inventory Snapshot (/inv, /inventory, /stock)
  * 38. Automated Low-Stock Reorder Radar (Lead-Time Tripwires)
  * 39. Conversational Document & Blueprint Retrieval (/docs, /plans)
+ * 40. Hotfix: Restored evaluateCourtMediaBatch and hardened Airtable Worker write
  */
 
 process.on('uncaughtException', (err) => {
@@ -1239,7 +1240,7 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
 }
 
 // ====================================================================
-// 6. DECOUPLED BLIND VISION CLASSIFIER
+// 6. DECOUPLED BLIND VISION CLASSIFIER & MEDIA EVALUATOR
 // ====================================================================
 
 async function inspectBlindVisualGroundTruth(mediaItem, batchText = '', dispatchTarget, targetedSiteOverride, site) {
@@ -1305,6 +1306,56 @@ async function inspectBlindVisualGroundTruth(mediaItem, batchText = '', dispatch
   }
 }
 
+async function evaluateCourtMediaBatch(items, cumulativeContext) {
+  const contentParts = [
+    { text: `Context: You are evaluating a Padel court at site: ${cumulativeContext.siteName}. The workflow mode is ${cumulativeContext.workflowMode}. The site is currently at Status: ${cumulativeContext.siteStatus}. The target language for the output receipt card is ${cumulativeContext.workerLanguage}.` }
+  ];
+
+  for (const item of items) {
+    if (item.type === 'video' || item.type === 'image') {
+      contentParts.push({
+        inline_data: {
+          mime_type: item.mimeType,
+          data: item.buffer.toString('base64')
+        }
+      });
+    }
+  }
+
+  const payload = {
+    system_instruction: { parts: [{ text: cumulativeContext.workflowMode === 'MAINTENANCE' ? MAINTENANCE_TRIAGE_PROMPT : INDUSTRIAL_SYSTEM_PROMPT }] },
+    contents: [{ parts: contentParts }],
+    generationConfig: {
+      temperature: 0.1,
+      responseMimeType: 'application/json'
+    }
+  };
+
+  try {
+    const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      console.error('[Gemini Evaluation API Error]:', await res.text());
+      return { highest_gate: 0, blockers_detected: [], summary: "API evaluation failed." };
+    }
+
+    const result = await res.json();
+    const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    if (!rawText) return { highest_gate: 0, blockers_detected: [], summary: "Failed to generate evaluation." };
+
+    return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+  } catch (err) {
+    console.error('[Gemini Evaluation Exception]:', err.message);
+    return { highest_gate: 0, blockers_detected: [], summary: "Exception during evaluation." };
+  }
+}
+
 // ====================================================================
 // 6. SITE CONTEXT BINDING & CHECK-IN
 // ====================================================================
@@ -1313,7 +1364,12 @@ async function bindSiteContext(site, worker, callerIdentity, dispatchTarget, fro
   userActiveSiteMap.set(fromPhone, site.id);
   
   if (worker && worker.id) {
-    airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id).catch(() => {});
+    // Wrap in try-catch to prevent a crash if the 'Current Site Bound' field doesn't exist yet
+    try {
+        await airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id);
+    } catch (e) {
+        console.warn(`[Airtable Auto-Healer] Ignored missing 'Current Site Bound' field for worker ${worker.id}`);
+    }
   }
 
   airtableWriteWithAutoDrop('Sites', {
@@ -2661,7 +2717,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.4 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.5 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3787,7 +3843,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.4' });
+  res.status(200).json({ status: 'healthy', version: '6.0.5' });
 });
 
 // ====================================================================
@@ -3896,7 +3952,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.4 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.5 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
