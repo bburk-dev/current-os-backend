@@ -1,10 +1,10 @@
 /**
- * TITAN OS V6.0.8 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.10 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
- * 41. Anti-Hallucination Routing: Require explicit site binding for media processing
- * 42. Joy Cannon Hardcoded Executives & Diagnostic Logging
  * 43. Explicit /link overrides and Global Fleet Executive Ticket Views (/t all)
+ * 44. Executive Maintenance Ticket Rollups
+ * 45. Terminology scrub (Fleet/Global -> Maintenance/All) & UTC to EST Timezone Lock
  */
 
 process.on('uncaughtException', (err) => {
@@ -17,9 +17,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 try {
   require('dotenv').config();
-} catch (e) {
-  // Render injects environment variables natively
-}
+} catch (e) {}
 
 const express = require('express');
 const crypto = require('crypto');
@@ -312,10 +310,11 @@ ROUTING INTENTS:
 16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
 17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
 18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, model/court type, or suppliers of a specific court.
-19. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
-20. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
-21. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
-22. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, blueprints, or CAD files for a specific site.
+19. "MAINTENANCE_QUERY": User is specifically asking to see open maintenance tickets, repair tasks, or service calls across the network.
+20. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
+21. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
+22. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
+23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, blueprints, or CAD files for a specific site.
 
 Extract:
 "queried_court_name": string or null,
@@ -354,7 +353,7 @@ DATABASE FIELD MAPPING OVERRIDES:
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
@@ -698,7 +697,7 @@ async function streamToDarkMatterVault({
 
   const payload = {
     site_id: siteId || null,
-    site_name: siteName || 'Fleet Operations',
+    site_name: siteName || 'Central Operations',
     sender_phone: senderPhone || null,
     sender_name: senderName || 'Field Tech',
     raw_text: rawText,
@@ -881,7 +880,7 @@ async function classifyVisualMediaIntent(items) {
 
 async function handleFinancialReceiptBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity }) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
-  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
   const todayStr = new Date().toISOString().split('T')[0];
 
   const receipts = visualTriage.receipts || [];
@@ -928,7 +927,7 @@ async function handleFinancialReceiptBatch({ items, storageResults, visualTriage
 
   streamToDarkMatterVault({
     siteId: site?.id || null,
-    siteName: site?.fields?.['Site Name'] || 'Fleet Operations',
+    siteName: site?.fields?.['Site Name'] || 'Central Operations',
     senderPhone: fromPhone,
     senderName: workerName,
     rawText: formattedNotes,
@@ -1074,7 +1073,7 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
 
   streamToDarkMatterVault({
     siteId: site?.id || null,
-    siteName: site?.fields?.['Site Name'] || 'Logistics Hub',
+    siteName: site?.fields?.['Site Name'] || 'Central Operations',
     senderPhone: fromPhone,
     senderName: workerName,
     rawText: formattedNotes,
@@ -1105,7 +1104,7 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
 async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId, worker, dispatchTarget, fromPhone, nlp = {} }) {
   const openAssignments = await getCachedOpenAssignments();
   const workerName = worker?.fields?.['Full Name'] || 'Bob';
-  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
 
   let targetTicket = null;
 
@@ -2036,7 +2035,7 @@ async function executeWorkOrderCloseout({ site, targetCourtName, ticketId, resol
 
   const existingNotes = activeTicket.fields['Notes'] || '';
   const workerName = worker?.fields?.['Full Name'] || (fromPhone ? `Tech (+${fromPhone.slice(-4)})` : 'Field Tech');
-  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
   const updatedNotes = `${existingNotes}\n\n[COMPLETED by ${workerName} at ${timeStr}]: ${resolutionNotes}`.trim();
 
   await airtableWriteWithAutoDrop('Daily Assignments', {
@@ -2188,29 +2187,29 @@ async function handleSpokenWeatherQuery(queriedName, fallbackSite, dispatchTarge
   await sendWhatsAppMessage(dispatchTarget, weatherCard);
 }
 
-async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget, isTicketOnly = false) {
+async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget, isTicketOnly = false, isMaintenanceOnly = false) {
   let targetSite = null;
-  let isGlobal = false;
+  let isAllSites = false;
 
-  if (queriedName && (queriedName.toLowerCase() === 'all' || queriedName.toLowerCase() === 'fleet' || queriedName.toLowerCase() === 'global')) {
-    isGlobal = true;
+  if (queriedName && (queriedName.toLowerCase() === 'all' || queriedName.toLowerCase() === 'network')) {
+    isAllSites = true;
   } else {
     if (queriedName) targetSite = await lookupSite(null, queriedName);
     if (!targetSite) targetSite = fallbackSite;
   }
 
-  if (!isGlobal && !targetSite) {
+  if (!isAllSites && !targetSite) {
     await sendWhatsAppMessage(dispatchTarget, `⚠️ Court not found. Check spelling in Airtable.`);
     return;
   }
 
   const workflowMode = targetSite ? (targetSite.fields['Workflow Mode'] || 'INSTALLATION') : 'EXECUTIVE';
-  if (workflowMode === 'EXECUTIVE') isGlobal = true;
+  if (workflowMode === 'EXECUTIVE') isAllSites = true;
 
   const allOpenAssignments = await getCachedOpenAssignments();
   
   let linkedAssignments = [];
-  if (isGlobal) {
+  if (isAllSites) {
     linkedAssignments = allOpenAssignments;
   } else {
     const siteId = targetSite.id;
@@ -2222,16 +2221,22 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
   }
 
   const fieldTickets = linkedAssignments.filter(a => {
-    const type = a.fields['Assignment Type'];
+    const type = a.fields['Assignment Type'] || '';
+    const cat = a.fields['Task Category'] || '';
+    if (isMaintenanceOnly) {
+       return type.toLowerCase().includes('maintenance') || type.toLowerCase().includes('repair') || type.toLowerCase().includes('service') || cat.toLowerCase().includes('maintenance');
+    }
     return type !== 'Sales' && type !== 'Expense';
   });
+  
   const salesLeads = linkedAssignments.filter(a => a.fields['Assignment Type'] === 'Sales');
 
-  let responseCard = isGlobal 
-    ? `🌐 *TITAN OS | GLOBAL FLEET TICKETS*\n━━━━━━━━━━━━━━━━━━━━\n`
-    : `🏟️ *${targetSite.fields['Site Name'].toUpperCase()} | ${isTicketOnly ? 'ACTIVE WORK ORDERS' : 'STATUS'}*\n━━━━━━━━━━━━━━━━━━━━\n`;
+  const titleContext = isMaintenanceOnly ? 'MAINTENANCE TICKETS' : 'ACTIVE WORK ORDERS';
+  let responseCard = isAllSites 
+    ? `🌐 *TITAN OS | ALL ${titleContext}*\n━━━━━━━━━━━━━━━━━━━━\n`
+    : `🏟️ *${targetSite.fields['Site Name'].toUpperCase()} | ${isTicketOnly ? titleContext : 'STATUS'}*\n━━━━━━━━━━━━━━━━━━━━\n`;
 
-  if (!isTicketOnly && !isGlobal) {
+  if (!isTicketOnly && !isAllSites) {
     responseCard += `• Mode: ${workflowMode}\n`;
     responseCard += `• Status: ${targetSite.fields['Site Status'] || 'ACTIVE'}\n`;
     if (workflowMode === 'INSTALLATION') {
@@ -2242,15 +2247,17 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
   }
 
   if (fieldTickets.length === 0) {
-    responseCard += `✅ *Field Tickets:* No open work orders.\n`;
+    responseCard += `✅ *Field Tickets:* No open field tickets.\n`;
   } else {
-    responseCard += `🛠️ *Open Field Tickets (${fieldTickets.length}):*\n`;
+    const headerText = isMaintenanceOnly ? 'Maintenance Tickets' : 'Field Tickets';
+    const header = isAllSites ? `🛠️ *All Open ${headerText} (${fieldTickets.length}):*` : `🛠️ *Open ${headerText} (${fieldTickets.length}):*`;
+    responseCard += `${header}\n`;
     fieldTickets.forEach(t => {
       const ticketNum = t.fields['Assignment ID'] ? `#${t.fields['Assignment ID']}` : 'WO';
       const priority = t.fields['Priority'] || 'Medium';
       
       let siteLabel = '';
-      if (isGlobal && t.fields['Sites'] && memoryCache.sites) {
+      if (isAllSites && t.fields['Sites'] && memoryCache.sites) {
         const matchedSite = memoryCache.sites.find(s => s.id === t.fields['Sites'][0]);
         if (matchedSite) siteLabel = ` [${matchedSite.fields['Site Name']}]`;
       }
@@ -2448,7 +2455,7 @@ async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
       return;
   }
 
-  const headerTitle = isGenericAgingQuery ? 'FLEET AGING REPORT' : invoices[0].CustomerRef.name.toUpperCase();
+  const headerTitle = isGenericAgingQuery ? 'MASTER AGING REPORT' : invoices[0].CustomerRef.name.toUpperCase();
 
   const arCard = `💼 *TITAN OS | AR LOOKUP: ${headerTitle}*\n` +
                  `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -2707,7 +2714,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.8 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.10 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3039,6 +3046,11 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     await handleSpokenSpecsQuery(targetQuery, site, dispatchTarget);
     return;
   }
+  
+  if (triage.intent === 'MAINTENANCE_QUERY') {
+    await handleSpokenStatusQuery('all', site, dispatchTarget, true, true);
+    return;
+  }
 
   if (triage.intent === 'READINESS_QUERY') {
     await handleSpokenReadinessQuery(triage.queried_court_name, site, dispatchTarget);
@@ -3119,7 +3131,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   if (triage.intent === 'DARK_MATTER') {
     const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
-    const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Fleet Operations';
+    const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Central Operations';
 
     const isHighPriority = (triage.gravity_score >= 3 || triage.urgency === 'HIGH' || triage.urgency === 'MEDIUM');
     const isExecMode = site?.fields?.['Workflow Mode'] === 'EXECUTIVE';
@@ -3254,7 +3266,7 @@ async function processMediaBatch(batch) {
   const siteMode = targetedSite?.fields?.['Workflow Mode'] || cumulativeContext.workflowMode || 'INSTALLATION';
   const courtLabel = targetedSite?.fields?.['Site Name'] || 'Assigned Court';
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Installer';
-  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
 
   let weatherTripwires = { summaryText: '' };
   if (targetedSite && !indoorSite) {
@@ -3759,6 +3771,10 @@ app.post('/webhook', async (req, res) => {
           await handleSpokenSpecsQuery(targetQuery, site, dispatchTarget);
           return;
         }
+        if (triage.intent === 'MAINTENANCE_QUERY') {
+          await handleSpokenStatusQuery('all', site, dispatchTarget, true, true);
+          return;
+        }
       }
 
       return;
@@ -3851,7 +3867,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.8' });
+  res.status(200).json({ status: 'healthy', version: '6.0.10' });
 });
 
 // ====================================================================
@@ -3960,7 +3976,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.8 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.10 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
