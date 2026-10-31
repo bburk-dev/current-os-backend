@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.5 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.6 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * Production Build Features:
@@ -43,6 +43,7 @@
  * 38. Automated Low-Stock Reorder Radar (Lead-Time Tripwires)
  * 39. Conversational Document & Blueprint Retrieval (/docs, /plans)
  * 40. Hotfix: Restored evaluateCourtMediaBatch and hardened Airtable Worker write
+ * 41. Anti-Hallucination Routing: Require explicit site binding for media processing
  */
 
 process.on('uncaughtException', (err) => {
@@ -1104,7 +1105,6 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
   if (site?.id) {
     assignmentPayload['Sites'] = [site.id];
-    // Update site status to 'Materials Staged' for pre-arrival freight drop-off
     await airtableWriteWithAutoDrop('Sites', { 'Site Status': 'Materials Staged', 'Last Note': `[FREIGHT STAGED] ${contents}` }, site.id);
   }
 
@@ -3188,6 +3188,18 @@ async function processMediaBatch(batch) {
   const hasVisualMedia = items.some(item => item.type === 'image' || item.type === 'video');
   const hasVideo = items.some(item => item.type === 'video');
 
+  // **ANTI-HALLUCINATION ROUTING:**
+  // If we receive a video/image with NO caption, NO pin, and the worker is NOT bound to a site, do not guess.
+  const batchText = items.map(i => i.caption || i.rawMessage?.text?.body || '').filter(Boolean).join(' ').trim();
+  if (hasVisualMedia && !batchText && !site) {
+    const errorCard = `⚠️ *TITAN OS | SITE UNKNOWN*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `I received your media, but I don't know which court you are at right now.\n\n` +
+      `👉 *Action required:* Please drop a location pin or text the court name, then re-send the video.`;
+    await sendWhatsAppMessage(dispatchTarget, errorCard);
+    return;
+  }
+
   const currentMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
 
   const cumulativeContext = {
@@ -3201,8 +3213,6 @@ async function processMediaBatch(batch) {
     workerLanguage: worker?.fields?.['Language'] || 'English'
   };
 
-  const batchText = items.map(i => i.caption || i.rawMessage?.text?.body || '').filter(Boolean).join(' ').trim();
-
   let storageResults = [];
   if (hasVisualMedia || items.some(i => i.type === 'audio' || i.type === 'voice')) {
     const uploadPromises = items.map(item => uploadToSupabase(item.buffer, item.mimeType));
@@ -3214,6 +3224,12 @@ async function processMediaBatch(batch) {
   if (hasVisualMedia && batchText.length > 3) {
       const triage = await triageSpokenOrTextNLP(batchText, false, []);
       if (triage && triage.intent === 'HISTORICAL_REFERENCE') return;
+      
+      // If the user explicitly typed a court name in the caption, override the active site binding.
+      if (triage && triage.queried_court_name) {
+          const matched = await lookupSite(null, triage.queried_court_name);
+          if (matched) targetedSiteOverride = matched;
+      }
   }
 
   if (!hasVisualMedia) {
@@ -3244,10 +3260,6 @@ async function processMediaBatch(batch) {
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
 
   let targetedSite = targetedSiteOverride || site;
-  if (forensicAudit.spoken_court_name) {
-    const spokenSite = await lookupSite(null, forensicAudit.spoken_court_name);
-    if (spokenSite) targetedSite = spokenSite;
-  }
 
   const siteMode = targetedSite?.fields?.['Workflow Mode'] || cumulativeContext.workflowMode || 'INSTALLATION';
   const courtLabel = targetedSite?.fields?.['Site Name'] || 'Assigned Court';
@@ -3843,7 +3855,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.5' });
+  res.status(200).json({ status: 'healthy', version: '6.0.6' });
 });
 
 // ====================================================================
@@ -3952,7 +3964,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.5 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.6 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
