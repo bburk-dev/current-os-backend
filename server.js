@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.3 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.4 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * Production Build Features:
@@ -39,6 +39,9 @@
  * 34. Parallel Gate Processing (Array Tracking) & V6 Native Supabase SDK Media Engine
  * 35. Intelligent BOM Depletion Engine (Gate 2 / 4 Physical Tracking)
  * 36. Available-to-Promise (ATP) Inventory Reservations (Deposit Triggers)
+ * 37. Instant Yard Inventory Snapshot (/inv, /inventory, /stock)
+ * 38. Automated Low-Stock Reorder Radar (Lead-Time Tripwires)
+ * 39. Conversational Document & Blueprint Retrieval (/docs, /plans)
  */
 
 process.on('uncaughtException', (err) => {
@@ -172,6 +175,12 @@ const COMMAND_MAP = {
   '/specs': 'TECH_SPECS',
   '/border': 'BORDER_CLEARANCE',
   '/carm': 'BORDER_CLEARANCE',
+  '/inv': 'INVENTORY_QUERY',
+  '/inventory': 'INVENTORY_QUERY',
+  '/stock': 'INVENTORY_QUERY',
+  '/docs': 'DOCUMENT_RETRIEVAL',
+  '/plan': 'DOCUMENT_RETRIEVAL',
+  '/plans': 'DOCUMENT_RETRIEVAL',
   '/help': 'HELP',
   '/?': 'HELP'
 };
@@ -342,6 +351,8 @@ ROUTING INTENTS:
 18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, model/court type, or suppliers of a specific court.
 19. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
 20. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
+21. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
+22. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, blueprints, or CAD files for a specific site.
 
 Extract:
 "queried_court_name": string or null,
@@ -380,7 +391,7 @@ DATABASE FIELD MAPPING OVERRIDES:
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
@@ -2315,6 +2326,32 @@ async function handleSpokenMediaRetrieval(queriedName, fallbackSite, dispatchTar
   }
 }
 
+async function handleDocumentRetrieval(queriedName, fallbackSite, dispatchTarget) {
+  let targetSite = null;
+  if (queriedName) targetSite = await lookupSite(null, queriedName);
+  if (!targetSite) targetSite = fallbackSite;
+
+  if (!targetSite) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not find court "${queriedName || 'requested'}". Check spelling in Airtable.`);
+    return;
+  }
+
+  const siteName = targetSite.fields['Site Name'] || 'Requested Court';
+  const docUrl = targetSite.fields['Technical Docs'];
+
+  if (docUrl) {
+    const docCard = `📐 *TITAN OS | TECHNICAL DOCUMENT*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `🏟️ *Court:* ${siteName}\n` +
+                    `📄 *Resource:* Foundation / Technical Plan\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `🔗 *Secure Download Link:*\n${docUrl}`;
+    await sendWhatsAppMessage(dispatchTarget, docCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ No Technical Docs URL found in the ledger for *${siteName}*. Please add the link in Airtable.`);
+  }
+}
+
 async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
   const query = `select * from Invoice where Balance > '0' maxresults 50`;
   const qboData = await qboApiRequest(query);
@@ -2477,7 +2514,7 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
     
     // Automatically reserve the BOM when a deposit clears
     if (nlp.deposit_status.includes('50%') || nlp.deposit_status.includes('Paid') || nlp.deposit_status.includes('40%')) {
-      await reserveCourtBOM(targetSiteName);
+      await reserveCourtBOM(targetSiteName, dispatchTarget);
     }
   }
   
@@ -2624,7 +2661,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.3 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.4 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -2924,6 +2961,12 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   if (triage.intent === 'INVENTORY_QUERY') {
     await handleSpokenInventorySnapshot(dispatchTarget);
+    return;
+  }
+
+  if (triage.intent === 'DOCUMENT_RETRIEVAL') {
+    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+    await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
     return;
   }
 
@@ -3548,13 +3591,20 @@ app.post('/webhook', async (req, res) => {
 
       // Help
       if (lTxt.startsWith('/help') || lTxt === 'help' || lTxt === '?') {
-        await sendWhatsAppMessage(dispatchTarget, `🤖 *TITAN OS COMMANDS*\n\n• Drop location pin ➔ Morning Check-In & Weather Tripwires\n• Send video walkaround ➔ Milestone & Punch List QA\n• Send audio memo ➔ Voice note / Parts request\n• /inv or /inventory ➔ Yard stock on hand & committed materials\n• /status ➔ Active court gate & tickets\n• /t ➔ List open field tickets only\n• /weather ➔ Hyperlocal wind & adhesive status\n• /specs ➔ Technical dimensions & CBSA rules\n• "what is my 30+ AR?" ➔ QuickBooks lookup`);
+        await sendWhatsAppMessage(dispatchTarget, `🤖 *TITAN OS COMMANDS*\n\n• Drop location pin ➔ Morning Check-In & Weather Tripwires\n• Send video walkaround ➔ Milestone & Punch List QA\n• Send audio memo ➔ Voice note / Parts request\n• /inv or /inventory ➔ Yard stock on hand & committed materials\n• /docs ➔ Pull blueprint / foundation PDF\n• /status ➔ Active court gate & tickets\n• /t ➔ List open field tickets only\n• /weather ➔ Hyperlocal wind & adhesive status\n• /specs ➔ Technical dimensions & CBSA rules\n• "what is my 30+ AR?" ➔ QuickBooks lookup`);
         return;
       }
 
       // Quick Win: Direct Inventory Snapshot
       if (lTxt.startsWith('/inv') || lTxt.startsWith('/inventory') || lTxt.startsWith('/stock') || lTxt === 'inv' || lTxt === 'inventory' || lTxt === 'stock') {
         await handleSpokenInventorySnapshot(dispatchTarget);
+        return;
+      }
+
+      // Quick Win: Direct Document Retrieval
+      if (lTxt.startsWith('/docs') || lTxt.startsWith('/plan')) {
+        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
+        await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
         return;
       }
 
@@ -3611,6 +3661,11 @@ app.post('/webhook', async (req, res) => {
       // If it isn't a strict slash command, push it to text NLP router
       const triage = await triageSpokenOrTextNLP(txt, false, []);
       if (triage) {
+        if (triage.intent === 'DOCUMENT_RETRIEVAL') {
+          const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+          await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
+          return;
+        }
         if (triage.intent === 'INVENTORY_QUERY') {
           await handleSpokenInventorySnapshot(dispatchTarget);
           return;
@@ -3732,7 +3787,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.3' });
+  res.status(200).json({ status: 'healthy', version: '6.0.4' });
 });
 
 // ====================================================================
@@ -3841,7 +3896,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.3 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.4 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
