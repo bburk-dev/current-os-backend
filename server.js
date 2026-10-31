@@ -1,10 +1,11 @@
 /**
- * TITAN OS V6.0.11 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.12 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * 44. Executive Maintenance Ticket Rollups
  * 45. Terminology scrub (Fleet/Global -> Maintenance/All) & UTC to EST Timezone Lock
  * 46. INOC Nomenclature Sync (Nominal -> Operational)
+ * 47. Technical Oracle RAG Engine (Autonomous PDF Ingestion)
  */
 
 process.on('uncaughtException', (err) => {
@@ -17,9 +18,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 try {
   require('dotenv').config();
-} catch (e) {
-  // Render injects environment variables natively
-}
+} catch (e) {}
 
 const express = require('express');
 const crypto = require('crypto');
@@ -84,11 +83,12 @@ const supabase = createClient(
 
 const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3500;
-const AMBIENT_CHAT_MODES = ['EXECUTIVE', 'FINANCE', 'LOGISTICS', 'PRODUCTION', 'INVENTORY', 'SPOT_VISIT', 'MAINTENANCE'];
 
 const lastDroppedCoordinates = new Map();
 const userActiveSiteMap = new Map(); 
 const dailyEasterEggTracker = new Map(); 
+
+let oracleFileURIs = [];
 
 // ====================================================================
 // 1A. GLOBAL PROMPTS & CONSTANTS
@@ -317,6 +317,7 @@ ROUTING INTENTS:
 21. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
 22. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
 23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, blueprints, or CAD files for a specific site.
+24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, or specification question that requires reading the proprietary foundation plans, blueprints, or installation manuals.
 
 Extract:
 "queried_court_name": string or null,
@@ -355,7 +356,7 @@ DATABASE FIELD MAPPING OVERRIDES:
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY" | "ORACLE_QUERY",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "ticket_id": integer or null,
@@ -666,6 +667,91 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
   } catch (err) {
     console.error('[QBO API Error]:', err.message);
     return null;
+  }
+}
+
+// ====================================================================
+// 2C. TECHNICAL ORACLE RAG ENGINE (PDF AUTO-INGESTION)
+// ====================================================================
+
+async function syncOracleDocs() {
+  try {
+    console.log('[Oracle Engine] Commencing synchronization with Airtable Knowledge Base...');
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Oracle%20Docs`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!res.ok) {
+       console.warn('[Oracle Engine] Table "Oracle Docs" not found. Skipping.');
+       return;
+    }
+    const data = await res.json();
+    const records = data.records || [];
+    
+    let newUris = [];
+    for (const rec of records) {
+       const attachments = rec.fields['Document'] || [];
+       for (const att of attachments) {
+          if (att.url && att.url.toLowerCase().includes('.pdf')) {
+             const pdfRes = await fetch(att.url);
+             if (!pdfRes.ok) continue;
+             const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
+             
+             const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${CONFIG.gemini.apiKey}`, {
+                method: 'POST',
+                headers: {
+                    'X-Goog-Upload-Protocol': 'raw',
+                    'X-Goog-Upload-Command': 'start, upload, finalize',
+                    'X-Goog-Upload-Header-Content-Length': pdfBuffer.length,
+                    'X-Goog-Upload-Header-Content-Type': 'application/pdf',
+                    'Content-Type': 'application/pdf'
+                },
+                body: pdfBuffer
+             });
+             
+             const uploadData = await uploadRes.json();
+             if (uploadData.file && uploadData.file.uri) {
+                newUris.push(uploadData.file.uri);
+                console.log(`[Oracle Engine] Successfully ingested: ${rec.fields['Title'] || att.filename}`);
+             }
+          }
+       }
+    }
+    oracleFileURIs = newUris;
+    console.log(`[Oracle Engine] Sync complete. ${oracleFileURIs.length} technical documents active in AI memory.`);
+  } catch (e) {
+    console.error('[Oracle Engine] Sync failed:', e.message);
+  }
+}
+
+// Refresh Oracle corpus every 24 hours to prevent Gemini File API 48h expiration
+setInterval(syncOracleDocs, 24 * 60 * 60 * 1000);
+
+async function handleOracleQuery(nlp, dispatchTarget) {
+  if (oracleFileURIs.length === 0) {
+     await sendWhatsAppMessage(dispatchTarget, `⚠️ The Technical Oracle is currently empty or syncing. Please ensure your PDFs are uploaded to the "Oracle Docs" Airtable table.`);
+     return;
+  }
+  
+  const parts = oracleFileURIs.map(uri => ({ file_data: { mime_type: 'application/pdf', file_uri: uri } }));
+  parts.push({ text: `You are the Titan OS Technical Oracle. Answer the following engineering/technical question based STRICTLY on the provided PDF documents. If the answer is not in the documents, state that clearly. Use clean, concise formatting for WhatsApp.\n\nQuestion: ${nlp.transcript_en}` });
+  
+  const payload = {
+    contents: [{ role: 'user', parts }],
+    generationConfig: { temperature: 0.0 }
+  };
+  
+  try {
+     const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+     });
+     const data = await res.json();
+     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Oracle could not parse an answer.';
+     
+     const msg = `🧠 *TITAN OS | TECHNICAL ORACLE*\n━━━━━━━━━━━━━━━━━━━━\n${answer.trim()}`;
+     await sendWhatsAppMessage(dispatchTarget, msg);
+  } catch (err) {
+     await sendWhatsAppMessage(dispatchTarget, `⚠️ Oracle query failed. Please verify the API connection.`);
   }
 }
 
@@ -2716,7 +2802,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.11 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.12 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -2922,6 +3008,91 @@ async function processSpokenInventoryException(spokenText) {
 }
 
 // ====================================================================
+// 2C. TECHNICAL ORACLE RAG ENGINE (PDF AUTO-INGESTION)
+// ====================================================================
+
+async function syncOracleDocs() {
+  try {
+    console.log('[Oracle Engine] Commencing synchronization with Airtable Knowledge Base...');
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Oracle%20Docs`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!res.ok) {
+       console.warn('[Oracle Engine] Table "Oracle Docs" not found. Skipping.');
+       return;
+    }
+    const data = await res.json();
+    const records = data.records || [];
+    
+    let newUris = [];
+    for (const rec of records) {
+       const attachments = rec.fields['Document'] || [];
+       for (const att of attachments) {
+          if (att.url && att.url.toLowerCase().includes('.pdf')) {
+             const pdfRes = await fetch(att.url);
+             if (!pdfRes.ok) continue;
+             const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
+             
+             const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${CONFIG.gemini.apiKey}`, {
+                method: 'POST',
+                headers: {
+                    'X-Goog-Upload-Protocol': 'raw',
+                    'X-Goog-Upload-Command': 'start, upload, finalize',
+                    'X-Goog-Upload-Header-Content-Length': pdfBuffer.length,
+                    'X-Goog-Upload-Header-Content-Type': 'application/pdf',
+                    'Content-Type': 'application/pdf'
+                },
+                body: pdfBuffer
+             });
+             
+             const uploadData = await uploadRes.json();
+             if (uploadData.file && uploadData.file.uri) {
+                newUris.push(uploadData.file.uri);
+                console.log(`[Oracle Engine] Successfully ingested: ${rec.fields['Title'] || att.filename}`);
+             }
+          }
+       }
+    }
+    oracleFileURIs = newUris;
+    console.log(`[Oracle Engine] Sync complete. ${oracleFileURIs.length} technical documents active in AI memory.`);
+  } catch (e) {
+    console.error('[Oracle Engine] Sync failed:', e.message);
+  }
+}
+
+// Refresh Oracle corpus every 24 hours to prevent Gemini File API 48h expiration
+setInterval(syncOracleDocs, 24 * 60 * 60 * 1000);
+
+async function handleOracleQuery(nlp, dispatchTarget) {
+  if (oracleFileURIs.length === 0) {
+     await sendWhatsAppMessage(dispatchTarget, `⚠️ The Technical Oracle is currently empty or syncing. Please ensure your PDFs are uploaded to the "Oracle Docs" Airtable table.`);
+     return;
+  }
+  
+  const parts = oracleFileURIs.map(uri => ({ file_data: { mime_type: 'application/pdf', file_uri: uri } }));
+  parts.push({ text: `You are the Titan OS Technical Oracle. Answer the following engineering/technical question based STRICTLY on the provided PDF documents. If the answer is not in the documents, state that clearly. Use clean, concise formatting for WhatsApp.\n\nQuestion: ${nlp.transcript_en}` });
+  
+  const payload = {
+    contents: [{ role: 'user', parts }],
+    generationConfig: { temperature: 0.0 }
+  };
+  
+  try {
+     const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+     });
+     const data = await res.json();
+     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Oracle could not parse an answer.';
+     
+     const msg = `🧠 *TITAN OS | TECHNICAL ORACLE*\n━━━━━━━━━━━━━━━━━━━━\n${answer.trim()}`;
+     await sendWhatsAppMessage(dispatchTarget, msg);
+  } catch (err) {
+     await sendWhatsAppMessage(dispatchTarget, `⚠️ Oracle query failed. Please verify the API connection.`);
+  }
+}
+
+// ====================================================================
 // 14. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
 
@@ -3051,6 +3222,11 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   
   if (triage.intent === 'MAINTENANCE_QUERY') {
     await handleSpokenStatusQuery('all', site, dispatchTarget, true, true);
+    return;
+  }
+  
+  if (triage.intent === 'ORACLE_QUERY') {
+    await handleOracleQuery(triage, dispatchTarget);
     return;
   }
 
@@ -3777,6 +3953,10 @@ app.post('/webhook', async (req, res) => {
           await handleSpokenStatusQuery('all', site, dispatchTarget, true, true);
           return;
         }
+        if (triage.intent === 'ORACLE_QUERY') {
+          await handleOracleQuery(triage, dispatchTarget);
+          return;
+        }
       }
 
       return;
@@ -3869,7 +4049,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.11' });
+  res.status(200).json({ status: 'healthy', version: '6.0.12' });
 });
 
 // ====================================================================
@@ -3978,7 +4158,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.11 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.12 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
@@ -3997,5 +4177,6 @@ app.listen(PORT, '0.0.0.0', async () => {
     await getCachedContacts();
     await getCachedOpenAssignments();
     await refreshInventoryCache();
+    await syncOracleDocs();
   } catch (err) {}
 });
