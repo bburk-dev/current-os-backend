@@ -1,50 +1,10 @@
 /**
- * TITAN OS V6.0.7 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.8 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
- * Production Build Features:
- * 1. Closed-Loop Autonomous Factory QA Bridge (Blameless Machine)
- * 2. Logistics Missing Parts Bridge & Claim Deliveries
- * 3. Hardened Multimodal Intent Override (Captions & Trailing Text)
- * 4. 1-on-1 Sandbox & Direct DM Resilience
- * 5. Orphan Ticket Auto-Healing
- * 6. Dynamic Session Site Overrides
- * 7. Relational Ticket & Lead Reassignment Engine (Foreign Key Auto-Linker)
- * 8. Multimodal Commercial Sales Lead Ingestion
- * 9. Interactive Field Note Promotion
- * 10. Dynamic Seasonal Closeout Engine
- * 11. Silent Expense Ghost Routing (QuickBooks Sync Ready)
- * 12. Resilient Meta Dispatch with Auto-Retry
- * 13. Autonomous Zero-Touch Provisioning
- * 14. Milestone-Aware Joy Cannon (Hub-and-Spoke Fan-Out)
- * 15. Proactive Weather Tripwire Matrix (Crane-Free & Critical Alert Split)
- * 16. On-Arrival Proactive Scan & Auto-Bind Site Context (800m Radius)
- * 17. Conversational Spoken Lookups & Relational Cross-Referencing
- * 18. Voice-to-Integer Unstructured Freight Ledger
- * 19. Media Retrieval Engine (Direct URL Injection to Sites Table)
- * 20. Headless Finance Copilot: AR Lookups, Dunning, Percentage Estimates, & Net-New Invoicing
- * 21. Actionable State Handler: Conversational Airtable Database Admin
- * 22. Autonomous Milestone Velocity Tracking (Gate 1 to Gate 8)
- * 23. Technical Specs & Border Clearance Copilot (CBSA C13MM / PAPS BOWB)
- * 24. Asset Specification Tracking & Court Types (Padel, Pickleball, Sport, Decorative)
- * 25. Autonomous Self-Healing Meta WABA Subscription & Dynamic Phone ID Sync
- * 26. Dynamic Morning Easter Eggs (Exclusively Dad Jokes) & Proactive Pulse
- * 27. Multi-Court Location Resolver & Context Bound
- * 28. Bilingual Edge Dispatch (Native translations with English persistence)
- * 29. Auto-E.164 Phone Sanitization & Background Autonomous Geocoding Sweep
- * 30. i-NOC Dashboard Blocker Tripwires & Reverse Logistics Tracking
- * 31. Asset Tracker: "Where's the Hilti?" Autonomous Equipment Management
- * 32. Collaborative Tone Enforcement & UX Emoji Preservation
- * 33. Frictionless Punch List Progression & Decoupled Gate Advancement
- * 34. Parallel Gate Processing (Array Tracking) & V6 Native Supabase SDK Media Engine
- * 35. Intelligent BOM Depletion Engine (Gate 2 / 4 Physical Tracking)
- * 36. Available-to-Promise (ATP) Inventory Reservations (Deposit Triggers)
- * 37. Instant Yard Inventory Snapshot (/inv, /inventory, /stock)
- * 38. Automated Low-Stock Reorder Radar (Lead-Time Tripwires)
- * 39. Conversational Document & Blueprint Retrieval (/docs, /plans)
- * 40. Hotfix: Restored evaluateCourtMediaBatch and hardened Airtable Worker write
  * 41. Anti-Hallucination Routing: Require explicit site binding for media processing
  * 42. Joy Cannon Hardcoded Executives & Diagnostic Logging
+ * 43. Explicit /link overrides and Global Fleet Executive Ticket Views (/t all)
  */
 
 process.on('uncaughtException', (err) => {
@@ -161,8 +121,8 @@ const COMMAND_MAP = {
   '/maintenance': 'MODE_MAINTENANCE',
   '/i': 'MODE_INSTALLATION',
   '/install': 'MODE_INSTALLATION',
-  '/l': 'LINK_SITE',
-  '/link': 'LINK_SITE',
+  '/l': 'EXPLICIT_LINK',
+  '/link': 'EXPLICIT_LINK',
   '/map': 'LOCATION',
   '/loc': 'LOCATION',
   '/location': 'LOCATION',
@@ -1106,7 +1066,6 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
   if (site?.id) {
     assignmentPayload['Sites'] = [site.id];
-    // Update site status to 'Materials Staged' for pre-arrival freight drop-off
     await airtableWriteWithAutoDrop('Sites', { 'Site Status': 'Materials Staged', 'Last Note': `[FREIGHT STAGED] ${contents}` }, site.id);
   }
 
@@ -2231,27 +2190,36 @@ async function handleSpokenWeatherQuery(queriedName, fallbackSite, dispatchTarge
 
 async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget, isTicketOnly = false) {
   let targetSite = null;
-  if (queriedName) targetSite = await lookupSite(null, queriedName);
-  if (!targetSite) targetSite = fallbackSite;
+  let isGlobal = false;
 
-  if (!targetSite) {
+  if (queriedName && (queriedName.toLowerCase() === 'all' || queriedName.toLowerCase() === 'fleet' || queriedName.toLowerCase() === 'global')) {
+    isGlobal = true;
+  } else {
+    if (queriedName) targetSite = await lookupSite(null, queriedName);
+    if (!targetSite) targetSite = fallbackSite;
+  }
+
+  if (!isGlobal && !targetSite) {
     await sendWhatsAppMessage(dispatchTarget, `⚠️ Court not found. Check spelling in Airtable.`);
     return;
   }
 
-  const siteId = targetSite.id;
-  const siteName = targetSite.fields['Site Name'];
-  const currentGate = targetSite.fields['Current Gate'] || 'No Gate Set';
-  const workflowMode = targetSite.fields['Workflow Mode'] || 'INSTALLATION';
-  const siteStatus = targetSite.fields['Site Status'] || 'ACTIVE';
-  const lastNote = targetSite.fields['Last Note'] || 'No notes logged';
+  const workflowMode = targetSite ? (targetSite.fields['Workflow Mode'] || 'INSTALLATION') : 'EXECUTIVE';
+  if (workflowMode === 'EXECUTIVE') isGlobal = true;
 
   const allOpenAssignments = await getCachedOpenAssignments();
-  const linkedAssignments = allOpenAssignments.filter(record => {
-    const s = record.fields['Sites'] || record.fields['Site'] || [];
-    const siteIds = Array.isArray(s) ? s : [s];
-    return siteIds.includes(siteId);
-  });
+  
+  let linkedAssignments = [];
+  if (isGlobal) {
+    linkedAssignments = allOpenAssignments;
+  } else {
+    const siteId = targetSite.id;
+    linkedAssignments = allOpenAssignments.filter(record => {
+      const s = record.fields['Sites'] || record.fields['Site'] || [];
+      const siteIds = Array.isArray(s) ? s : [s];
+      return siteIds.includes(siteId);
+    });
+  }
 
   const fieldTickets = linkedAssignments.filter(a => {
     const type = a.fields['Assignment Type'];
@@ -2259,15 +2227,17 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
   });
   const salesLeads = linkedAssignments.filter(a => a.fields['Assignment Type'] === 'Sales');
 
-  let responseCard = `🏟️ *${siteName.toUpperCase()} | ${isTicketOnly ? 'ACTIVE WORK ORDERS' : 'STATUS'}*\n━━━━━━━━━━━━━━━━━━━━\n`;
+  let responseCard = isGlobal 
+    ? `🌐 *TITAN OS | GLOBAL FLEET TICKETS*\n━━━━━━━━━━━━━━━━━━━━\n`
+    : `🏟️ *${targetSite.fields['Site Name'].toUpperCase()} | ${isTicketOnly ? 'ACTIVE WORK ORDERS' : 'STATUS'}*\n━━━━━━━━━━━━━━━━━━━━\n`;
 
-  if (!isTicketOnly) {
+  if (!isTicketOnly && !isGlobal) {
     responseCard += `• Mode: ${workflowMode}\n`;
-    responseCard += `• Status: ${siteStatus}\n`;
+    responseCard += `• Status: ${targetSite.fields['Site Status'] || 'ACTIVE'}\n`;
     if (workflowMode === 'INSTALLATION') {
-      responseCard += `• Gate: ${currentGate}\n`;
+      responseCard += `• Gate: ${targetSite.fields['Current Gate'] || 'No Gate Set'}\n`;
     }
-    responseCard += `• Last Update: ${lastNote.slice(0, 100)}\n`;
+    responseCard += `• Last Update: ${(targetSite.fields['Last Note'] || 'No notes logged').slice(0, 100)}\n`;
     responseCard += `━━━━━━━━━━━━━━━━━━━━\n`;
   }
 
@@ -2278,6 +2248,12 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
     fieldTickets.forEach(t => {
       const ticketNum = t.fields['Assignment ID'] ? `#${t.fields['Assignment ID']}` : 'WO';
       const priority = t.fields['Priority'] || 'Medium';
+      
+      let siteLabel = '';
+      if (isGlobal && t.fields['Sites'] && memoryCache.sites) {
+        const matchedSite = memoryCache.sites.find(s => s.id === t.fields['Sites'][0]);
+        if (matchedSite) siteLabel = ` [${matchedSite.fields['Site Name']}]`;
+      }
       
       let assignedWorkers = '';
       if (Array.isArray(t.fields['Worker']) && t.fields['Worker'].length > 0) {
@@ -2295,13 +2271,13 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
 
       const category = t.fields['Task Category'] || t.fields['Assignment Type'] || 'Task';
       const rawNote = t.fields['Notes'] || '';
-      const cleanNote = rawNote.replace(/\n/g, ' ').replace(/^\[.*?\]\s*/, '').slice(0, 120);
+      const cleanNote = rawNote.replace(/\n/g, ' ').replace(/^\[.*?\]\s*/, '').slice(0, 80);
       
-      responseCard += `• *${ticketNum}* [${priority}] *${category}*${assignedWorkers}\n  └ _${cleanNote || 'No details provided.'}_\n`;
+      responseCard += `• *${ticketNum}*${siteLabel} [${priority}] *${category}*${assignedWorkers}\n  └ _${cleanNote || 'No details provided.'}_\n`;
     });
   }
 
-  if (salesLeads.length > 0) {
+  if (salesLeads.length > 0 && !isTicketOnly) {
     responseCard += `\n💼 *Commercial Leads (${salesLeads.length}):*\n`;
     salesLeads.forEach(s => {
       const leadNum = s.fields['Assignment ID'] ? `#${s.fields['Assignment ID']}` : 'LEAD';
@@ -2309,6 +2285,10 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
       const cleanDesc = rawNote.split('\n')[0].replace(/\[COMMERCIAL LEAD —\s*/i, '').replace(/\]/, '').slice(0, 45);
       responseCard += `• *${leadNum}*: ${cleanDesc || 'Inbound Sales Lead'}\n`;
     });
+  }
+
+  if (responseCard.length > 3500) {
+      responseCard = responseCard.slice(0, 3500) + `\n\n... (List truncated. View Airtable for full list).`;
   }
 
   await sendWhatsAppMessage(dispatchTarget, responseCard.trim());
@@ -2727,7 +2707,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.7 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.8 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3666,6 +3646,26 @@ app.post('/webhook', async (req, res) => {
     if (message.type === 'text') {
       const txt = message.text?.body?.trim() || '';
       const lTxt = txt.toLowerCase();
+      
+      // Explicit Site Linking Bypass
+      if (lTxt.startsWith('/link ') || lTxt.startsWith('/l ')) {
+        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
+        const matched = await lookupSite(null, targetQuery);
+        if (matched) {
+          await bindSiteContext(matched, callerIdentity.workerRecord, callerIdentity, fromPhone, fromPhone, 0, null, null);
+        } else {
+          await sendWhatsAppMessage(fromPhone, `⚠️ Could not find site "${targetQuery}" to link to.`);
+        }
+        return;
+      }
+      
+      // Handle explicit global ticket requests or local status
+      if (lTxt.startsWith('/t') || lTxt.startsWith('/status') || lTxt.startsWith('/s')) {
+        const isTicketOnly = lTxt.startsWith('/t');
+        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
+        await handleSpokenStatusQuery(targetQuery, site, fromPhone, isTicketOnly);
+        return;
+      }
 
       // Help
       if (lTxt.startsWith('/help') || lTxt === 'help' || lTxt === '?') {
@@ -3683,20 +3683,6 @@ app.post('/webhook', async (req, res) => {
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/plan')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
-        return;
-      }
-
-      // Status Queries
-      if (lTxt.startsWith('/status') || lTxt.startsWith('/s')) {
-        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
-        await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, false);
-        return;
-      }
-
-      // Ticket-Only Queries
-      if (lTxt.startsWith('/t') || lTxt.startsWith('/ticket')) {
-        const targetQuery = txt.split(' ').slice(1).join(' ').trim();
-        await handleSpokenStatusQuery(targetQuery, site, dispatchTarget, true);
         return;
       }
 
@@ -3865,7 +3851,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.7' });
+  res.status(200).json({ status: 'healthy', version: '6.0.8' });
 });
 
 // ====================================================================
@@ -3974,7 +3960,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.7 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.8 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
