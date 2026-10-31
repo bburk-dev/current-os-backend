@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.6 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.7 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * Production Build Features:
@@ -44,6 +44,7 @@
  * 39. Conversational Document & Blueprint Retrieval (/docs, /plans)
  * 40. Hotfix: Restored evaluateCourtMediaBatch and hardened Airtable Worker write
  * 41. Anti-Hallucination Routing: Require explicit site binding for media processing
+ * 42. Joy Cannon Hardcoded Executives & Diagnostic Logging
  */
 
 process.on('uncaughtException', (err) => {
@@ -1105,6 +1106,7 @@ async function handleFreightLogisticsBatch({ items, storageResults, visualTriage
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
   if (site?.id) {
     assignmentPayload['Sites'] = [site.id];
+    // Update site status to 'Materials Staged' for pre-arrival freight drop-off
     await airtableWriteWithAutoDrop('Sites', { 'Site Status': 'Materials Staged', 'Last Note': `[FREIGHT STAGED] ${contents}` }, site.id);
   }
 
@@ -1920,6 +1922,9 @@ async function fanOutToSubscribers(phoneNumbersString, messageBody, buttons = []
 
 async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = 'A crew member') {
   try {
+    // 1. Static Hardcoded Executives
+    const staticExecutivePhones = '14379287172, 13435405666'; // Bob & Rob
+    
     const subscribedPhones = siteRecord.fields['Subscribed Phones']; // Internal Execs / PMs
     const linkedContactIds = siteRecord.fields['Linked Contacts'] || []; // External Clients
 
@@ -1992,7 +1997,12 @@ async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = '
 
     if (!celebrationCard) return;
 
+    // Send to Hardcoded Executives
+    console.log(`[Joy Cannon] Dispatching to Static Executives: ${staticExecutivePhones}`);
+    await fanOutToSubscribers(staticExecutivePhones, celebrationCard);
+
     if (subscribedPhones) {
+      console.log(`[Joy Cannon] Dispatching to Subscribed Phones: ${subscribedPhones}`);
       await fanOutToSubscribers(subscribedPhones, celebrationCard);
     }
 
@@ -2717,7 +2727,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.5 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.7 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3855,7 +3865,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.6' });
+  res.status(200).json({ status: 'healthy', version: '6.0.7' });
 });
 
 // ====================================================================
@@ -3964,7 +3974,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.6 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.7 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
