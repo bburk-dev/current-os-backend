@@ -6,6 +6,7 @@
  * 45. Terminology scrub (Fleet/Global -> Maintenance/All) & UTC to EST Timezone Lock
  * 46. INOC Nomenclature Sync (Nominal -> Operational)
  * 47. Technical Oracle RAG Engine (Autonomous PDF Ingestion)
+ * 48. Autonomous Bulk Site Creation via Multimodal NLP (CREATE_SITES)
  */
 
 process.on('uncaughtException', (err) => {
@@ -318,9 +319,13 @@ ROUTING INTENTS:
 22. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
 23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, blueprints, or CAD files for a specific site.
 24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, or specification question that requires reading the proprietary foundation plans, blueprints, or installation manuals.
+25. "CREATE_SITES": User is requesting to create one or multiple new sites/courts. The user will list the names of the courts. Extract the list of names and any provided construction specifications (manufacturer, turf color, steel color, model type, etc.) to apply across all of them.
 
 Extract:
 "queried_court_name": string or null,
+"matched_site_name": string or null,
+"new_site_names": ["string"] or [],
+"ticket_id": integer or null,
 "referenced_ticket_id": integer or null,
 "referenced_entity_name": string or null,
 "reassign_site_name": string or null,
@@ -356,9 +361,10 @@ DATABASE FIELD MAPPING OVERRIDES:
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY" | "ORACLE_QUERY",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY" | "ORACLE_QUERY" | "CREATE_SITES",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
+  "new_site_names": ["string"],
   "ticket_id": integer or null,
   "referenced_ticket_id": integer or null,
   "referenced_entity_name": "string or null",
@@ -2709,6 +2715,78 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
   await sendWhatsAppMessage(dispatchTarget, confirmCard);
 }
 
+async function handleBulkSiteCreation(nlp, dispatchTarget, fromPhone) {
+  if (!nlp.new_site_names || nlp.new_site_names.length === 0) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ I heard a bulk creation command, but couldn't extract the specific court names.`);
+    return;
+  }
+
+  const recentPin = lastDroppedCoordinates.get(fromPhone);
+  let locationString = null;
+  if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
+    locationString = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+    lastDroppedCoordinates.delete(fromPhone); // Clear pin after consumption
+  }
+
+  const createdSites = [];
+  const specsToApply = {};
+
+  // Extract universally applied specifications
+  if (nlp.foundation_type) specsToApply['Foundation Type'] = nlp.foundation_type;
+  if (nlp.manufacturer) specsToApply['Manufacturer'] = nlp.manufacturer;
+  if (nlp.steel_color) specsToApply['Steel Color'] = nlp.steel_color;
+  if (nlp.turf_color) specsToApply['Turf Color'] = nlp.turf_color;
+  if (nlp.turf_supplier) specsToApply['Turf Supplier'] = nlp.turf_supplier;
+  if (nlp.model_type) specsToApply['Model Type'] = nlp.model_type;
+  if (nlp.glass_thickness) specsToApply['Glass Thickness'] = nlp.glass_thickness;
+  if (nlp.year_installed) specsToApply['Year Installed'] = nlp.year_installed;
+  if (nlp.deposit_status) specsToApply['Deposit Status'] = nlp.deposit_status;
+
+  try {
+    for (const siteName of nlp.new_site_names) {
+      const newRecordPayload = {
+        'Site Name': siteName.trim(),
+        'Workflow Mode': 'PLANNING',
+        'Site Status': 'ACTIVE',
+        'Last Note': `[SITE BATCH CREATED - Specs Synced]`,
+        ...specsToApply
+      };
+
+      if (locationString) {
+        newRecordPayload['Site location'] = locationString;
+      }
+
+      const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
+      if (createdSite?.id) {
+        createdSites.push(siteName.trim());
+      }
+    }
+
+    if (createdSites.length > 0) {
+      invalidateAirtableCache('sites');
+
+      let specSummary = Object.entries(specsToApply).map(([k, v]) => `• ${k}: ${v}`).join('\n');
+      if (!specSummary) specSummary = "No bulk specs provided. Populated with defaults.";
+
+      const msg = `🏟️ *TITAN OS | BULK SITES CREATED*\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `✅ Successfully created ${createdSites.length} sites:\n` +
+                  createdSites.map(s => `• ${s}`).join('\n') + `\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `📋 *Specs Applied to All:*\n${specSummary}\n\n` +
+                  (locationString ? `📍 *Coordinates Locked:* ${locationString}\n` : '') +
+                  `_Airtable ledger updated._`;
+      
+      await sendWhatsAppMessage(dispatchTarget, msg);
+    } else {
+      await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create the sites in Airtable. Check API schema logs.`);
+    }
+  } catch (e) {
+    console.error('[Bulk Site Creation Exception]:', e);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Exception during bulk site creation.`);
+  }
+}
+
 async function handleSpokenSpecsQuery(queriedName, fallbackSite, dispatchTarget) {
   let targetSite = null;
   if (queriedName) targetSite = await lookupSite(null, queriedName);
@@ -3008,91 +3086,6 @@ async function processSpokenInventoryException(spokenText) {
 }
 
 // ====================================================================
-// 2C. TECHNICAL ORACLE RAG ENGINE (PDF AUTO-INGESTION)
-// ====================================================================
-
-async function syncOracleDocs() {
-  try {
-    console.log('[Oracle Engine] Commencing synchronization with Airtable Knowledge Base...');
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Oracle%20Docs`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok) {
-       console.warn('[Oracle Engine] Table "Oracle Docs" not found. Skipping.');
-       return;
-    }
-    const data = await res.json();
-    const records = data.records || [];
-    
-    let newUris = [];
-    for (const rec of records) {
-       const attachments = rec.fields['Document'] || [];
-       for (const att of attachments) {
-          if (att.url && att.url.toLowerCase().includes('.pdf')) {
-             const pdfRes = await fetch(att.url);
-             if (!pdfRes.ok) continue;
-             const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
-             
-             const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${CONFIG.gemini.apiKey}`, {
-                method: 'POST',
-                headers: {
-                    'X-Goog-Upload-Protocol': 'raw',
-                    'X-Goog-Upload-Command': 'start, upload, finalize',
-                    'X-Goog-Upload-Header-Content-Length': pdfBuffer.length,
-                    'X-Goog-Upload-Header-Content-Type': 'application/pdf',
-                    'Content-Type': 'application/pdf'
-                },
-                body: pdfBuffer
-             });
-             
-             const uploadData = await uploadRes.json();
-             if (uploadData.file && uploadData.file.uri) {
-                newUris.push(uploadData.file.uri);
-                console.log(`[Oracle Engine] Successfully ingested: ${rec.fields['Title'] || att.filename}`);
-             }
-          }
-       }
-    }
-    oracleFileURIs = newUris;
-    console.log(`[Oracle Engine] Sync complete. ${oracleFileURIs.length} technical documents active in AI memory.`);
-  } catch (e) {
-    console.error('[Oracle Engine] Sync failed:', e.message);
-  }
-}
-
-// Refresh Oracle corpus every 24 hours to prevent Gemini File API 48h expiration
-setInterval(syncOracleDocs, 24 * 60 * 60 * 1000);
-
-async function handleOracleQuery(nlp, dispatchTarget) {
-  if (oracleFileURIs.length === 0) {
-     await sendWhatsAppMessage(dispatchTarget, `⚠️ The Technical Oracle is currently empty or syncing. Please ensure your PDFs are uploaded to the "Oracle Docs" Airtable table.`);
-     return;
-  }
-  
-  const parts = oracleFileURIs.map(uri => ({ file_data: { mime_type: 'application/pdf', file_uri: uri } }));
-  parts.push({ text: `You are the Titan OS Technical Oracle. Answer the following engineering/technical question based STRICTLY on the provided PDF documents. If the answer is not in the documents, state that clearly. Use clean, concise formatting for WhatsApp.\n\nQuestion: ${nlp.transcript_en}` });
-  
-  const payload = {
-    contents: [{ role: 'user', parts }],
-    generationConfig: { temperature: 0.0 }
-  };
-  
-  try {
-     const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-     });
-     const data = await res.json();
-     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Oracle could not parse an answer.';
-     
-     const msg = `🧠 *TITAN OS | TECHNICAL ORACLE*\n━━━━━━━━━━━━━━━━━━━━\n${answer.trim()}`;
-     await sendWhatsAppMessage(dispatchTarget, msg);
-  } catch (err) {
-     await sendWhatsAppMessage(dispatchTarget, `⚠️ Oracle query failed. Please verify the API connection.`);
-  }
-}
-
-// ====================================================================
 // 14. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
 
@@ -3149,39 +3142,8 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 
   if (triage.intent === 'PURE_NOISE' || triage.intent === 'HISTORICAL_REFERENCE') return;
 
-  const combinedTranscript = (triage.transcript_en || '').toLowerCase();
-  const newSiteMatch = combinedTranscript.match(/(?:create|add|new)\s+(?:new\s+)?site\s*[-:]?\s*["“']?([^"”']+)["”']?/i);
-
-  if (newSiteMatch) {
-    const newSiteName = newSiteMatch[1].trim();
-    const recentPin = lastDroppedCoordinates.get(fromPhone);
-
-    const newRecordPayload = {
-      'Site Name': newSiteName,
-      'Workflow Mode': 'PLANNING',
-      'Site Status': 'ACTIVE',
-      'Last Note': `[SITE VISIT - Created via Spoken Audio on ${new Date().toLocaleDateString()}]`
-    };
-
-    if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
-      newRecordPayload['Site location'] = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
-      lastDroppedCoordinates.delete(fromPhone);
-    }
-
-    const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
-    invalidateAirtableCache('sites');
-
-    if (createdSite?.id) {
-      if (fromPhone) userActiveSiteMap.set(fromPhone, createdSite.id);
-      if (dispatchTarget) userActiveSiteMap.set(dispatchTarget, createdSite.id);
-    }
-
-    await sendWhatsAppMessage(dispatchTarget, `🏟️ *TITAN OS | NEW SITE CREATED*\n\n` +
-      `• *Court:* ${newSiteName}\n` +
-      (newRecordPayload['Site location'] ? `• *Coordinates:* ${newRecordPayload['Site location']}\n` : '') +
-      `• *Mode:* PLANNING\n` +
-      `• *Readiness:* HOLD: PRE-CON BLOCKED 🔴\n\n` +
-      `📋 Queued for INOC to populate specs & deposit.`);
+  if (triage.intent === 'CREATE_SITES') {
+    await handleBulkSiteCreation(triage, dispatchTarget, fromPhone);
     return;
   }
 
@@ -3915,6 +3877,10 @@ app.post('/webhook', async (req, res) => {
       // If it isn't a strict slash command, push it to text NLP router
       const triage = await triageSpokenOrTextNLP(txt, false, []);
       if (triage) {
+        if (triage.intent === 'CREATE_SITES') {
+          await handleBulkSiteCreation(triage, dispatchTarget, fromPhone);
+          return;
+        }
         if (triage.intent === 'DOCUMENT_RETRIEVAL') {
           const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
           await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
