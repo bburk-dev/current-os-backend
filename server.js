@@ -537,11 +537,82 @@ function invalidateAirtableCache(entity = 'all') {
 }
 
 // ====================================================================
-// 1B. ROLE-BASED ACCESS CONTROL (RBAC)
+// 1B. ROLE-BASED ACCESS CONTROL (RBAC) & CRON JOBS
 // ====================================================================
 function isAuthorizedForFinance(callerIdentity) {
   const role = String(callerIdentity.role || '').toLowerCase();
   return role.includes('finance') || role.includes('executive') || role.includes('admin') || role.includes('management');
+}
+
+function startFridayNewsletterCron() {
+  const now = new Date();
+  const estDateString = now.toLocaleString("en-US", {timeZone: "America/New_York"});
+  const estDate = new Date(estDateString);
+  
+  let daysUntilFriday = 5 - estDate.getDay();
+  if (daysUntilFriday < 0 || (daysUntilFriday === 0 && estDate.getHours() >= 16)) {
+      daysUntilFriday += 7;
+  }
+  
+  const nextFriday = new Date(estDate.getFullYear(), estDate.getMonth(), estDate.getDate() + daysUntilFriday, 16, 0, 0, 0);
+  const msUntilNextFriday = nextFriday - estDate;
+  
+  console.log(`[Newsletter Cron] Scheduled for ${msUntilNextFriday / 1000 / 60 / 60} hours from now.`);
+  
+  setTimeout(async () => {
+    await dispatchExecutiveNewsletter();
+    startFridayNewsletterCron();
+  }, msUntilNextFriday);
+}
+
+async function dispatchExecutiveNewsletter() {
+  console.log('[Newsletter Engine] Compiling Friday Executive Briefing...');
+  
+  const sites = await getCachedSites(true);
+  const assignments = await getCachedOpenAssignments(true);
+  
+  const activeBuilds = sites.filter(s => s.fields['Workflow Mode'] === 'INSTALLATION').length;
+  const nominalMaintenance = sites.filter(s => s.fields['Workflow Mode'] === 'MAINTENANCE' && s.fields['Site Status'] !== 'WINTERIZED_CLOSED').length;
+  const openTickets = assignments.length;
+  
+  let darkMatterContent = 'No anomalies detected this week.';
+  
+  if (CONFIG.supabase.url && CONFIG.supabase.serviceRoleKey) {
+    try {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?created_at=gte.${sevenDaysAgo}&order=created_at.desc&limit=10`;
+      
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: getSupabaseHeaders('application/json')
+      });
+      
+      if (res.ok) {
+        const vault = await res.json();
+        if (vault && vault.length > 0) {
+            darkMatterContent = vault.slice(0, 5).map(dm => 
+              `• *${dm.site_name}* (${dm.category}): ${dm.distilled_context || dm.raw_text}`
+            ).join('\n');
+        }
+      }
+    } catch (e) {
+       console.error('[Newsletter Engine] Supabase fetch failed', e);
+    }
+  }
+  
+  const msg = `📊 *TITAN OS | WEEKLY EXECUTIVE BRIEFING*\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `*KPI ROLLUP*\n` +
+              `🏗️ Active Installs Underway: ${activeBuilds}\n` +
+              `🎾 Maintained VIP Assets: ${nominalMaintenance}\n` +
+              `🛠️ Open Fleet Work Orders: ${openTickets}\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `🌑 *DARK MATTER LOG (Last 7 Days)*\n` +
+              `${darkMatterContent}\n\n` +
+              `_Generated autonomously. Have a great weekend._`;
+              
+  const execPhones = '14379287172, 13435405666';
+  await fanOutToSubscribers(execPhones, msg);
 }
 
 // ====================================================================
@@ -1050,6 +1121,88 @@ async function classifyVisualMediaIntent(items) {
   }
 }
 
+async function handleFinancialReceiptBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity }) {
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
+  const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const receipts = visualTriage.receipts || [];
+  const grandTotal = visualTriage.grand_total ? visualTriage.grand_total.toFixed(2) : '0.00';
+  const currency = visualTriage.primary_currency || 'CAD';
+  const summaryText = visualTriage.summary || 'Job-site expense receipts submitted via WhatsApp.';
+
+  let formattedNotes = `[EXPENSE RECEIPT INGESTION - ${workerName} at ${timeStr}]\n` +
+    `Total: $${grandTotal} ${currency}\n` +
+    `Summary: ${summaryText}\n\n` +
+    `RECEIPTS BREAKDOWN:\n`;
+
+  if (receipts.length > 0) {
+    receipts.forEach((r, idx) => {
+      formattedNotes += `${idx + 1}. ${r.vendor || 'Merchant'} — $${r.total_amount ? r.total_amount.toFixed(2) : '0.00'} (${r.category || 'General'})\n` +
+        `    Items: ${r.items_summary || 'Supplies'}\n` +
+        (r.date ? `    Date: ${r.date}\n` : '');
+    });
+  } else {
+    formattedNotes += `Single Expense Batch — Total: $${grandTotal} ${currency}\n`;
+  }
+
+  const validStorage = storageResults.filter(s => s && s.signedUrl);
+  const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
+
+  formattedNotes += `\nRECEIPT MEDIA URLS:\n` + validStorage.map(s => `• ${s.signedUrl}`).join('\n');
+
+  const assignmentPayload = {
+    'Date': todayStr,
+    'Assignment Type': 'Expense',
+    'Task Category': 'Expense',
+    'Priority': 'Low',
+    'Source': 'WhatsApp Receipt Intake',
+    'Status': 'Complete',
+    'Notes': formattedNotes
+  };
+
+  if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
+  if (worker?.id) assignmentPayload['Worker'] = [worker.id];
+  if (site?.id) assignmentPayload['Sites'] = [site.id];
+
+  const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+  const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'EXP';
+
+  streamToDarkMatterVault({
+    siteId: site?.id || null,
+    siteName: site?.fields?.['Site Name'] || 'Central Operations',
+    senderPhone: fromPhone,
+    senderName: workerName,
+    rawText: formattedNotes,
+    category: 'Finance / Receipts',
+    distilledContext: `Expense $${grandTotal} ${currency} (${receipts.map(r => r.vendor).filter(Boolean).join(', ') || 'Receipts'}) submitted by ${workerName}`,
+    urgency: 'LOW',
+    gravityScore: 2,
+    actionableFollowup: `Expense ${ticketId}`
+  }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
+
+  let receiptCard = `🧾 *TITAN OS | EXPENSE RECEIPT LOGGED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `👤 *Submitted By:* ${workerName}\n` +
+    `💰 *Total Amount:* $${grandTotal} ${currency}\n` +
+    `🧾 *Receipt Count:* ${items.length} photo(s)\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *Merchant Breakdown:*\n`;
+
+  if (receipts.length > 0) {
+    receipts.forEach(r => {
+      receiptCard += `• *${r.vendor || 'Store'}:* $${r.total_amount ? r.total_amount.toFixed(2) : '0.00'} (${r.category || 'Supplies'})\n`;
+    });
+  } else {
+    receiptCard += `• Store Receipt: $${grandTotal} ${currency}\n`;
+  }
+
+  receiptCard += `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🧾 *Expense Ref:* ${ticketId} (Dispatched to QuickBooks)`;
+
+  await sendWhatsAppMessage(dispatchTarget, receiptCard);
+}
+
 async function handleCommercialLeadBatch({ items, storageResults, visualTriage, worker, dispatchTarget, fromPhone, callerIdentity }) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
   const todayStr = new Date().toISOString().split('T')[0];
@@ -1064,6 +1217,7 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
 
   const title = company !== 'Padel Venue Lead' ? `${company} (${leadName})` : leadName;
 
+  // Frictionless Sales Pipeline: Auto-create a temporary planning site to bind the lead ticket
   const newSitePayload = {
      'Site Name': title,
      'Workflow Mode': 'PLANNING',
@@ -4057,7 +4211,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.13' });
+  res.status(200).json({ status: 'healthy', version: '6.0.15' });
 });
 
 // ====================================================================
@@ -4169,7 +4323,7 @@ startFridayNewsletterCron();
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.14 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.15 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
