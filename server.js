@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.13 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.15 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * 44. Executive Maintenance Ticket Rollups
@@ -16,6 +16,7 @@
  * 55. BPC-Exclusive Inventory Burn (Third-Party Container Bypass)
  * 56. Global Oracle Document Dispatch (Dual-Pass Retrieval Engine)
  * 57. Role-Based Access Control (RBAC) & Dynamic Help Menu / Site Template Generator
+ * 58. Frictionless Sales Pipeline (Auto-Site Linking & Pasted Email Resolution)
  */
 
 process.on('uncaughtException', (err) => {
@@ -313,7 +314,7 @@ ROUTING INTENTS:
 4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks.
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
-7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker, OR explicitly change a ticket's status (e.g., "Starting work", "Paused", "Cancelled").
+7. "TICKET_UPDATE": User is providing a status update, note, pasting an email response to a prospect, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker, OR explicitly change a ticket's status (e.g., "Starting work", "Paused", "Cancelled").
 8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on existing Sites (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness).
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
@@ -1049,88 +1050,6 @@ async function classifyVisualMediaIntent(items) {
   }
 }
 
-async function handleFinancialReceiptBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity }) {
-  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
-  const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
-  const todayStr = new Date().toISOString().split('T')[0];
-
-  const receipts = visualTriage.receipts || [];
-  const grandTotal = visualTriage.grand_total ? visualTriage.grand_total.toFixed(2) : '0.00';
-  const currency = visualTriage.primary_currency || 'CAD';
-  const summaryText = visualTriage.summary || 'Job-site expense receipts submitted via WhatsApp.';
-
-  let formattedNotes = `[EXPENSE RECEIPT INGESTION - ${workerName} at ${timeStr}]\n` +
-    `Total: $${grandTotal} ${currency}\n` +
-    `Summary: ${summaryText}\n\n` +
-    `RECEIPTS BREAKDOWN:\n`;
-
-  if (receipts.length > 0) {
-    receipts.forEach((r, idx) => {
-      formattedNotes += `${idx + 1}. ${r.vendor || 'Merchant'} — $${r.total_amount ? r.total_amount.toFixed(2) : '0.00'} (${r.category || 'General'})\n` +
-        `    Items: ${r.items_summary || 'Supplies'}\n` +
-        (r.date ? `    Date: ${r.date}\n` : '');
-    });
-  } else {
-    formattedNotes += `Single Expense Batch — Total: $${grandTotal} ${currency}\n`;
-  }
-
-  const validStorage = storageResults.filter(s => s && s.signedUrl);
-  const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
-
-  formattedNotes += `\nRECEIPT MEDIA URLS:\n` + validStorage.map(s => `• ${s.signedUrl}`).join('\n');
-
-  const assignmentPayload = {
-    'Date': todayStr,
-    'Assignment Type': 'Expense',
-    'Task Category': 'Expense',
-    'Priority': 'Low',
-    'Source': 'WhatsApp Receipt Intake',
-    'Status': 'Complete',
-    'Notes': formattedNotes
-  };
-
-  if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
-  if (worker?.id) assignmentPayload['Worker'] = [worker.id];
-  if (site?.id) assignmentPayload['Sites'] = [site.id];
-
-  const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-  const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'EXP';
-
-  streamToDarkMatterVault({
-    siteId: site?.id || null,
-    siteName: site?.fields?.['Site Name'] || 'Central Operations',
-    senderPhone: fromPhone,
-    senderName: workerName,
-    rawText: formattedNotes,
-    category: 'Finance / Receipts',
-    distilledContext: `Expense $${grandTotal} ${currency} (${receipts.map(r => r.vendor).filter(Boolean).join(', ') || 'Receipts'}) submitted by ${workerName}`,
-    urgency: 'LOW',
-    gravityScore: 2,
-    actionableFollowup: `Expense ${ticketId}`
-  }).catch(err => console.error('[Dark Matter] Async archive failed:', err));
-
-  let receiptCard = `🧾 *TITAN OS | EXPENSE RECEIPT LOGGED*\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `👤 *Submitted By:* ${workerName}\n` +
-    `💰 *Total Amount:* $${grandTotal} ${currency}\n` +
-    `🧾 *Receipt Count:* ${items.length} photo(s)\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📋 *Merchant Breakdown:*\n`;
-
-  if (receipts.length > 0) {
-    receipts.forEach(r => {
-      receiptCard += `• *${r.vendor || 'Store'}:* $${r.total_amount ? r.total_amount.toFixed(2) : '0.00'} (${r.category || 'Supplies'})\n`;
-    });
-  } else {
-    receiptCard += `• Store Receipt: $${grandTotal} ${currency}\n`;
-  }
-
-  receiptCard += `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🧾 *Expense Ref:* ${ticketId} (Dispatched to QuickBooks)`;
-
-  await sendWhatsAppMessage(dispatchTarget, receiptCard);
-}
-
 async function handleCommercialLeadBatch({ items, storageResults, visualTriage, worker, dispatchTarget, fromPhone, callerIdentity }) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Bob';
   const todayStr = new Date().toISOString().split('T')[0];
@@ -1144,6 +1063,16 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
   const partner = visualTriage.referring_partner || 'Direct Intake';
 
   const title = company !== 'Padel Venue Lead' ? `${company} (${leadName})` : leadName;
+
+  const newSitePayload = {
+     'Site Name': title,
+     'Workflow Mode': 'PLANNING',
+     'Site Status': 'ACTIVE',
+     'Last Note': `[COMMERCIAL LEAD AUTO-GENERATED]`
+  };
+  const createdSite = await airtableWriteWithAutoDrop('Sites', newSitePayload);
+  
+  if (createdSite) invalidateAirtableCache('sites');
 
   const validStorage = storageResults.filter(s => s && s.signedUrl);
   const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
@@ -1167,6 +1096,10 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
     'Status': 'Open',
     'Notes': formattedNotes
   };
+  
+  if (createdSite && createdSite.id) {
+     assignmentPayload['Sites'] = [createdSite.id];
+  }
 
   if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
@@ -1175,8 +1108,8 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
   const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'LEAD';
 
   streamToDarkMatterVault({
-    siteId: null,
-    siteName: company,
+    siteId: createdSite?.id || null,
+    siteName: title,
     senderPhone: fromPhone,
     senderName: workerName,
     rawText: formattedNotes,
@@ -2973,7 +2906,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.13 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.15 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3203,6 +3136,10 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   if (triage.intent === 'PURE_NOISE' || triage.intent === 'HISTORICAL_REFERENCE') return;
 
   if (triage.intent === 'CREATE_SITES') {
+    if (!isAuthorizedForFinance(callerIdentity)) {
+        await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Your profile lacks permissions to create new sites.`);
+        return;
+    }
     await handleBulkSiteCreation(triage, dispatchTarget, fromPhone);
     return;
   }
@@ -3218,7 +3155,8 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   }
 
   if (triage.intent === 'DOCUMENT_RETRIEVAL') {
-    await handleDocumentRetrieval(triage, site, dispatchTarget);
+    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+    await handleDocumentRetrieval({ transcript_en: targetQuery }, site, dispatchTarget);
     return;
   }
 
@@ -4226,9 +4164,12 @@ async function autoSubscribeMetaWebhook() {
   }
 }
 
+// Start the Friday Newsletter Cron
+startFridayNewsletterCron();
+
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.13 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.14 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
