@@ -12,6 +12,9 @@
  * 51. INOC Financial Dropdown Integration (40% Deposit Reeeived Schema Sync)
  * 52. The Blameless Machine (Production Feedback Loop) & 9-Gate Expansion
  * 53. Relational Ticket Cross-Referencing (SR&ED Entry #088) & Kanban Status Transitions
+ * 54. Auto-Healer Null Payload Catch & Unified Bulk BOM Reservation Loop
+ * 55. BPC-Exclusive Inventory Burn (Third-Party Container Bypass)
+ * 56. Global Oracle Document Dispatch (Dual-Pass Retrieval Engine)
  */
 
 process.on('uncaughtException', (err) => {
@@ -324,7 +327,7 @@ ROUTING INTENTS:
 20. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
 21. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
 22. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
-23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, blueprints, or CAD files for a specific site.
+23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, brochures, blueprints, or CAD files for a specific site or generally.
 24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, foundation, glass specification, or dimension question that requires reading proprietary blueprints, manuals, or engineering files.
 25. "CREATE_SITES": User is requesting to create entirely NEW sites/courts. The user will list the names of the courts. Extract the list of names and any provided construction specifications to apply across all of them.
 
@@ -535,6 +538,7 @@ function invalidateAirtableCache(entity = 'all') {
 // ====================================================================
 
 async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, retries = 2) {
+  if (Object.keys(payload).length === 0) return null;
   const url = recordId 
     ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}/${recordId}`
     : `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}`;
@@ -544,6 +548,8 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      if (Object.keys(currentPayload.fields).length === 0) return null;
+      
       const res = await fetch(url, {
         method,
         headers: {
@@ -561,7 +567,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
           const match = errorMsg.match(/field\s*["'\\]+([^"'\\]+)["'\\]+/i) || errorMsg.match(/Unknown field name\s*["'\\]+([^"'\\]+)["'\\]+/i);
           if (match && match[1]) {
             const badField = match[1];
-            console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}"`);
+            console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}" from ${tableName}`);
             delete currentPayload.fields[badField];
             continue; 
           }
@@ -742,7 +748,8 @@ async function syncOracleDocs() {
                   newUris.push({
                     uri: uploadData.file.uri,
                     title: docTitle,
-                    filename: fileName
+                    filename: fileName,
+                    downloadUrl: downloadUrl
                   });
                   console.log(`[Oracle Engine] Successfully ingested: "${docTitle}" (${fileName})`);
                }
@@ -1328,7 +1335,6 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
     }
   }
 
-  // Allow explicit status transitions mapping to Kanban boards
   if (nlp.ticket_status_update) {
     updatePayload['Status'] = nlp.ticket_status_update;
   }
@@ -2501,13 +2507,34 @@ async function handleSpokenMediaRetrieval(queriedName, fallbackSite, dispatchTar
   }
 }
 
-async function handleDocumentRetrieval(queriedName, fallbackSite, dispatchTarget) {
+async function handleDocumentRetrieval(nlp, fallbackSite, dispatchTarget) {
+  const query = (nlp.referenced_entity_name || nlp.queried_court_name || nlp.matched_site_name || nlp.transcript_en || '').toLowerCase();
+  
+  if (oracleFileURIs.length > 0 && query) {
+     const matchedDoc = oracleFileURIs.find(d => 
+        query.includes(d.title.toLowerCase()) || 
+        d.title.toLowerCase().includes(query) ||
+        (d.filename && d.filename.toLowerCase().includes(query))
+     );
+     
+     if (matchedDoc && matchedDoc.downloadUrl) {
+         const docCard = `📐 *TITAN OS | TECHNICAL ORACLE*\n` +
+                         `━━━━━━━━━━━━━━━━━━━━\n` +
+                         `📄 *Document:* ${matchedDoc.title}\n` +
+                         `━━━━━━━━━━━━━━━━━━━━\n` +
+                         `🔗 *Secure Download Link:*\n${matchedDoc.downloadUrl}`;
+         await sendWhatsAppMessage(dispatchTarget, docCard);
+         return;
+     }
+  }
+
   let targetSite = null;
-  if (queriedName) targetSite = await lookupSite(null, queriedName);
+  const siteQuery = nlp.queried_court_name || nlp.matched_site_name || nlp.referenced_entity_name;
+  if (siteQuery) targetSite = await lookupSite(null, siteQuery);
   if (!targetSite) targetSite = fallbackSite;
 
   if (!targetSite) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not find court "${queriedName || 'requested'}". Check spelling in Airtable.`);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate a general document for "${query}" or a specific court. Check spelling.`);
     return;
   }
 
@@ -2515,7 +2542,7 @@ async function handleDocumentRetrieval(queriedName, fallbackSite, dispatchTarget
   const docUrl = targetSite.fields['Technical Docs'];
 
   if (docUrl) {
-    const docCard = `📐 *TITAN OS | TECHNICAL DOCUMENT*\n` +
+    const docCard = `📐 *TITAN OS | SITE DOCUMENT*\n` +
                     `━━━━━━━━━━━━━━━━━━━━\n` +
                     `🏟️ *Court:* ${siteName}\n` +
                     `📄 *Resource:* Foundation / Technical Plan\n` +
@@ -2686,11 +2713,6 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
   if (nlp.deposit_status) { 
     updatePayload['Deposit Status'] = nlp.deposit_status; 
     updateNotes.push(`Deposit: ${nlp.deposit_status}`); 
-    
-    // Automatically reserve the BOM when a deposit clears
-    if (nlp.deposit_status.includes('50%') || nlp.deposit_status.includes('Paid') || nlp.deposit_status.includes('40%')) {
-      await reserveCourtBOM(targetSiteName, dispatchTarget);
-    }
   }
   
   if (nlp.foundation_type) { updatePayload['Foundation Type'] = nlp.foundation_type; updateNotes.push(`Foundation: ${nlp.foundation_type}`); }
@@ -2725,35 +2747,50 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
     return;
   }
 
-  // Handle Multi-Site Actionable State Change
   const targetSiteIds = [];
-  const targetSiteNames = [];
+  const targetSiteRecords = [];
   
   if (nlp.target_site_names && nlp.target_site_names.length > 0) {
      for (const sName of nlp.target_site_names) {
         const matched = await lookupSite(null, sName);
         if (matched) {
            targetSiteIds.push(matched.id);
-           targetSiteNames.push(matched.fields['Site Name']);
+           targetSiteRecords.push(matched);
         }
      }
-  } else {
-     targetSiteIds.push(targetSiteId);
-     targetSiteNames.push(targetSiteName);
+  } else if (targetSiteId) {
+     const matched = await lookupSite(null, targetSiteName);
+     if (matched) {
+        targetSiteIds.push(targetSiteId);
+        targetSiteRecords.push(matched);
+     }
   }
 
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'HQ Admin';
   updatePayload['Last Note'] = `[DATABASE OVERRIDE - ${workerName}]: ${updateNotes.join(', ')}`;
   updatePayload['Last Intent'] = 'ACTIONABLE_STATE_CHANGE';
 
-  for (const tId of targetSiteIds) {
+  for (const [idx, tId] of targetSiteIds.entries()) {
      await airtableWriteWithAutoDrop('Sites', updatePayload, tId);
+     
+     if (nlp.deposit_status && (nlp.deposit_status.includes('50%') || nlp.deposit_status.includes('Paid') || nlp.deposit_status.includes('40%'))) {
+        const fullRecord = targetSiteRecords[idx];
+        const recordManufacturer = updatePayload['Manufacturer'] || fullRecord.fields['Manufacturer'] || '';
+        
+        if (recordManufacturer === 'BPC') {
+            await reserveCourtBOM(fullRecord.fields['Site Name'], dispatchTarget);
+        } else {
+            console.log(`[BOM Engine] Bypassing BOM reservation for ${fullRecord.fields['Site Name']} (Manufacturer: ${recordManufacturer} is non-BPC).`);
+        }
+     }
   }
+  
   invalidateAirtableCache('sites');
+  const targetSiteNamesText = targetSiteRecords.map(r => r.fields['Site Name']);
 
   const confirmCard = `🎛️ *TITAN OS | SITE LEDGER UPDATED*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🏟️ *Target(s):* ${targetSiteNames.length > 3 ? `${targetSiteNames.length} courts updated` : targetSiteNames.join(', ')}\n` +
+    `🏟️ *Target(s):* ${targetSiteNamesText.length > 3 ? `${targetSiteNamesText.length} courts updated` : targetSiteNamesText.join(', ')}\n` +
     `👤 *Updated By:* ${workerName}\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `✅ *Database Fields Modified:* \n• ${updateNotes.join('\n• ')}\n\n` +
@@ -2957,6 +2994,11 @@ async function refreshInventoryCache() {
 
 async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
   const siteName = siteRecord.fields['Site Name'] || 'Unknown Site';
+  if (siteRecord.fields['Manufacturer'] !== 'BPC') {
+     console.log(`[BOM Engine] Bypassing BOM deduction for ${siteName} (Manufacturer is ${siteRecord.fields['Manufacturer']}, not BPC).`);
+     return;
+  }
+  
   let deductedItems = [];
 
   if (clearedGate === 'Gate 2') {
@@ -3166,8 +3208,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   }
 
   if (triage.intent === 'DOCUMENT_RETRIEVAL') {
-    const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
-    await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
+    await handleDocumentRetrieval(triage, site, dispatchTarget);
     return;
   }
 
@@ -3396,11 +3437,10 @@ async function processMediaBatch(batch) {
   const courtLabel = targetedSite?.fields?.['Site Name'] || 'Assigned Court';
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Installer';
   
-  // THE BLAMELESS MACHINE: Production/Factory Feedback Loop
   if (forensicAudit.defect_origin === 'FABRICATION' || 
       (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop|door/i.test(b)))) {
       
-      const factoryPhones = '14379287172'; // Add production floor numbers here
+      const factoryPhones = '14379287172';
       const validVideo = items.find(i => i.type === 'video');
       let videoLink = null;
       if (validVideo && storageResults.length > 0) {
@@ -3866,8 +3906,7 @@ app.post('/webhook', async (req, res) => {
           return;
         }
         if (triage.intent === 'DOCUMENT_RETRIEVAL') {
-          const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
-          await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
+          await handleDocumentRetrieval(triage, site, dispatchTarget);
           return;
         }
         if (triage.intent === 'INVENTORY_QUERY') {
