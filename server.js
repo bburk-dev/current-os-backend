@@ -318,7 +318,7 @@ ROUTING INTENTS:
 21. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
 22. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
 23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, blueprints, or CAD files for a specific site.
-24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, or specification question that requires reading the proprietary foundation plans, blueprints, or installation manuals.
+24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, foundation, glass specification, or dimension question that requires reading proprietary blueprints, manuals, or engineering files.
 25. "CREATE_SITES": User is requesting to create one or multiple new sites/courts. The user will list the names of the courts. Extract the list of names and any provided construction specifications (manufacturer, turf color, steel color, model type, etc.) to apply across all of them.
 
 Extract:
@@ -677,16 +677,16 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
 }
 
 // ====================================================================
-// 2C. TECHNICAL ORACLE RAG ENGINE (PDF AUTO-INGESTION)
+// 2C. TECHNICAL ORACLE RAG ENGINE (PDF AUTO-INGESTION & RAG)
 // ====================================================================
 
 async function syncOracleDocs() {
   try {
     console.log('[Oracle Engine] Commencing synchronization with Airtable Knowledge Base...');
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Oracle%20Docs`;
+    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Oracle%20Docs?maxRecords=100`;
     const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
     if (!res.ok) {
-       console.warn('[Oracle Engine] Table "Oracle Docs" not found. Skipping.');
+       console.warn(`[Oracle Engine] Table "Oracle Docs" returned HTTP ${res.status}. Skipping.`);
        return;
     }
     const data = await res.json();
@@ -694,33 +694,59 @@ async function syncOracleDocs() {
     
     let newUris = [];
     for (const rec of records) {
-       const attachments = rec.fields['Document'] || [];
+       // Explicitly supports Airtable 'Attachments' and fallback schema names
+       const attachments = rec.fields['Attachments'] || rec.fields['Attachment'] || rec.fields['Document'] || [];
+       const docTitle = rec.fields['Name'] || rec.fields['Title'] || 'Technical Document';
+       
+       if (!Array.isArray(attachments) || attachments.length === 0) continue;
+
        for (const att of attachments) {
-          if (att.url && att.url.toLowerCase().includes('.pdf')) {
-             const pdfRes = await fetch(att.url);
-             if (!pdfRes.ok) continue;
-             const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
-             
-             const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${CONFIG.gemini.apiKey}`, {
-                method: 'POST',
-                headers: {
-                    'X-Goog-Upload-Protocol': 'raw',
-                    'X-Goog-Upload-Command': 'start, upload, finalize',
-                    'X-Goog-Upload-Header-Content-Length': pdfBuffer.length,
-                    'X-Goog-Upload-Header-Content-Type': 'application/pdf',
-                    'Content-Type': 'application/pdf'
-                },
-                body: pdfBuffer
-             });
-             
-             const uploadData = await uploadRes.json();
-             if (uploadData.file && uploadData.file.uri) {
-                newUris.push(uploadData.file.uri);
-                console.log(`[Oracle Engine] Successfully ingested: ${rec.fields['Title'] || att.filename}`);
+          const downloadUrl = att.url;
+          const fileName = att.filename || 'manual.pdf';
+
+          if (downloadUrl && (downloadUrl.toLowerCase().includes('.pdf') || fileName.toLowerCase().endsWith('.pdf'))) {
+             try {
+               const pdfRes = await fetch(downloadUrl);
+               if (!pdfRes.ok) {
+                 console.warn(`[Oracle Engine] Failed to fetch PDF (${pdfRes.status}) for ${docTitle}`);
+                 continue;
+               }
+               const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
+               
+               const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${CONFIG.gemini.apiKey}`, {
+                  method: 'POST',
+                  headers: {
+                      'X-Goog-Upload-Protocol': 'raw',
+                      'X-Goog-Upload-Command': 'start, upload, finalize',
+                      'X-Goog-Upload-Header-Content-Length': pdfBuffer.length,
+                      'X-Goog-Upload-Header-Content-Type': 'application/pdf',
+                      'Content-Type': 'application/pdf'
+                  },
+                  body: pdfBuffer
+               });
+               
+               if (!uploadRes.ok) {
+                 const errTxt = await uploadRes.text();
+                 console.error(`[Oracle Engine] Gemini File API upload error for ${docTitle}:`, errTxt);
+                 continue;
+               }
+
+               const uploadData = await uploadRes.json();
+               if (uploadData.file && uploadData.file.uri) {
+                  newUris.push({
+                    uri: uploadData.file.uri,
+                    title: docTitle,
+                    filename: fileName
+                  });
+                  console.log(`[Oracle Engine] Successfully ingested: "${docTitle}" (${fileName})`);
+               }
+             } catch (fetchErr) {
+               console.error(`[Oracle Engine] Exception streaming ${docTitle}:`, fetchErr.message);
              }
           }
        }
     }
+
     oracleFileURIs = newUris;
     console.log(`[Oracle Engine] Sync complete. ${oracleFileURIs.length} technical documents active in AI memory.`);
   } catch (e) {
@@ -732,13 +758,30 @@ async function syncOracleDocs() {
 setInterval(syncOracleDocs, 24 * 60 * 60 * 1000);
 
 async function handleOracleQuery(nlp, dispatchTarget) {
-  if (oracleFileURIs.length === 0) {
-     await sendWhatsAppMessage(dispatchTarget, `⚠️ The Technical Oracle is currently empty or syncing. Please ensure your PDFs are uploaded to the "Oracle Docs" Airtable table.`);
+  if (!oracleFileURIs || oracleFileURIs.length === 0) {
+     await sendWhatsAppMessage(
+       dispatchTarget, 
+       `⚠️ *TITAN OS | TECHNICAL ORACLE*\n━━━━━━━━━━━━━━━━━━━━\nThe Oracle is currently empty or syncing.\n\nPlease upload foundation plans or technical PDFs into the *Attachments* column of the "Oracle Docs" Airtable table.`
+     );
      return;
   }
   
-  const parts = oracleFileURIs.map(uri => ({ file_data: { mime_type: 'application/pdf', file_uri: uri } }));
-  parts.push({ text: `You are the Titan OS Technical Oracle. Answer the following engineering/technical question based STRICTLY on the provided PDF documents. If the answer is not in the documents, state that clearly. Use clean, concise formatting for WhatsApp.\n\nQuestion: ${nlp.transcript_en}` });
+  const parts = oracleFileURIs.map(item => ({ 
+    file_data: { 
+      mime_type: 'application/pdf', 
+      file_uri: item.uri 
+    } 
+  }));
+
+  const userQuery = nlp.transcript_en || nlp.update_note || 'Explain structural specifications.';
+  parts.push({ 
+    text: `You are the Titan OS Technical Oracle for Bounce Padel court installations. 
+Answer the following engineering, foundation, or structural question based STRICTLY on the attached proprietary PDF documents. 
+If the answer cannot be verified within the documents, state that clearly without guessing.
+Use clean, concise, field-friendly WhatsApp markdown formatting with bullet points.
+
+Question: ${userQuery}` 
+  });
   
   const payload = {
     contents: [{ role: 'user', parts }],
@@ -751,13 +794,25 @@ async function handleOracleQuery(nlp, dispatchTarget) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
      });
-     const data = await res.json();
-     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Oracle could not parse an answer.';
      
-     const msg = `🧠 *TITAN OS | TECHNICAL ORACLE*\n━━━━━━━━━━━━━━━━━━━━\n${answer.trim()}`;
+     if (!res.ok) {
+       throw new Error(`Gemini API HTTP ${res.status}: ${await res.text()}`);
+     }
+
+     const data = await res.json();
+     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'The Oracle could not parse a valid technical answer.';
+     
+     const docCitations = oracleFileURIs.map(d => `• ${d.title}`).join('\n');
+     const msg = `🧠 *TITAN OS | TECHNICAL ORACLE*\n` +
+                 `━━━━━━━━━━━━━━━━━━━━\n` +
+                 `${answer.trim()}\n\n` +
+                 `━━━━━━━━━━━━━━━━━━━━\n` +
+                 `📚 *Referenced Blueprints:*\n${docCitations}`;
+
      await sendWhatsAppMessage(dispatchTarget, msg);
   } catch (err) {
-     await sendWhatsAppMessage(dispatchTarget, `⚠️ Oracle query failed. Please verify the API connection.`);
+     console.error('[Oracle Query Error]:', err.message);
+     await sendWhatsAppMessage(dispatchTarget, `⚠️ Technical Oracle lookup failed. Engineering team has been notified.`);
   }
 }
 
@@ -1418,7 +1473,6 @@ async function bindSiteContext(site, worker, callerIdentity, dispatchTarget, fro
   userActiveSiteMap.set(fromPhone, site.id);
   
   if (worker && worker.id) {
-    // Wrap in try-catch to prevent a crash if the 'Current Site Bound' field doesn't exist yet
     try {
         await airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id);
     } catch (e) {
@@ -1458,7 +1512,6 @@ async function bindSiteContext(site, worker, callerIdentity, dispatchTarget, fro
 
   await sendWhatsAppMessage(dispatchTarget, checkinCard);
 }
-
 
 // ====================================================================
 // 8. GEOSPATIAL & METEOROLOGICAL TELEMETRY (CRANE-FREE TRIPWIRES)
@@ -1974,49 +2027,12 @@ async function fanOutToSubscribers(phoneNumbersString, messageBody, buttons = []
 
 async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = 'A crew member') {
   try {
-    // 1. Static Hardcoded Executives
     const staticExecutivePhones = '14379287172, 13435405666'; // Bob & Rob
     
-    const subscribedPhones = siteRecord.fields['Subscribed Phones']; // Internal Execs / PMs
-    const linkedContactIds = siteRecord.fields['Linked Contacts'] || []; // External Clients
+    const subscribedPhones = siteRecord.fields['Subscribed Phones'];
+    const linkedContactIds = siteRecord.fields['Linked Contacts'] || [];
 
     let celebrationCard = null;
-
-    
-    // META WHATSAPP UTILITY TEMPLATE OVERRIDE (milestone_progress_update)
-    const sendMetaTemplate = async (targetPhone, clientName, gateCleared, progress, techName, notes) => {
-      let cleanDestination = String(targetPhone).replace(/\D/g, '');
-      if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
-      
-      const payload = {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: cleanDestination,
-        type: 'template',
-        template: {
-          name: 'milestone_progress_update',
-          language: { code: 'en' },
-          components: [{
-            type: 'body',
-            parameters: [
-              { type: 'text', text: String(clientName).slice(0, 30) },
-              { type: 'text', text: String(gateCleared).slice(0, 30) },
-              { type: 'text', text: String(progress).slice(0, 20) },
-              { type: 'text', text: String(techName).slice(0, 20) },
-              { type: 'text', text: String(notes).slice(0, 100) }
-            ]
-          }]
-        }
-      };
-      
-      try {
-        await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}/messages`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-      } catch (e) { console.error('Meta Template Error:', e); }
-    };
     
     if (highestGate === 1) {
       celebrationCard = `🎾 *BOUNCE PADEL | PROGRESS UPDATE*\n` +
@@ -2049,7 +2065,6 @@ async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = '
 
     if (!celebrationCard) return;
 
-    // Send to Hardcoded Executives
     console.log(`[Joy Cannon] Dispatching to Static Executives: ${staticExecutivePhones}`);
     await fanOutToSubscribers(staticExecutivePhones, celebrationCard);
 
@@ -2676,7 +2691,7 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
   if (nlp.year_installed) { updatePayload['Year Installed'] = nlp.year_installed; updateNotes.push(`Year: ${nlp.year_installed}`); }
   if (nlp.model_type) { updatePayload['Model Type'] = nlp.model_type; updateNotes.push(`Model: ${nlp.model_type}`); }
   if (nlp.glass_thickness) { updatePayload['Glass Thickness'] = nlp.glass_thickness; updateNotes.push(`Glass: ${nlp.glass_thickness}`); }
-  if (nlp.court_type) { updatePayload['Model Type'] = nlp.court_type; updateNotes.push(`Type: ${nlp.court_type}`); } // Maps Court Type requests to the Model Type field
+  if (nlp.court_type) { updatePayload['Model Type'] = nlp.court_type; updateNotes.push(`Type: ${nlp.court_type}`); }
   if (nlp.a_frames_retrieved) { updatePayload['A-Frames Retrieved'] = true; updateNotes.push(`A-Frames: Picked up`); }
 
   if (Object.keys(updatePayload).length === 0) {
@@ -2725,13 +2740,12 @@ async function handleBulkSiteCreation(nlp, dispatchTarget, fromPhone) {
   let locationString = null;
   if (recentPin && (Date.now() - recentPin.timestamp < 10 * 60 * 1000)) {
     locationString = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
-    lastDroppedCoordinates.delete(fromPhone); // Clear pin after consumption
+    lastDroppedCoordinates.delete(fromPhone);
   }
 
   const createdSites = [];
   const specsToApply = {};
 
-  // Extract universally applied specifications
   if (nlp.foundation_type) specsToApply['Foundation Type'] = nlp.foundation_type;
   if (nlp.manufacturer) specsToApply['Manufacturer'] = nlp.manufacturer;
   if (nlp.steel_color) specsToApply['Steel Color'] = nlp.steel_color;
@@ -2885,7 +2899,6 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 
 let memoryInventory = [];
 
-// 1. Refresh Cache with New ATP & Lead Time Columns
 async function refreshInventoryCache() {
   try {
     const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Inventory?maxRecords=200`;
@@ -2910,12 +2923,10 @@ async function refreshInventoryCache() {
   }
 }
 
-// 2. Automated Milestone BOM Deduction
 async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
   const siteName = siteRecord.fields['Site Name'] || 'Unknown Site';
   let deductedItems = [];
 
-  // Deduct standard hardware/steel kit when Gate 2 (Steel) is verified
   if (clearedGate === 'Gate 2') {
     console.log(`⚙️ [BOM Engine] Gate 2 cleared at ${siteName}. Deducting Steel & Fasteners.`);
     
@@ -2930,7 +2941,6 @@ async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
     }
   }
   
-  // Deduct standard glass/turf kit when Gate 4 (Glass) is verified
   if (clearedGate === 'Gate 4') {
     console.log(`⚙️ [BOM Engine] Gate 4 cleared at ${siteName}. Shifting Glass/Turf from Committed to Consumed.`);
     
@@ -2956,7 +2966,6 @@ async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
   }
 }
 
-// 3. Automated ATP Reservation (Triggered on Deposit)
 async function reserveCourtBOM(siteName, dispatchTarget = null) {
   console.log(`📦 [BOM Engine] Deposit received for ${siteName}. Reserving materials in Committed pipeline.`);
   
@@ -2964,23 +2973,19 @@ async function reserveCourtBOM(siteName, dispatchTarget = null) {
     if (item.bomQty > 0) {
       const newCommitted = item.committed + item.bomQty;
       item.committed = newCommitted;
-      // Airtable calculates 'Available' automatically via formula, so we only write 'Committed'
       await airtableWriteWithAutoDrop('Inventory', { 'Committed': newCommitted }, item.id);
     }
   }
 
-  // Check low stock tripwires immediately upon committing materials
   await checkLowStockRadar(dispatchTarget || CONFIG.meta.targetVerifiedPhone);
 }
 
-// 4. Low-Stock Reorder Radar (Tripwire Scan)
 async function checkLowStockRadar(dispatchTarget) {
   if (!dispatchTarget) return;
   const alerts = [];
 
   for (const item of memoryInventory) {
     const avail = item.qty - item.committed;
-    // Trigger when stock is critical for BOM items or long lead items (<= 2 court kits available)
     if ((item.bomQty > 0 || item.leadTimeDays >= 30) && avail <= 2 && item.qty > 0) {
       alerts.push(`• *${item.name}:* ${Math.max(0, avail)} Avail (${item.leadTimeDays ? item.leadTimeDays + 'd lead time' : 'Reorder needed'})`);
     }
@@ -2996,7 +3001,6 @@ async function checkLowStockRadar(dispatchTarget) {
   }
 }
 
-// 5. Spoken & One-Word Yard Inventory Snapshot (/inv, /inventory, /stock)
 async function handleSpokenInventorySnapshot(dispatchTarget) {
   await refreshInventoryCache();
   
@@ -3044,7 +3048,7 @@ async function handleSpokenInventorySnapshot(dispatchTarget) {
   if (lowStock.length > 0) {
     card += `⚠️ *REORDER RADAR (Low Stock):*\n`;
     lowStock.slice(0, 5).forEach(i => {
-      const avail = Math.max(0, i.qty - i.committed);
+      const avail = Math.max(0, i.qty - item.committed);
       card += `• *${i.name}:* ${avail} Avail (${i.leadTimeDays ? i.leadTimeDays + 'd lead time' : 'Reorder needed'})\n`;
     });
     card += `\n`;
@@ -3055,34 +3059,6 @@ async function handleSpokenInventorySnapshot(dispatchTarget) {
           `_Text /inv anytime for live yard status._`;
 
   await sendWhatsAppMessage(dispatchTarget, card.trim());
-}
-
-// 6. Spoken Exception Parser (For extra materials used on site)
-async function processSpokenInventoryException(spokenText) {
-  const prompt = `
-  Analyze this message: "${spokenText}"
-  Match extra consumable materials against this catalog: ${JSON.stringify(memoryInventory.map(i => ({ id: i.id, name: i.name })))}
-  Return JSON: { "matched": boolean, "items": [ { "id": "Airtable ID", "quantity_used": Number } ] }
-  `;
-
-  const payload = {
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.0, responseMimeType: "application/json" }
-  };
-
-  try {
-    const url = `${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    return JSON.parse(raw);
-  } catch (e) {
-    return { matched: false, items: [] };
-  }
 }
 
 // ====================================================================
@@ -3147,6 +3123,11 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
+  if (triage.intent === 'ORACLE_QUERY') {
+    await handleOracleQuery(triage, dispatchTarget);
+    return;
+  }
+
   if (triage.intent === 'INVENTORY_QUERY') {
     await handleSpokenInventorySnapshot(dispatchTarget);
     return;
@@ -3184,11 +3165,6 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   
   if (triage.intent === 'MAINTENANCE_QUERY') {
     await handleSpokenStatusQuery('all', site, dispatchTarget, true, true);
-    return;
-  }
-  
-  if (triage.intent === 'ORACLE_QUERY') {
-    await handleOracleQuery(triage, dispatchTarget);
     return;
   }
 
@@ -3259,16 +3235,6 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
-  if (triage.intent === 'FREIGHT_UPDATE') {
-    await handleVoiceToIntegerFreight(triage, site, worker, callerIdentity, dispatchTarget, fromPhone);
-    return;
-  }
-
-  if (triage.intent === 'SUPPLY_REQUEST') {
-    await handleSupplyRequest(triage, site, worker, callerIdentity, dispatchTarget, fromPhone);
-    return;
-  }
-
   if (triage.intent === 'DARK_MATTER') {
     const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
     const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Central Operations';
@@ -3325,13 +3291,11 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
 }
 
 async function processMediaBatch(batch) {
-  const { items, site, worker, dispatchTarget, fromPhone, senderSource, indoorSite, callerIdentity } = batch;
+  const { items, site, worker, dispatchTarget, fromPhone, indoorSite, callerIdentity } = batch;
 
   const hasVisualMedia = items.some(item => item.type === 'image' || item.type === 'video');
   const hasVideo = items.some(item => item.type === 'video');
 
-  // **ANTI-HALLUCINATION ROUTING:**
-  // If we receive a video/image with NO caption, NO pin, and the worker is NOT bound to a site, do not guess.
   const batchText = items.map(i => i.caption || i.rawMessage?.text?.body || '').filter(Boolean).join(' ').trim();
   if (hasVisualMedia && !batchText && !site) {
     const errorCard = `⚠️ *TITAN OS | SITE UNKNOWN*\n` +
@@ -3367,16 +3331,13 @@ async function processMediaBatch(batch) {
       const triage = await triageSpokenOrTextNLP(batchText, false, []);
       if (triage && triage.intent === 'HISTORICAL_REFERENCE') return;
       
-      // If the user explicitly typed a court name in the caption, override the active site binding.
       if (triage && triage.queried_court_name) {
           const matched = await lookupSite(null, triage.queried_court_name);
           if (matched) targetedSiteOverride = matched;
       }
   }
 
-  if (!hasVisualMedia) {
-    return;
-  }
+  if (!hasVisualMedia) return;
 
   if (!hasVideo) {
     const visualTriage = await classifyVisualMediaIntent(items);
@@ -3398,7 +3359,6 @@ async function processMediaBatch(batch) {
     if (visualTruth.is_padel_court === false) return;
   }
 
-  // STAGE 2: MULTIMODAL INGESTION
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
 
   let targetedSite = targetedSiteOverride || site;
@@ -3421,10 +3381,7 @@ async function processMediaBatch(batch) {
 
   const checklist = forensicAudit.qa_checklist || {};
   const hasBlockers = (forensicAudit.blockers_detected && forensicAudit.blockers_detected.length > 0) ||
-    checklist.doors_oriented_correctly === false; 
-
-  const isFabricationDefect = forensicAudit.defect_origin === 'FABRICATION' ||
-    (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop|door/i.test(b)));
+    checklist.doors_oriented_correctly === false;
 
   const validVideo = items.find(i => i.type === 'video');
   let videoLink = null;
@@ -3435,13 +3392,11 @@ async function processMediaBatch(batch) {
       }
   }
 
-  // PIPELINE A: INSTALLATION ENGINE WITH VELOCITY TELEMETRY
   if (siteMode === 'INSTALLATION') {
     const highestGate = forensicAudit.highest_gate ||
       (forensicAudit.verified_gates?.length ? Math.max(...forensicAudit.verified_gates) : 0);
 
     const progressPercent = Math.min(1.0, highestGate / TOTAL_GATES);
-    
     const inProgressGates = forensicAudit.in_progress_gates || (forensicAudit.in_progress_gate ? [forensicAudit.in_progress_gate] : (highestGate < TOTAL_GATES ? [highestGate + 1] : []));
     
     const inProgressLabels = inProgressGates.map(g => `${g}. ${GATE_NAMES[g] || 'Task'}`).join(', ');
@@ -3520,7 +3475,6 @@ async function processMediaBatch(batch) {
         console.log(`🎾 [Joy Cannon Triggered] Firing Gate ${highestGate} for ${courtLabel}`);
         await fireInstallationJoyCannon(targetedSite, highestGate, workerName);
         
-        // Execute BOM deductions strictly on net-new milestone verification
         if (highestGate === 2 || highestGate === 4) {
           await processMilestoneBOMDeduction(targetedSite, `Gate ${highestGate}`);
         }
@@ -3553,7 +3507,6 @@ async function processMediaBatch(batch) {
     return;
   }
 
-  // MAINTENANCE & GENERAL SWEEP UI CARD FORMATTING
   const phaseMap = {
     'INTAKE_BASELINE': 'MAINTENANCE BASELINE',
     'COMPLETION_CLOSEOUT': 'SERVICE COMPLETED',
@@ -3606,15 +3559,10 @@ async function processMediaBatch(batch) {
 // 15. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
 
-/**
- * Handles Webhook verification challenges sent by Meta on App Setup
- */
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-
-  console.log(`[Webhook Verification] Mode: ${mode}, Token matched: ${token === CONFIG.meta.verifyToken}`);
 
   if (mode === 'subscribe' && token === CONFIG.meta.verifyToken) {
     return res.status(200).send(challenge);
@@ -3622,16 +3570,10 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// GameCam Placeholder Webhook
 app.post('/webhook/gamecam', async (req, res) => {
   res.sendStatus(200);
-  console.log(`[GameCam Ingress Ping]:`, req.body);
 });
 
-/**
- * RESTORED MULTIMODAL INGRESS ROUTER
- * Handles incoming events: Location, Voice, Audio, Text, Interactive, Images, and Video
- */
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
@@ -3665,9 +3607,7 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
 
-    // =================================================================
-    // ROUTE 1: LOCATION PIN (Morning Check-In / Multi-Court Resolver)
-    // =================================================================
+    // ROUTE 1: LOCATION PIN
     if (message.type === 'location') {
       sendWhatsAppReaction(dispatchTarget, messageId, '📍').catch(() => {});
       const userLat = message.location.latitude;
@@ -3701,13 +3641,10 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // =================================================================
     // ROUTE 2: INTERACTIVE BUTTON SELECTIONS
-    // =================================================================
     if (message.type === 'interactive') {
       const btnId = message.interactive?.button_reply?.id || '';
       
-      // BIND: Site selection from multi-court location pin
       if (btnId.startsWith('BIND_')) {
         const sId = btnId.replace('BIND_', '');
         const allSites = await getCachedSites();
@@ -3719,7 +3656,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // QBO: Convert Estimate to Draw Invoice
       if (btnId.startsWith('QBO_CONVERT_')) {
         const parts = btnId.split('_');
         const estimateId = parts[2];
@@ -3731,9 +3667,7 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // =================================================================
-    // ROUTE 3: VOICE MEMO / AUDIO ONLY (Ambient Intelligence)
-    // =================================================================
+    // ROUTE 3: VOICE MEMO / AUDIO ONLY
     if (message.type === 'audio' || message.type === 'voice') {
       sendWhatsAppReaction(dispatchTarget, messageId, '🎧').catch(() => {});
       const mediaId = message[message.type].id;
@@ -3792,14 +3726,11 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // =================================================================
-    // ROUTE 4: TEXT / SLASH COMMANDS & NLP
-    // =================================================================
+    // ROUTE 4: TEXT COMMANDS & INTENT DISPATCH
     if (message.type === 'text') {
       const txt = message.text?.body?.trim() || '';
       const lTxt = txt.toLowerCase();
       
-      // Explicit Site Linking Bypass
       if (lTxt.startsWith('/link ') || lTxt.startsWith('/l ')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         const matched = await lookupSite(null, targetQuery);
@@ -3811,7 +3742,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
       
-      // Handle explicit global ticket requests or local status
       if (lTxt.startsWith('/t') || lTxt.startsWith('/status') || lTxt.startsWith('/s')) {
         const isTicketOnly = lTxt.startsWith('/t');
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
@@ -3819,26 +3749,22 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Help
       if (lTxt.startsWith('/help') || lTxt === 'help' || lTxt === '?') {
-        await sendWhatsAppMessage(dispatchTarget, `🤖 *TITAN OS COMMANDS*\n\n• Drop location pin ➔ Morning Check-In & Weather Tripwires\n• Send video walkaround ➔ Milestone & Punch List QA\n• Send audio memo ➔ Voice note / Parts request\n• /inv or /inventory ➔ Yard stock on hand & committed materials\n• /docs ➔ Pull blueprint / foundation PDF\n• /status ➔ Active court gate & tickets\n• /t ➔ List open field tickets only\n• /weather ➔ Hyperlocal wind & adhesive status\n• /specs ➔ Technical dimensions & CBSA rules\n• "what is my 30+ AR?" ➔ QuickBooks lookup`);
+        await sendWhatsAppMessage(dispatchTarget, `🤖 *TITAN OS COMMANDS*\n\n• Drop location pin ➔ Morning Check-In & Weather Tripwires\n• Send video walkaround ➔ Milestone & Punch List QA\n• Send audio memo ➔ Voice note / Parts request / Technical questions\n• /inv or /inventory ➔ Yard stock on hand & committed materials\n• /docs ➔ Pull blueprint / foundation PDF\n• /status ➔ Active court gate & tickets\n• /t ➔ List open field tickets only\n• /weather ➔ Hyperlocal wind & adhesive status\n• /specs ➔ Technical dimensions & CBSA rules\n• "what is my 30+ AR?" ➔ QuickBooks lookup`);
         return;
       }
 
-      // Quick Win: Direct Inventory Snapshot
       if (lTxt.startsWith('/inv') || lTxt.startsWith('/inventory') || lTxt.startsWith('/stock') || lTxt === 'inv' || lTxt === 'inventory' || lTxt === 'stock') {
         await handleSpokenInventorySnapshot(dispatchTarget);
         return;
       }
 
-      // Quick Win: Direct Document Retrieval
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/plan')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
         return;
       }
 
-      // Weather Queries
       if (lTxt.startsWith('/weather') || lTxt.startsWith('/w')) {
         if (!site) {
           await sendWhatsAppMessage(dispatchTarget, `⚠️ Drop a pin first to lock your active court, or ask "What's the weather at [Court Name]?"`);
@@ -3854,31 +3780,31 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Readiness Queries
       if (lTxt.startsWith('/r') || lTxt.startsWith('/readiness') || lTxt.startsWith('/gate') || lTxt.startsWith('/g')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         await handleSpokenReadinessQuery(targetQuery, site, dispatchTarget);
         return;
       }
 
-      // AR Queries
       if (lTxt.startsWith('/ar')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         await handleSpokenARLookup(targetQuery, dispatchTarget);
         return;
       }
 
-      // Technical Specs & Border Clearance Queries
       if (lTxt.startsWith('/specs') || lTxt.startsWith('/border') || lTxt.startsWith('/carm') || /carm|border|pars|paps|customs/i.test(lTxt)) {
         const handled = handleTechnicalSpecsQuery(txt, dispatchTarget);
         if (handled) return;
       }
 
-      // If it isn't a strict slash command, push it to text NLP router
       const triage = await triageSpokenOrTextNLP(txt, false, []);
       if (triage) {
         if (triage.intent === 'CREATE_SITES') {
           await handleBulkSiteCreation(triage, dispatchTarget, fromPhone);
+          return;
+        }
+        if (triage.intent === 'ORACLE_QUERY') {
+          await handleOracleQuery(triage, dispatchTarget);
           return;
         }
         if (triage.intent === 'DOCUMENT_RETRIEVAL') {
@@ -3919,18 +3845,12 @@ app.post('/webhook', async (req, res) => {
           await handleSpokenStatusQuery('all', site, dispatchTarget, true, true);
           return;
         }
-        if (triage.intent === 'ORACLE_QUERY') {
-          await handleOracleQuery(triage, dispatchTarget);
-          return;
-        }
       }
 
       return;
     }
 
-    // =================================================================
-    // ROUTE 5: VIDEO & IMAGE MEDIA BATCHES (Forensic QA)
-    // =================================================================
+    // ROUTE 5: VIDEO & IMAGE FORENSIC EVALUATION
     const isVideo = message.type === 'video';
     const isImage = message.type === 'image';
     
@@ -4028,7 +3948,7 @@ async function autoSubscribeMetaWebhook() {
     return;
   }
 
-  const targetPhone = CONFIG.meta.targetVerifiedPhone; // '12892217329'
+  const targetPhone = CONFIG.meta.targetVerifiedPhone;
   const discoveredWabaIds = new Set();
   if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
 
