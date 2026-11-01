@@ -7,6 +7,11 @@
  * 46. INOC Nomenclature Sync (Nominal -> Operational)
  * 47. Technical Oracle RAG Engine (Autonomous PDF Ingestion)
  * 48. Autonomous Bulk Site Creation via Multimodal NLP (CREATE_SITES)
+ * 49. Complete Turf Supplier Taxonomy Alignment (Other, Padel Magic, House, Mondo, Real Turf)
+ * 50. Autonomous Bulk State Mutation (Multi-Site ACTIONABLE_STATE_CHANGE)
+ * 51. INOC Financial Dropdown Integration (40% Deposit Reeeived Schema Sync)
+ * 52. The Blameless Machine (Production Feedback Loop) & 9-Gate Expansion
+ * 53. Relational Ticket Cross-Referencing (SR&ED Entry #088) & Kanban Status Transitions
  */
 
 process.on('uncaughtException', (err) => {
@@ -102,9 +107,10 @@ const GATE_NAMES = {
   5: 'Turf Laid',
   6: 'Sand Infill',
   7: 'Net & Posts',
-  8: 'Clean & Handover'
+  8: 'Clean & Handover',
+  9: 'Lead installer final sign off'
 };
-const TOTAL_GATES = 8;
+const TOTAL_GATES = 9;
 
 const COMMAND_MAP = {
   '/s': 'STATUS',
@@ -197,7 +203,7 @@ SINGLE-COURT EVALUATION MANDATE:
 Evaluate strictly the single primary court in the foreground being inspected.
 DO NOT evaluate background courts or adjacent courts. Disregard courts seen in the distance.
 
-PADEL COURT 8-GATE PHYSICAL CONSTRUCTION RUBRIC (SUPER PANORAMIC SPEC):
+PADEL COURT 9-GATE PHYSICAL CONSTRUCTION RUBRIC (SUPER PANORAMIC SPEC):
 When inspecting video frames, visually identify completed physical stages:
 - Gate 1: "Foundation & Slab" (Cured concrete pad, existing sport court, or existing tennis foundation)
 - Gate 2: "Steel Frame" (Vertical steel posts and perimeter frame beams bolted upright. NOTE: Super Panoramic courts do NOT have corner posts)
@@ -207,6 +213,7 @@ When inspecting video frames, visually identify completed physical stages:
 - Gate 6: "Sand Infill" (Silica sand distributed and brushed evenly across turf carpet fibers)
 - Gate 7: "Net & Posts" (Center net posts mounted, regulation net installed and tensioned)
 - Gate 8: "Clean & Handover" (STRICT: Construction tools, trash, and active debris MUST be entirely cleared. Court must be pristine and ready for tournament play).
+- Gate 9: "Lead installer final sign off" (Only verify if explicitly spoken by the installer on camera).
 
 FRICTIONLESS PROGRESSION & PUNCH LIST QA:
 - Job sites operate in parallel. If multiple physical gates are happening at once (e.g. turf and nets), list ALL of them in the "in_progress_gates" array.
@@ -301,8 +308,8 @@ ROUTING INTENTS:
 4. "TICKET_QUERY": User is asking specifically about open tickets, support issues, work orders, chores, repairs, or pending tasks.
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
-7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker.
-8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on the Sites table (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness).
+7. "TICKET_UPDATE": User is providing a status update, note, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker, OR explicitly change a ticket's status (e.g., "Starting work", "Paused", "Cancelled").
+8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on existing Sites (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness).
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies.
@@ -319,18 +326,18 @@ ROUTING INTENTS:
 22. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
 23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, blueprints, or CAD files for a specific site.
 24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, foundation, glass specification, or dimension question that requires reading proprietary blueprints, manuals, or engineering files.
-25. "CREATE_SITES": User is requesting to create one or multiple new sites/courts. The user will list the names of the courts. Extract the list of names and any provided construction specifications (manufacturer, turf color, steel color, model type, etc.) to apply across all of them.
+25. "CREATE_SITES": User is requesting to create entirely NEW sites/courts. The user will list the names of the courts. Extract the list of names and any provided construction specifications to apply across all of them.
 
 Extract:
 "queried_court_name": string or null,
 "matched_site_name": string or null,
-"new_site_names": ["string"] or [],
+"target_site_names": ["string"] or [],
 "ticket_id": integer or null,
 "referenced_ticket_id": integer or null,
 "referenced_entity_name": string or null,
 "reassign_site_name": string or null,
 "assign_worker_name": string or null,
-"ticket_status_update": string or null,
+"ticket_status_update": "Open" | "In Progress" | "Complete" | "Paused" | "Cancelled" | null,
 "update_note": string or null,
 "freight_bol": string or null,
 "freight_integer_count": number or null,
@@ -347,14 +354,14 @@ Extract:
 DATABASE FIELD MAPPING OVERRIDES:
 "workflow_mode": "INSTALLATION" | "MAINTENANCE" | "SPOT_VISIT" | "EXECUTIVE" | "PRODUCTION" | "LOGISTICS" | "INVENTORY" | "PLANNING" | null
 "site_status_update": "PLANNING" | "ACTIVE" | "PAUSED" | "COMPLETE" | "BLOCKED_WEATHER" | "BLOCKED_PARTS" | "END_OF_DAY" | "OPEN_FOR_PLAY" | "WINTERIZED_CLOSED" | "UNDER_MAINTENANCE" | "IN_CONSTRUCTION" | "Materials Staged" | null
-"deposit_status": "Pending Deposit" | "40% Delivery Payment" | "50% Deposit Received" | "10% Final Payment" | "Paid in Full" | null
+"deposit_status": "Pending Deposit" | "40% Delivery Payment" | "50% Deposit Received" | "10% Final Payment" | "Paid in Full" | "40% Deposit Reeeived" | null
 "foundation_type": "Poured Concrete Slab" | "Existing Tennis Conversion" | "Indoor Commercial Slab" | "Post-Tensioned Slab" | null
 "slab_pour_date": "YYYY-MM-DD" | null
 "assigned_crew": "Team Alpha" | "Team Beta" | "Logistics" | "Unassigned" | null
 "manufacturer": "BPC" | "Mejor Set" | "AFP" | "Chinese" | "Padel Tech" | "Spanish" | null
 "steel_color": "Black" | "Pearl Mouse" | "Blue" | "Green" | null
-"turf_color": "Blue" | "Green" | "Terracotta" | null
-"turf_supplier": "Real Turf" | "Mondo" | "House" | null
+"turf_color": "Blue" | "Green" | "Terracotta" | "Black" | "Red" | null
+"turf_supplier": "Real Turf" | "Mondo" | "House" | "Padel Magic" | "Other" | null
 "year_installed": number | null
 "model_type": "Standard" | "Hurricane" | "Indoor" | "Outdoor Super Panoramic" | "Indoor Super Panoramic" | "Hurricane Super Panoramic" | "Pickleball" | "Sport Court" | "Decorative" | null
 "glass_thickness": "10mm" | "12mm" | null
@@ -364,7 +371,7 @@ OUTPUT FORMAT (JSON ONLY):
   "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY" | "ORACLE_QUERY" | "CREATE_SITES",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
-  "new_site_names": ["string"],
+  "target_site_names": ["string"],
   "ticket_id": integer or null,
   "referenced_ticket_id": integer or null,
   "referenced_entity_name": "string or null",
@@ -694,7 +701,6 @@ async function syncOracleDocs() {
     
     let newUris = [];
     for (const rec of records) {
-       // Explicitly supports Airtable 'Attachments' and fallback schema names
        const attachments = rec.fields['Attachments'] || rec.fields['Attachment'] || rec.fields['Document'] || [];
        const docTitle = rec.fields['Name'] || rec.fields['Title'] || 'Technical Document';
        
@@ -754,7 +760,6 @@ async function syncOracleDocs() {
   }
 }
 
-// Refresh Oracle corpus every 24 hours to prevent Gemini File API 48h expiration
 setInterval(syncOracleDocs, 24 * 60 * 60 * 1000);
 
 async function handleOracleQuery(nlp, dispatchTarget) {
@@ -931,7 +936,7 @@ function evaluateReadinessGate(siteRecord) {
   }
 
   const deposit = f['Deposit Status'] || '';
-  const hasDeposit = (deposit === '50% Deposit Received' || deposit === 'Paid in Full' || deposit === '40% Delivery Payment' || deposit === '10% Final Payment');
+  const hasDeposit = (deposit === '50% Deposit Received' || deposit === 'Paid in Full' || deposit === '40% Delivery Payment' || deposit === '10% Final Payment' || deposit === '40% Deposit Reeeived');
 
   let slabCured = false;
   let cureMsg = 'Awaiting Foundation Pour';
@@ -1323,6 +1328,7 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
     }
   }
 
+  // Allow explicit status transitions mapping to Kanban boards
   if (nlp.ticket_status_update) {
     updatePayload['Status'] = nlp.ticket_status_update;
   }
@@ -1332,15 +1338,17 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
 
   const ticketId = targetTicket.fields['Assignment ID'] ? `#${targetTicket.fields['Assignment ID']}` : 'TICKET';
   const type = targetTicket.fields['Assignment Type'] || 'Task';
+  const newStatusStr = nlp.ticket_status_update ? `\n📊 *New Status:* ${nlp.ticket_status_update}` : '';
 
   let confirmCard = `📝 *TITAN OS | ${type.toUpperCase()} UPDATED*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `🎫 *Ticket:* ${ticketId}\n` +
     `👤 *Logged By:* ${workerName}\n` +
-    `⏱️ *Time:* ${timeStr}\n` +
-    (reassignedSiteName ? `🏟️ *Reassigned Site:* ${reassignedSiteName}\n` : '') +
-    (assignedWorkerName ? `👷 *Assigned Tech:* ${assignedWorkerName}\n` : '') +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `⏱️ *Time:* ${timeStr}` +
+    newStatusStr +
+    (reassignedSiteName ? `\n🏟️ *Reassigned Site:* ${reassignedSiteName}` : '') +
+    (assignedWorkerName ? `\n👷 *Assigned Tech:* ${assignedWorkerName}` : '') +
+    `\n━━━━━━━━━━━━━━━━━━━━\n` +
     `📋 *Added Note:*\n"${cleanUpdate}"\n\n` +
     `✅ *Airtable ledger updated.*`;
 
@@ -2364,6 +2372,7 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
     fieldTickets.forEach(t => {
       const ticketNum = t.fields['Assignment ID'] ? `#${t.fields['Assignment ID']}` : 'WO';
       const priority = t.fields['Priority'] || 'Medium';
+      const status = t.fields['Status'] || 'Open';
       
       let siteLabel = '';
       if (isAllSites && t.fields['Sites'] && memoryCache.sites) {
@@ -2389,7 +2398,11 @@ async function handleSpokenStatusQuery(queriedName, fallbackSite, dispatchTarget
       const rawNote = t.fields['Notes'] || '';
       const cleanNote = rawNote.replace(/\n/g, ' ').replace(/^\[.*?\]\s*/, '').slice(0, 80);
       
-      responseCard += `• *${ticketNum}*${siteLabel} [${priority}] *${category}*${assignedWorkers}\n  └ _${cleanNote || 'No details provided.'}_\n`;
+      let statusIcon = '⏳';
+      if (status === 'In Progress') statusIcon = '🛠️';
+      if (status === 'Paused') statusIcon = '⏸️';
+      
+      responseCard += `• *${ticketNum}*${siteLabel} [${priority}] *${category}*${assignedWorkers}\n  └ ${statusIcon} Status: ${status}\n  └ _${cleanNote || 'No details provided.'}_\n\n`;
     });
   }
 
@@ -2712,16 +2725,35 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
     return;
   }
 
+  // Handle Multi-Site Actionable State Change
+  const targetSiteIds = [];
+  const targetSiteNames = [];
+  
+  if (nlp.target_site_names && nlp.target_site_names.length > 0) {
+     for (const sName of nlp.target_site_names) {
+        const matched = await lookupSite(null, sName);
+        if (matched) {
+           targetSiteIds.push(matched.id);
+           targetSiteNames.push(matched.fields['Site Name']);
+        }
+     }
+  } else {
+     targetSiteIds.push(targetSiteId);
+     targetSiteNames.push(targetSiteName);
+  }
+
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'HQ Admin';
   updatePayload['Last Note'] = `[DATABASE OVERRIDE - ${workerName}]: ${updateNotes.join(', ')}`;
   updatePayload['Last Intent'] = 'ACTIONABLE_STATE_CHANGE';
 
-  await airtableWriteWithAutoDrop('Sites', updatePayload, targetSiteId);
+  for (const tId of targetSiteIds) {
+     await airtableWriteWithAutoDrop('Sites', updatePayload, tId);
+  }
   invalidateAirtableCache('sites');
 
   const confirmCard = `🎛️ *TITAN OS | SITE LEDGER UPDATED*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🏟️ *Court:* ${targetSiteName}\n` +
+    `🏟️ *Target(s):* ${targetSiteNames.length > 3 ? `${targetSiteNames.length} courts updated` : targetSiteNames.join(', ')}\n` +
     `👤 *Updated By:* ${workerName}\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `✅ *Database Fields Modified:* \n• ${updateNotes.join('\n• ')}\n\n` +
@@ -3360,12 +3392,38 @@ async function processMediaBatch(batch) {
   }
 
   const forensicAudit = await evaluateCourtMediaBatch(items, cumulativeContext);
-
   let targetedSite = targetedSiteOverride || site;
-
-  const siteMode = targetedSite?.fields?.['Workflow Mode'] || cumulativeContext.workflowMode || 'INSTALLATION';
   const courtLabel = targetedSite?.fields?.['Site Name'] || 'Assigned Court';
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Installer';
+  
+  // THE BLAMELESS MACHINE: Production/Factory Feedback Loop
+  if (forensicAudit.defect_origin === 'FABRICATION' || 
+      (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop|door/i.test(b)))) {
+      
+      const factoryPhones = '14379287172'; // Add production floor numbers here
+      const validVideo = items.find(i => i.type === 'video');
+      let videoLink = null;
+      if (validVideo && storageResults.length > 0) {
+          const videoIndex = items.indexOf(validVideo);
+          if (storageResults[videoIndex] && storageResults[videoIndex].signedUrl) {
+              videoLink = storageResults[videoIndex].signedUrl;
+          }
+      }
+      
+      const toleranceAlert = `🏭 *TITAN OS | PRODUCTION TOLERANCE ALERT*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ *Defect Origin:* FABRICATION\n` +
+        `📍 *Location:* ${courtLabel}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `📋 *Issue Detected:*\n${forensicAudit.blockers_detected ? forensicAudit.blockers_detected.join('\n') : forensicAudit.summary}\n\n` +
+        (videoLink ? `🎥 *Forensic Video Record:*\n${videoLink}\n\n` : '') +
+        `_Action: Check active jig alignments and weld tolerances._`;
+        
+      console.log(`[Blameless Machine] Triggering Fabrication Alert for ${courtLabel}`);
+      await fanOutToSubscribers(factoryPhones, toleranceAlert);
+  }
+
+  const siteMode = targetedSite?.fields?.['Workflow Mode'] || cumulativeContext.workflowMode || 'INSTALLATION';
   const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
 
   let weatherTripwires = { summaryText: '' };
@@ -3439,13 +3497,13 @@ async function processMediaBatch(batch) {
       milestoneTimestamps[highestGate] = new Date().toISOString();
     }
 
-    if (highestGate >= 8 && milestoneTimestamps['1'] && isNewMilestone) {
+    if (highestGate >= TOTAL_GATES && milestoneTimestamps['1'] && isNewMilestone) {
       const start = new Date(milestoneTimestamps['1']);
       const end = new Date(milestoneTimestamps[highestGate]);
       const diffHrs = Math.abs(end - start) / 36e5;
       const days = Math.floor(diffHrs / 24);
       const hours = Math.round(diffHrs % 24);
-      velocityMessage = `\n⏱️ *Build Velocity:* ${days} Days, ${hours} Hours (Gate 1 to Gate 8)`;
+      velocityMessage = `\n⏱️ *Build Velocity:* ${days} Days, ${hours} Hours (Gate 1 to Final)`;
     }
 
     if (targetedSite) {
