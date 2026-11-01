@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.12 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.13 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * 44. Executive Maintenance Ticket Rollups
@@ -15,6 +15,7 @@
  * 54. Auto-Healer Null Payload Catch & Unified Bulk BOM Reservation Loop
  * 55. BPC-Exclusive Inventory Burn (Third-Party Container Bypass)
  * 56. Global Oracle Document Dispatch (Dual-Pass Retrieval Engine)
+ * 57. Role-Based Access Control (RBAC) & Dynamic Help Menu / Site Template Generator
  */
 
 process.on('uncaughtException', (err) => {
@@ -155,7 +156,8 @@ const COMMAND_MAP = {
   '/plan': 'DOCUMENT_RETRIEVAL',
   '/plans': 'DOCUMENT_RETRIEVAL',
   '/help': 'HELP',
-  '/?': 'HELP'
+  '/?': 'HELP',
+  '/new': 'NEW_SITE_TEMPLATE'
 };
 
 const VISUAL_TRIAGE_PROMPT = `
@@ -531,6 +533,14 @@ function invalidateAirtableCache(entity = 'all') {
   if (entity === 'all' || entity === 'contacts') memoryCache.contactsLastFetched = 0;
   if (entity === 'all' || entity === 'assignments') memoryCache.assignmentsLastFetched = 0;
   console.log(`[Cache Engine] Cache invalidated: ${entity}`);
+}
+
+// ====================================================================
+// 1B. ROLE-BASED ACCESS CONTROL (RBAC)
+// ====================================================================
+function isAuthorizedForFinance(callerIdentity) {
+  const role = String(callerIdentity.role || '').toLowerCase();
+  return role.includes('finance') || role.includes('executive') || role.includes('admin') || role.includes('management');
 }
 
 // ====================================================================
@@ -2963,7 +2973,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.12 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.13 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3253,16 +3263,28 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   }
 
   if (triage.intent === 'AR_LOOKUP') {
+    if (!isAuthorizedForFinance(callerIdentity)) {
+        await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Your profile (${callerIdentity.role}) lacks permissions to query QuickBooks.`);
+        return;
+    }
     await handleSpokenARLookup(triage.referenced_entity_name, dispatchTarget);
     return;
   }
 
   if (triage.intent === 'INVOICE_APPROVAL') {
+    if (!isAuthorizedForFinance(callerIdentity)) {
+        await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Action requires Finance permissions.`);
+        return;
+    }
     await handleInvoiceApproval(triage, dispatchTarget);
     return;
   }
 
   if (triage.intent === 'CREATE_INVOICE') {
+    if (!isAuthorizedForFinance(callerIdentity)) {
+        await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Action requires Finance permissions.`);
+        return;
+    }
     await handleInvoiceCreation(triage, dispatchTarget);
     return;
   }
@@ -3848,7 +3870,43 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (lTxt.startsWith('/help') || lTxt === 'help' || lTxt === '?') {
-        await sendWhatsAppMessage(dispatchTarget, `🤖 *TITAN OS COMMANDS*\n\n• Drop location pin ➔ Morning Check-In & Weather Tripwires\n• Send video walkaround ➔ Milestone & Punch List QA\n• Send audio memo ➔ Voice note / Parts request / Technical questions\n• /inv or /inventory ➔ Yard stock on hand & committed materials\n• /docs ➔ Pull blueprint / foundation PDF\n• /status ➔ Active court gate & tickets\n• /t ➔ List open field tickets only\n• /weather ➔ Hyperlocal wind & adhesive status\n• /specs ➔ Technical dimensions & CBSA rules\n• "what is my 30+ AR?" ➔ QuickBooks lookup`);
+        let helpCard = `🤖 *TITAN OS COMMANDS*\n\n` +
+          `• Drop location pin ➔ Morning Check-In & Weather Tripwires\n` +
+          `• Send video walkaround ➔ Milestone & Punch List QA\n` +
+          `• Send audio memo ➔ Voice note / Parts request / Technical questions\n` +
+          `• /inv or /inventory ➔ Yard stock on hand & committed materials\n` +
+          `• /docs ➔ Pull blueprint / foundation PDF\n` +
+          `• /status ➔ Active court gate & tickets\n` +
+          `• /t ➔ List open field tickets only\n` +
+          `• /weather ➔ Hyperlocal wind & adhesive status\n` +
+          `• /specs ➔ Technical dimensions & CBSA rules`;
+        
+        if (isAuthorizedForFinance(callerIdentity)) {
+            helpCard += `\n\n*Finance & Executive Actions:*\n` +
+                        `• "what is my 30+ AR?" ➔ QuickBooks lookup\n` +
+                        `• /new ➔ View bulk court creation template`;
+        }
+        await sendWhatsAppMessage(dispatchTarget, helpCard);
+        return;
+      }
+      
+      if (lTxt.startsWith('/new')) {
+        if (!isAuthorizedForFinance(callerIdentity)) {
+           await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Your profile lacks permissions to create new sites.`);
+           return;
+        }
+        const template = `🏟️ *TITAN OS | NEW SITE TEMPLATE*\n\n` +
+          `To create one or multiple new courts, reply with a voice note or text using this format (you can skip any unknown details):\n\n` +
+          `*Court Name(s):* (e.g., Fairgrounds Vaughan 1 and 2)\n` +
+          `*Manufacturer:* (e.g., BPC, Mejor Set, AFP)\n` +
+          `*Model Type:* (e.g., Outdoor Super Panoramic)\n` +
+          `*Steel Color:* (e.g., Black, Blue)\n` +
+          `*Turf Color:* (e.g., Blue, Green, Red, Black)\n` +
+          `*Turf Supplier:* (e.g., Mondo, Real Turf, Padel Magic, House, Other)\n` +
+          `*Foundation:* (e.g., Poured Concrete Slab)\n` +
+          `*Deposit Status:* (e.g., 50% Deposit Received, Paid in Full)`;
+        
+        await sendWhatsAppMessage(dispatchTarget, template);
         return;
       }
 
@@ -3859,7 +3917,7 @@ app.post('/webhook', async (req, res) => {
 
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/plan')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
-        await handleDocumentRetrieval(targetQuery, site, dispatchTarget);
+        await handleDocumentRetrieval({ transcript_en: targetQuery }, site, dispatchTarget);
         return;
       }
 
@@ -3885,6 +3943,10 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (lTxt.startsWith('/ar')) {
+        if (!isAuthorizedForFinance(callerIdentity)) {
+           await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Your profile lacks permissions to query QuickBooks.`);
+           return;
+        }
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         await handleSpokenARLookup(targetQuery, dispatchTarget);
         return;
@@ -3898,6 +3960,10 @@ app.post('/webhook', async (req, res) => {
       const triage = await triageSpokenOrTextNLP(txt, false, []);
       if (triage) {
         if (triage.intent === 'CREATE_SITES') {
+          if (!isAuthorizedForFinance(callerIdentity)) {
+             await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Your profile lacks permissions to create new sites.`);
+             return;
+          }
           await handleBulkSiteCreation(triage, dispatchTarget, fromPhone);
           return;
         }
@@ -3906,7 +3972,8 @@ app.post('/webhook', async (req, res) => {
           return;
         }
         if (triage.intent === 'DOCUMENT_RETRIEVAL') {
-          await handleDocumentRetrieval(triage, site, dispatchTarget);
+          const targetQuery = triage.queried_court_name || triage.matched_site_name || triage.referenced_entity_name;
+          await handleDocumentRetrieval({ transcript_en: targetQuery }, site, dispatchTarget);
           return;
         }
         if (triage.intent === 'INVENTORY_QUERY') {
@@ -3914,7 +3981,27 @@ app.post('/webhook', async (req, res) => {
           return;
         }
         if (triage.intent === 'AR_LOOKUP') {
+          if (!isAuthorizedForFinance(callerIdentity)) {
+              await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Your profile lacks permissions to query QuickBooks.`);
+              return;
+          }
           await handleSpokenARLookup(triage.referenced_entity_name, dispatchTarget);
+          return;
+        }
+        if (triage.intent === 'INVOICE_APPROVAL') {
+          if (!isAuthorizedForFinance(callerIdentity)) {
+              await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Action requires Finance permissions.`);
+              return;
+          }
+          await handleInvoiceApproval(triage, dispatchTarget);
+          return;
+        }
+        if (triage.intent === 'CREATE_INVOICE') {
+          if (!isAuthorizedForFinance(callerIdentity)) {
+              await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Action requires Finance permissions.`);
+              return;
+          }
+          await handleInvoiceCreation(triage, dispatchTarget);
           return;
         }
         if (triage.intent === 'TICKET_UPDATE') {
@@ -4032,7 +4119,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.12' });
+  res.status(200).json({ status: 'healthy', version: '6.0.13' });
 });
 
 // ====================================================================
@@ -4141,7 +4228,7 @@ async function autoSubscribeMetaWebhook() {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.12 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.13 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
