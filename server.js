@@ -3955,7 +3955,6 @@ app.post('/webhook/gmail', async (req, res) => {
       timestamp: Date.now()
     });
 
-    // AGGRESSIVE SANITIZATION TO PREVENT META 400 ERRORS
     const sanitizeWA = (str) => String(str || '').replace(/[^\w\s@.,?!-]/g, ' ').replace(/\s+/g, ' ').trim();
     
     const safeName = sanitizeWA(senderName).slice(0, 30);
@@ -3963,17 +3962,17 @@ app.post('/webhook/gmail', async (req, res) => {
     const rawSnippet = (email.snippet || email.body).slice(0, 150);
     const safeSnippet = sanitizeWA(rawSnippet);
 
-    const emailCard = `TITAN OS | INBOUND EMAIL\n` +
+    const emailCard = `📬 *TITAN OS | INBOUND EMAIL*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `From: ${safeName} (${senderEmail})\n` +
-      `To: ${String(aliasReceivedAt).slice(0, 40)}\n` +
-      `Subject: ${safeSubject}\n` +
+      `👤 *From:* ${safeName} (${senderEmail})\n` +
+      `📥 *To Alias:* ${String(aliasReceivedAt).slice(0, 40)}\n` +
+      `📌 *Subject:* ${safeSubject}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `Preview: "${safeSnippet}..."\n\n` +
-      `Reply to this message with a voice note or text to email them back.`;
+      `💬 *Preview:*\n"${safeSnippet}..."\n\n` +
+      `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.`;
 
-    const buttons = [{ id: `REPLY_EMAIL_${email.threadId}`, title: 'Reply' }];
-    await sendWhatsAppButtons(CONFIG.meta.targetVerifiedPhone, emailCard, buttons);
+    // Swap to standard message to guarantee delivery
+    await sendWhatsAppMessage(CONFIG.meta.targetVerifiedPhone, emailCard);
   } catch (err) {
     console.error('[Gmail Webhook Exception]:', err.message);
   }
