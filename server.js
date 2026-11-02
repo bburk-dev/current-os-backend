@@ -17,7 +17,7 @@
  * 56. Global Oracle Document Dispatch (Dual-Pass Retrieval Engine)
  * 57. Role-Based Access Control (RBAC) & Dynamic Help Menu / Site Template Generator
  * 58. Frictionless Sales Pipeline (Auto-Site Linking & Pasted Email Resolution)
- * 59. Gmail Inbound Monitor & Gemini Polished Replies via WhatsApp
+ * 59. Gmail Inbound Monitor, Body Extraction & Autonomous CRM Logging
  */
 
 process.on('uncaughtException', (err) => {
@@ -840,6 +840,10 @@ async function fetchLatestInboundEmail() {
     } else if (msg.payload?.body?.data) {
       bodyText = Buffer.from(msg.payload.body.data, 'base64').toString('utf8');
     }
+
+    // Clean up forwarded message headers for cleaner WhatsApp preview body
+    bodyText = bodyText.replace(/---------- Forwarded message ---------[\s\S]*?(Subject:|To:|Date:|From:).*?\n/gi, '').trim();
+    bodyText = bodyText.replace(/On .*? wrote:\s*>?/gi, '').trim();
 
     await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/modify`, {
       method: 'POST',
@@ -3959,8 +3963,10 @@ app.post('/webhook/gmail', async (req, res) => {
     
     const safeName = sanitizeWA(senderName).slice(0, 30);
     const safeSubject = sanitizeWA(email.subject).slice(0, 50);
-    const rawSnippet = (email.snippet || email.body).slice(0, 150).replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-    const safeSnippet = sanitizeWA(rawSnippet);
+    
+    // Use the full parsed body instead of the short snippet
+    const rawPreview = email.body ? email.body.slice(0, 600) : email.snippet;
+    const safePreview = sanitizeWA(rawPreview);
 
     const emailCard = `📬 *TITAN OS | INBOUND EMAIL*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -3968,11 +3974,11 @@ app.post('/webhook/gmail', async (req, res) => {
       `📥 *To Alias:* ${String(aliasReceivedAt).slice(0, 40)}\n` +
       `📌 *Subject:* ${safeSubject}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `💬 *Preview:*\n"${safeSnippet}..."\n\n` +
+      `💬 *Body Preview:*\n"${safePreview}..."\n\n` +
       `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.`;
 
-    const buttons = [{ id: `REPLY_EMAIL_${email.threadId}`, title: 'Reply' }];
-    await sendWhatsAppButtons(CONFIG.meta.targetVerifiedPhone, emailCard, buttons);
+    // Swap to standard message to guarantee delivery
+    await sendWhatsAppMessage(CONFIG.meta.targetVerifiedPhone, emailCard);
   } catch (err) {
     console.error('[Gmail Webhook Exception]:', err.message);
   }
@@ -4052,7 +4058,27 @@ app.post('/webhook', async (req, res) => {
       });
 
       if (sent) {
-        await sendWhatsAppMessage(dispatchTarget, `✅ *Email Dispatched to ${pendingEmail.senderName}*\n\n"${polishedBody}"`);
+        // --- NEW: LOG CRM TICKET TO AIRTABLE ---
+        const todayStr = new Date().toISOString().split('T')[0];
+        const ticketNotes = `[EMAIL CRM LOG - Replied via Titan OS]\nClient: ${pendingEmail.senderName} (${pendingEmail.senderEmail})\nSubject: ${pendingEmail.subject}\n\nTitan OS Dispatched Reply:\n"${polishedBody}"`;
+        
+        const assignmentPayload = {
+          'Date': todayStr,
+          'Assignment Type': 'Sales',
+          'Task Category': 'Commercial Sales',
+          'Priority': 'High',
+          'Status': 'In Progress',
+          'Notes': ticketNotes
+        };
+        
+        if (worker && worker.id) {
+          assignmentPayload['Worker'] = [worker.id];
+        }
+        
+        const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+        const ticketIdStr = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
+        
+        await sendWhatsAppMessage(dispatchTarget, `✅ *Email Dispatched to ${pendingEmail.senderName}*\n\n"${polishedBody}"\n\n🎫 *Logged as Ticket ${ticketIdStr} in Daily Assignments.*`);
       } else {
         await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to send email to ${pendingEmail.senderEmail}.`);
       }
