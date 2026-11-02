@@ -775,6 +775,7 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
   }
 }
 
+
 // ====================================================================
 // 2D. GMAIL REST API ENGINE (OAUTH2 REFRESH & MESSAGE DISPATCH)
 // ====================================================================
@@ -810,7 +811,7 @@ async function fetchLatestInboundEmail() {
   if (!token) return null;
 
   try {
-    const listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread&maxResults=1', {
+    const listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread%20newer_than:1h&maxResults=1', {
       headers: { Authorization: `Bearer ${token}` }
     });
     const listData = await listRes.json();
@@ -3909,6 +3910,21 @@ async function processMediaBatch(batch) {
 // 15. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
 
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token === CONFIG.meta.verifyToken) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+app.post('/webhook/gamecam', async (req, res) => {
+  res.sendStatus(200);
+});
+
 // ====================================================================
 // 15B. GMAIL PUB/SUB WEBHOOK INGESTION
 // ====================================================================
@@ -3953,21 +3969,6 @@ app.post('/webhook/gmail', async (req, res) => {
   } catch (err) {
     console.error('[Gmail Webhook Exception]:', err.message);
   }
-});
-
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === CONFIG.meta.verifyToken) {
-    return res.status(200).send(challenge);
-  }
-  return res.sendStatus(403);
-});
-
-app.post('/webhook/gamecam', async (req, res) => {
-  res.sendStatus(200);
 });
 
 app.post('/webhook', async (req, res) => {
