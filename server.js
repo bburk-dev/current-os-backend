@@ -3965,6 +3965,16 @@ app.post('/webhook/gmail', async (req, res) => {
       const todayStr = new Date().toISOString().split('T')[0];
       const ticketNotes = `[INBOUND EMAIL LEAD]\nFrom: ${safeName} (${senderEmail})\nTo: ${aliasReceivedAt}\nSubject: ${email.subject}\n\nMessage Body Preview:\n"${rawPreview}"`;
       
+      // Auto-create a temporary planning site to bind the lead ticket
+      const newSitePayload = {
+         'Site Name': safeName,
+         'Workflow Mode': 'PLANNING',
+         'Site Status': 'ACTIVE',
+         'Last Note': `[EMAIL LEAD AUTO-GENERATED]`
+      };
+      const createdSite = await airtableWriteWithAutoDrop('Sites', newSitePayload);
+      if (createdSite) invalidateAirtableCache('sites');
+
       const assignmentPayload = {
         'Date': todayStr,
         'Assignment Type': 'Sales',
@@ -3973,6 +3983,10 @@ app.post('/webhook/gmail', async (req, res) => {
         'Status': 'Open',
         'Notes': ticketNotes
       };
+      
+      if (createdSite && createdSite.id) {
+         assignmentPayload['Sites'] = [createdSite.id];
+      }
       
       const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
       airtableRecordId = createdAssignment?.id || null;
