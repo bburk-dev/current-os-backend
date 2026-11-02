@@ -58,7 +58,7 @@ const CONFIG = {
     appSecret: process.env.META_APP_SECRET,
     phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
     wabaId: process.env.META_WABA_ID || process.env.WABA_ID,
-    targetVerifiedPhone: '12892217329',
+    targetVerifiedPhone: '14379287172',
     graphApiUrl: 'https://graph.facebook.com/v21.0'
   },
   supabase: {
@@ -3959,7 +3959,7 @@ app.post('/webhook/gmail', async (req, res) => {
     
     const safeName = sanitizeWA(senderName).slice(0, 30);
     const safeSubject = sanitizeWA(email.subject).slice(0, 50);
-    const rawSnippet = (email.snippet || email.body).slice(0, 150);
+    const rawSnippet = (email.snippet || email.body).slice(0, 150).replace(/&#39;/g, "'").replace(/&quot;/g, '"');
     const safeSnippet = sanitizeWA(rawSnippet);
 
     const emailCard = `📬 *TITAN OS | INBOUND EMAIL*\n` +
@@ -3971,8 +3971,8 @@ app.post('/webhook/gmail', async (req, res) => {
       `💬 *Preview:*\n"${safeSnippet}..."\n\n` +
       `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.`;
 
-    // Swap to standard message to guarantee delivery
-    await sendWhatsAppMessage(CONFIG.meta.targetVerifiedPhone, emailCard);
+    const buttons = [{ id: `REPLY_EMAIL_${email.threadId}`, title: 'Reply' }];
+    await sendWhatsAppButtons(CONFIG.meta.targetVerifiedPhone, emailCard, buttons);
   } catch (err) {
     console.error('[Gmail Webhook Exception]:', err.message);
   }
