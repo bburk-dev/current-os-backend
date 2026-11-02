@@ -17,7 +17,7 @@
  * 56. Global Oracle Document Dispatch (Dual-Pass Retrieval Engine)
  * 57. Role-Based Access Control (RBAC) & Dynamic Help Menu / Site Template Generator
  * 58. Frictionless Sales Pipeline (Auto-Site Linking & Pasted Email Resolution)
- * 59. Gmail Inbound Monitor, Body Extraction & Two-Stage CRM Logging
+ * 59. Gmail Inbound Monitor, Single-Ticket CRM Logging & AI Actionability Filter
  */
 
 process.on('uncaughtException', (err) => {
@@ -811,7 +811,8 @@ async function fetchLatestInboundEmail() {
   if (!token) return null;
 
   try {
-    const listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread%20newer_than:1h&maxResults=1', {
+    const query = encodeURIComponent('is:unread newer_than:1h -category:promotions -category:social');
+    const listRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${query}&maxResults=1`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     const listData = await listRes.json();
@@ -911,6 +912,39 @@ async function sendGmailReply({ to, fromAlias, subject, body, threadId, inReplyT
   } catch (err) {
     console.error('[Gmail Outbound] Send failed:', err.message);
     return false;
+  }
+}
+
+// --- NEW: AUTONOMOUS AI EMAIL ACTIONABILITY FILTER ---
+async function evaluateEmailActionability(subject, body) {
+  const prompt = `You are the Titan OS Executive Inbox Filter. 
+  Your job is to keep the WhatsApp dispatch strictly focused on "action and immediacy" (communication, predictability, compliance).
+  
+  Evaluate this email. DOES IT REQUIRE AN ACTION OR RESPONSE?
+  - TRUE (Actionable): Inquiries for courts/pricing, asks for foundation plans, technical questions, scheduling requests, client support needs, or direct task asks.
+  - FALSE (Noise): Real estate listings, newsletters, automated system alerts (e.g., Airtable, QuickBooks), generic CC'd chatter, spam, "Thank you" wrap-ups, or pure FYIs with no ask.
+  
+  Respond strictly with JSON: {"is_actionable": boolean, "reason": "short explanation"}
+  
+  Subject: "${subject}"
+  Body: "${(body || '').slice(0, 1000)}"`;
+  
+  try {
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+    };
+    const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    return JSON.parse(text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+  } catch (err) {
+    console.error('[Email Filter Error]:', err.message);
+    return { is_actionable: true, reason: 'Error fallback' }; // Default to let it through if API fails
   }
 }
 
@@ -3929,11 +3963,45 @@ app.post('/webhook/gamecam', async (req, res) => {
   res.sendStatus(200);
 });
 
+// --- NEW: AUTONOMOUS AI EMAIL ACTIONABILITY FILTER ---
+async function evaluateEmailActionability(subject, body) {
+  const prompt = `You are the Titan OS Executive Inbox Filter. 
+  Your job is to keep the WhatsApp dispatch strictly focused on "action and immediacy" (communication, predictability, compliance).
+  
+  Evaluate this email. DOES IT REQUIRE AN ACTION OR RESPONSE?
+  - TRUE (Actionable): Inquiries for courts/pricing, asks for foundation plans, technical questions, scheduling requests, client support needs, or direct task asks.
+  - FALSE (Noise): Real estate listings, newsletters, automated system alerts (e.g., Airtable, QuickBooks), generic CC'd chatter, spam, "Thank you" wrap-ups, or pure FYIs with no ask.
+  
+  Respond strictly with JSON: {"is_actionable": boolean, "reason": "short explanation"}
+  
+  Subject: "${subject}"
+  Body: "${(body || '').slice(0, 1000)}"`;
+  
+  try {
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+    };
+    const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    return JSON.parse(text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+  } catch (err) {
+    console.error('[Email Filter Error]:', err.message);
+    return { is_actionable: true, reason: 'Error fallback' }; // Default to let it through if API fails
+  }
+}
+
 // ====================================================================
 // 15B. GMAIL PUB/SUB WEBHOOK INGESTION
 // ====================================================================
 
 app.post('/webhook/gmail', async (req, res) => {
+  // Always immediately acknowledge Pub/Sub pushes
   res.sendStatus(200);
 
   try {
@@ -3943,20 +4011,25 @@ app.post('/webhook/gmail', async (req, res) => {
     console.log(`[Gmail Webhook] Received inbound email from: ${email.from} | Subject: "${email.subject}"`);
 
     const fromMatch = email.from.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.from, email.from];
-    const senderName = (fromMatch[1] || '').replace(/['"]/g, '').trim() || 'Inbound Prospect';
-    const senderEmail = (fromMatch[2] || '').trim();
+    const senderName = fromMatch[1].replace(/['"]/g, '').trim() || 'Inbound Prospect';
+    const senderEmail = fromMatch[2].trim();
+
+    const sanitizeWA = (str) => String(str || '').replace(/[^\w\s@.,?!-]/g, ' ').replace(/\s+/g, ' ').trim();
+    const safeName = sanitizeWA(senderName).slice(0, 30);
+    const safeSubject = sanitizeWA(email.subject).slice(0, 50);
+    const rawPreview = email.body ? email.body.slice(0, 600) : email.snippet;
+    const safePreview = sanitizeWA(rawPreview);
+
+    // --- AI SPAM FILTER ---
+    const filterDecision = await evaluateEmailActionability(email.subject, safePreview);
+    if (!filterDecision.is_actionable) {
+       console.log(`[Gmail Filter] 🛑 Dropped noise: ${email.subject} | Reason: ${filterDecision.reason}`);
+       return; 
+    }
+    console.log(`[Gmail Filter] ✅ Passed actionable email: ${email.subject} | Reason: ${filterDecision.reason}`);
     
     const toMatch = email.to.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.to, email.to];
     const aliasReceivedAt = toMatch[2] ? toMatch[2].trim() : (email.to || 'Unknown');
-
-    const sanitizeWA = (str) => String(str || '').replace(/[^\w\s@.,?!-]/g, ' ').replace(/\s+/g, ' ').trim();
-    
-    const safeName = sanitizeWA(senderName).slice(0, 30);
-    const safeSubject = sanitizeWA(email.subject).slice(0, 50);
-    
-    // Use the full parsed body instead of the short snippet
-    const rawPreview = email.body ? email.body.slice(0, 600) : email.snippet;
-    const safePreview = sanitizeWA(rawPreview);
 
     // --- AUTONOMOUS CRM LOGGING ON INBOUND ---
     let airtableRecordId = null;
@@ -3965,32 +4038,55 @@ app.post('/webhook/gmail', async (req, res) => {
       const todayStr = new Date().toISOString().split('T')[0];
       const ticketNotes = `[INBOUND EMAIL LEAD]\nFrom: ${safeName} (${senderEmail})\nTo: ${aliasReceivedAt}\nSubject: ${email.subject}\n\nMessage Body Preview:\n"${rawPreview}"`;
       
-      // Auto-create a temporary planning site to bind the lead ticket
-      const newSitePayload = {
-         'Site Name': safeName,
-         'Workflow Mode': 'PLANNING',
-         'Site Status': 'ACTIVE',
-         'Last Note': `[EMAIL LEAD AUTO-GENERATED]`
-      };
-      const createdSite = await airtableWriteWithAutoDrop('Sites', newSitePayload);
-      if (createdSite) invalidateAirtableCache('sites');
-
-      const assignmentPayload = {
-        'Date': todayStr,
-        'Assignment Type': 'Sales',
-        'Task Category': 'Commercial Sales',
-        'Priority': 'High',
-        'Status': 'Open',
-        'Notes': ticketNotes
-      };
+      let targetSiteId = null;
+      let targetTicket = null;
       
-      if (createdSite && createdSite.id) {
-         assignmentPayload['Sites'] = [createdSite.id];
+      const sites = await getCachedSites(true);
+      const existingSite = sites.find(s => String(s.fields['Site Name']).toLowerCase() === String(safeName).toLowerCase());
+      
+      if (existingSite) {
+         targetSiteId = existingSite.id;
+         const openTickets = await getCachedOpenAssignments(true);
+         targetTicket = openTickets.find(t => {
+            const tSites = t.fields['Sites'] || [];
+            const siteArray = Array.isArray(tSites) ? tSites : [tSites];
+            return siteArray.includes(targetSiteId) && (t.fields['Assignment Type'] === 'Sales');
+         });
+      } else {
+         const newSitePayload = {
+           'Site Name': safeName,
+           'Workflow Mode': 'PLANNING',
+           'Site Status': 'ACTIVE',
+           'Last Note': `[EMAIL LEAD AUTO-GENERATED]`
+        };
+        const createdSite = await airtableWriteWithAutoDrop('Sites', newSitePayload);
+        if (createdSite) {
+            targetSiteId = createdSite.id;
+            invalidateAirtableCache('sites');
+        }
+      }
+
+      if (targetTicket) {
+         airtableRecordId = targetTicket.id;
+         ticketIdStr = targetTicket.fields['Assignment ID'] ? `#${targetTicket.fields['Assignment ID']}` : 'EXISTING';
+         const existingNotes = targetTicket.fields['Notes'] || '';
+         const appendedNotes = `${existingNotes}\n\n[NEW INBOUND EMAIL]:\n"${rawPreview}"`;
+         await airtableWriteWithAutoDrop('Daily Assignments', { 'Notes': appendedNotes }, targetTicket.id);
+      } else {
+         const assignmentPayload = {
+            'Date': todayStr,
+            'Assignment Type': 'Sales',
+            'Task Category': 'Commercial Sales',
+            'Priority': 'High',
+            'Status': 'Open',
+            'Notes': ticketNotes
+         };
+         if (targetSiteId) assignmentPayload['Sites'] = [targetSiteId];
+         const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+         airtableRecordId = createdAssignment?.id || null;
+         ticketIdStr = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
       }
       
-      const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-      airtableRecordId = createdAssignment?.id || null;
-      ticketIdStr = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
       invalidateAirtableCache('assignments');
     } catch (crmErr) {
       console.error('[Gmail CRM Log Error]:', crmErr.message);
@@ -4014,7 +4110,7 @@ app.post('/webhook/gmail', async (req, res) => {
       `📌 *Subject:* ${safeSubject}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `💬 *Body Preview:*\n"${safePreview}..."\n\n` +
-      `👉 *To reply:* Reply to this message with a voice note or text.\n\n` +
+      `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.\n\n` +
       `🎫 *Logged as Sales Ticket ${ticketIdStr}*`;
 
     await sendWhatsAppMessage(CONFIG.meta.targetVerifiedPhone, emailCard);
@@ -4100,8 +4196,18 @@ app.post('/webhook', async (req, res) => {
         let ticketUpdateMsg = '';
         if (pendingEmail.airtableRecordId) {
           // Autonomous CRM Update on Outbound Reply
+          const openTickets = await getCachedOpenAssignments(true);
+          const targetTicket = openTickets.find(t => t.id === pendingEmail.airtableRecordId);
+          
+          let updatedNotes = `[EMAIL CRM LOG - Replied via Titan OS]\nClient: ${pendingEmail.senderName}\nTitan OS Dispatched Reply:\n"${polishedBody}"`;
+          
+          if (targetTicket && targetTicket.fields['Notes']) {
+             updatedNotes = `${targetTicket.fields['Notes']}\n\n[TITAN OS REPLY DISPATCHED]:\n"${polishedBody}"`;
+          }
+
           const updatePayload = {
-            'Status': 'In Progress'
+            'Status': 'In Progress',
+            'Notes': updatedNotes
           };
           
           if (worker && worker.id) {
