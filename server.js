@@ -3955,23 +3955,23 @@ app.post('/webhook/gmail', async (req, res) => {
       timestamp: Date.now()
     });
 
-    // SANITIZE WHATSAPP MARKDOWN CHARACTERS TO PREVENT 400 CRASHES
-    const sanitizeWA = (str) => String(str || '').replace(/[*_~`]/g, ' ');
-    const safeName = sanitizeWA(senderName);
-    const safeSubject = sanitizeWA(email.subject);
-    const rawSnippet = (email.snippet || email.body).slice(0, 200).replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+    // AGGRESSIVE SANITIZATION TO PREVENT META 400 ERRORS
+    const sanitizeWA = (str) => String(str || '').replace(/[^\w\s@.,?!-]/g, ' ').replace(/\s+/g, ' ').trim();
+    
+    const safeName = sanitizeWA(senderName).slice(0, 30);
+    const safeSubject = sanitizeWA(email.subject).slice(0, 50);
+    const rawSnippet = (email.snippet || email.body).slice(0, 150);
     const safeSnippet = sanitizeWA(rawSnippet);
 
-    const emailCard = `📬 *TITAN OS | INBOUND EMAIL RECEIVED*\n` +
+    const emailCard = `TITAN OS | INBOUND EMAIL\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `👤 *From:* ${safeName} (${senderEmail})\n` +
-      `📥 *To Alias:* ${aliasReceivedAt}\n` +
-      `📌 *Subject:* ${safeSubject}\n` +
+      `From: ${safeName} (${senderEmail})\n` +
+      `To: ${String(aliasReceivedAt).slice(0, 40)}\n` +
+      `Subject: ${safeSubject}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `💬 *Preview:*\n"${safeSnippet}..."\n\n` +
-      `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.`;
+      `Preview: "${safeSnippet}..."\n\n` +
+      `Reply to this message with a voice note or text to email them back.`;
 
-    // Strictly safe 5-byte button title
     const buttons = [{ id: `REPLY_EMAIL_${email.threadId}`, title: 'Reply' }];
     await sendWhatsAppButtons(CONFIG.meta.targetVerifiedPhone, emailCard, buttons);
   } catch (err) {
