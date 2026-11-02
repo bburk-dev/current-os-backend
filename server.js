@@ -17,7 +17,7 @@
  * 56. Global Oracle Document Dispatch (Dual-Pass Retrieval Engine)
  * 57. Role-Based Access Control (RBAC) & Dynamic Help Menu / Site Template Generator
  * 58. Frictionless Sales Pipeline (Auto-Site Linking & Pasted Email Resolution)
- * 59. Gmail Inbound Monitor, Body Extraction & Autonomous CRM Logging
+ * 59. Gmail Inbound Monitor, Body Extraction & Two-Stage CRM Logging
  */
 
 process.on('uncaughtException', (err) => {
@@ -3949,16 +3949,6 @@ app.post('/webhook/gmail', async (req, res) => {
     const toMatch = email.to.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.to, email.to];
     const aliasReceivedAt = toMatch[2] ? toMatch[2].trim() : (email.to || 'Unknown');
 
-    userPendingEmailMap.set(CONFIG.meta.targetVerifiedPhone, {
-      senderEmail,
-      senderName,
-      aliasReceivedAt,
-      subject: email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject}`,
-      threadId: email.threadId,
-      messageIdHeader: email.messageIdHeader,
-      timestamp: Date.now()
-    });
-
     const sanitizeWA = (str) => String(str || '').replace(/[^\w\s@.,?!-]/g, ' ').replace(/\s+/g, ' ').trim();
     
     const safeName = sanitizeWA(senderName).slice(0, 30);
@@ -3968,6 +3958,41 @@ app.post('/webhook/gmail', async (req, res) => {
     const rawPreview = email.body ? email.body.slice(0, 600) : email.snippet;
     const safePreview = sanitizeWA(rawPreview);
 
+    // --- AUTONOMOUS CRM LOGGING ON INBOUND ---
+    let airtableRecordId = null;
+    let ticketIdStr = 'NEW';
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const ticketNotes = `[INBOUND EMAIL LEAD]\nFrom: ${safeName} (${senderEmail})\nTo: ${aliasReceivedAt}\nSubject: ${email.subject}\n\nMessage Body Preview:\n"${rawPreview}"`;
+      
+      const assignmentPayload = {
+        'Date': todayStr,
+        'Assignment Type': 'Sales',
+        'Task Category': 'Commercial Sales',
+        'Priority': 'High',
+        'Status': 'Open',
+        'Notes': ticketNotes
+      };
+      
+      const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+      airtableRecordId = createdAssignment?.id || null;
+      ticketIdStr = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
+      invalidateAirtableCache('assignments');
+    } catch (crmErr) {
+      console.error('[Gmail CRM Log Error]:', crmErr.message);
+    }
+
+    userPendingEmailMap.set(CONFIG.meta.targetVerifiedPhone, {
+      senderEmail,
+      senderName,
+      aliasReceivedAt,
+      subject: email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject}`,
+      threadId: email.threadId,
+      messageIdHeader: email.messageIdHeader,
+      airtableRecordId,
+      timestamp: Date.now()
+    });
+
     const emailCard = `📬 *TITAN OS | INBOUND EMAIL*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `👤 *From:* ${safeName} (${senderEmail})\n` +
@@ -3975,9 +4000,9 @@ app.post('/webhook/gmail', async (req, res) => {
       `📌 *Subject:* ${safeSubject}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `💬 *Body Preview:*\n"${safePreview}..."\n\n` +
-      `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.`;
+      `👉 *To reply:* Reply to this message with a voice note or text.\n\n` +
+      `🎫 *Logged as Sales Ticket ${ticketIdStr}*`;
 
-    // Swap to standard message to guarantee delivery
     await sendWhatsAppMessage(CONFIG.meta.targetVerifiedPhone, emailCard);
   } catch (err) {
     console.error('[Gmail Webhook Exception]:', err.message);
@@ -4058,27 +4083,22 @@ app.post('/webhook', async (req, res) => {
       });
 
       if (sent) {
-        // --- NEW: AUTONOMOUS CRM LOGGING ---
-        const todayStr = new Date().toISOString().split('T')[0];
-        const ticketNotes = `[EMAIL CRM LOG - Replied via Titan OS]\nClient: ${pendingEmail.senderName} (${pendingEmail.senderEmail})\nSubject: ${pendingEmail.subject}\n\nTitan OS Dispatched Reply:\n"${polishedBody}"`;
-        
-        const assignmentPayload = {
-          'Date': todayStr,
-          'Assignment Type': 'Sales',
-          'Task Category': 'Commercial Sales',
-          'Priority': 'High',
-          'Status': 'In Progress',
-          'Notes': ticketNotes
-        };
-        
-        if (worker && worker.id) {
-          assignmentPayload['Worker'] = [worker.id];
+        let ticketUpdateMsg = '';
+        if (pendingEmail.airtableRecordId) {
+          // Autonomous CRM Update on Outbound Reply
+          const updatePayload = {
+            'Status': 'In Progress'
+          };
+          
+          if (worker && worker.id) {
+            updatePayload['Worker'] = [worker.id];
+          }
+          
+          await airtableWriteWithAutoDrop('Daily Assignments', updatePayload, pendingEmail.airtableRecordId);
+          invalidateAirtableCache('assignments');
+          ticketUpdateMsg = `\n\n🎫 *Ticket updated to In Progress.*`;
         }
-        
-        const createdAssignment = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-        const ticketIdStr = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'NEW';
-        
-        await sendWhatsAppMessage(dispatchTarget, `✅ *Email Dispatched to ${pendingEmail.senderName}*\n\n"${polishedBody}"\n\n🎫 *Logged as Ticket ${ticketIdStr} in Daily Assignments.*`);
+        await sendWhatsAppMessage(dispatchTarget, `✅ *Email Dispatched to ${pendingEmail.senderName}*\n\n"${polishedBody}"${ticketUpdateMsg}`);
       } else {
         await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to send email to ${pendingEmail.senderEmail}.`);
       }
