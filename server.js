@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.17 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.18 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * 44. Executive Maintenance Ticket Rollups
@@ -20,6 +20,7 @@
  * 59. Gmail Inbound Monitor, Single-Ticket CRM Logging & AI Actionability Filter
  * 60. Rob Wharton Executive Pipeline & /estimate /invoice Quick Commands
  * 61. Hardened CREATE_SITES Entity Extraction & Schema Mapping
+ * 62. Autonomous Multimodal Inventory Count Engine & Dynamic Role-Based /help
  */
 
 process.on('uncaughtException', (err) => {
@@ -162,6 +163,7 @@ const COMMAND_MAP = {
   '/inv': 'INVENTORY_QUERY',
   '/inventory': 'INVENTORY_QUERY',
   '/stock': 'INVENTORY_QUERY',
+  '/count': 'INVENTORY_COUNT',
   '/docs': 'DOCUMENT_RETRIEVAL',
   '/plan': 'DOCUMENT_RETRIEVAL',
   '/plans': 'DOCUMENT_RETRIEVAL',
@@ -181,10 +183,11 @@ CATEGORIES:
 3. "COURT_FACILITY": Padel court construction, court maintenance, turf, glass, mesh, frame, net, concrete pad, or sports facility walkaround.
 4. "FREIGHT_LOGISTICS": Wooden crates, pallets, glass shipping A-frames, shipping bills of lading (BOL), delivery trucks, flatbed offloading, shipping containers, inventory logs.
 5. "IRRELEVANT_NOISE": Personal selfies, casual non-work objects, pet photos, random memes with no business context.
+6. "INVENTORY_COUNT": Handwritten inventory tally sheets, stockroom clipboards, or digital warehouse counting lists showing asset quantities.
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "media_category": "FINANCIAL_RECEIPT" | "COMMERCIAL_LEAD" | "COURT_FACILITY" | "FREIGHT_LOGISTICS" | "IRRELEVANT_NOISE",
+  "media_category": "FINANCIAL_RECEIPT" | "COMMERCIAL_LEAD" | "COURT_FACILITY" | "FREIGHT_LOGISTICS" | "INVENTORY_COUNT" | "IRRELEVANT_NOISE",
   "confidence": number,
   "lead_contact_name": string or null,
   "company_or_club": string or null,
@@ -207,6 +210,12 @@ OUTPUT FORMAT (JSON ONLY):
       "category": "string",
       "items_summary": "string",
       "date": "string"
+    }
+  ],
+  "inventory_counts": [
+    {
+      "item_name": "string",
+      "new_quantity": number
     }
   ]
 }
@@ -343,6 +352,7 @@ ROUTING INTENTS:
 23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, brochures, blueprints, or CAD files for a specific site or generally.
 24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, foundation, glass specification, or dimension question that requires reading proprietary blueprints, manuals, or engineering files.
 25. "CREATE_SITES": User is requesting to create entirely NEW sites/courts. Extract the exact list of new court names into the "target_site_names" array, along with any provided construction specifications to apply across all of them.
+26. "INVENTORY_COUNT": User is reporting a physical inventory count of items/SKUs via voice, text, or tally sheet. Extract the item name and the quantity.
 
 Extract:
 "queried_court_name": string or null,
@@ -384,7 +394,7 @@ DATABASE FIELD MAPPING OVERRIDES:
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY" | "ORACLE_QUERY" | "CREATE_SITES",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY" | "ORACLE_QUERY" | "CREATE_SITES" | "INVENTORY_COUNT",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "target_site_names": ["string"],
@@ -425,7 +435,13 @@ OUTPUT FORMAT (JSON ONLY):
   "model_type": "string or null",
   "glass_thickness": "string or null",
   "transcript_en": "Clean English transcript",
-  "transcript_es": "Clean Spanish transcript"
+  "transcript_es": "Clean Spanish transcript",
+  "inventory_counts": [
+    {
+      "item_name": "string",
+      "new_quantity": number
+    }
+  ]
 }
 `;
 
@@ -1262,7 +1278,7 @@ function evaluateReadinessGate(siteRecord) {
 // 5. UNIVERSAL VISUAL TRIAGE ENGINE (RECEIPTS, LEADS, FREIGHT)
 // ====================================================================
 async function classifyVisualMediaIntent(items) {
-  const contentParts = [{ text: "Determine the primary subject of these images. If receipts, extract financial data. If email/lead screenshot, extract all contact and project details. If freight, extract shipping metadata." }];
+  const contentParts = [{ text: "Determine the primary subject of these images. If receipts, extract financial data. If email/lead screenshot, extract all contact and project details. If freight, extract shipping metadata. If an inventory tally sheet, extract counts." }];
 
   for (const item of items) {
     contentParts.push({
@@ -3063,7 +3079,6 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
 }
 
 async function handleBulkSiteCreation(nlp, dispatchTarget, fromPhone) {
-  // FIXED: Explicitly grab target_site_names correctly after strict NLP update
   const siteNames = nlp.target_site_names || nlp.new_site_names || [];
 
   if (!siteNames || siteNames.length === 0) {
@@ -3229,7 +3244,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.17 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.18 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3256,6 +3271,43 @@ async function refreshInventoryCache() {
   } catch (err) {
     console.error('❌ [Inventory Engine] Failed to cache inventory:', err.message);
   }
+}
+
+async function executeInventoryCount(inventoryCounts, dispatchTarget, workerName = 'HQ Admin') {
+  if (!inventoryCounts || inventoryCounts.length === 0) return;
+  await refreshInventoryCache();
+  
+  let updatedList = [];
+  let notFoundList = [];
+
+  for (const count of inventoryCounts) {
+    const query = (count.item_name || '').toLowerCase();
+    const newQty = parseFloat(count.new_quantity);
+    
+    if (isNaN(newQty) || !query) continue;
+
+    const matchedItem = memoryInventory.find(i => i.name.toLowerCase().includes(query) || query.includes(i.name.toLowerCase()));
+    
+    if (matchedItem) {
+      await airtableWriteWithAutoDrop('Inventory', {
+        'Quantity on hand': newQty,
+        'Count Status': 'Verified'
+      }, matchedItem.id);
+      updatedList.push(`• *${matchedItem.name}:* ${newQty}`);
+    } else {
+      notFoundList.push(`• "${count.item_name}"`);
+    }
+  }
+
+  let card = `📋 *TITAN OS | INVENTORY AUDIT LOGGED*\n━━━━━━━━━━━━━━━━━━━━\n👤 *Auditor:* ${workerName}\n━━━━━━━━━━━━━━━━━━━━\n`;
+  if (updatedList.length > 0) {
+    card += `✅ *Stock Updated:*\n${updatedList.join('\n')}\n\n`;
+  }
+  if (notFoundList.length > 0) {
+    card += `⚠️ *Unknown SKUs:*\n${notFoundList.join('\n')}\n\n`;
+  }
+  card += `_Airtable Inventory Ledger synchronized._`;
+  await sendWhatsAppMessage(dispatchTarget, card.trim());
 }
 
 async function processMilestoneBOMDeduction(siteRecord, clearedGate) {
@@ -3457,6 +3509,11 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
   console.log('[Voice Intent]:', { intent: triage.intent, querySite: triage.queried_court_name });
 
   if (triage.intent === 'PURE_NOISE' || triage.intent === 'HISTORICAL_REFERENCE') return;
+
+  if (triage.intent === 'INVENTORY_COUNT') {
+    await executeInventoryCount(triage.inventory_counts, dispatchTarget, worker?.fields?.['Full Name'] || callerIdentity.name);
+    return;
+  }
 
   if (triage.intent === 'CREATE_SITES') {
     if (!isAuthorizedForFinance(callerIdentity)) {
@@ -3705,6 +3762,10 @@ async function processMediaBatch(batch) {
     }
     if (visualTriage.media_category === 'FREIGHT_LOGISTICS') {
        return await handleFreightLogisticsBatch({ items, storageResults, visualTriage, worker, site, dispatchTarget, fromPhone, callerIdentity });
+    }
+    if (visualTriage.media_category === 'INVENTORY_COUNT') {
+       const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Auditor';
+       return await executeInventoryCount(visualTriage.inventory_counts, dispatchTarget, workerName);
     }
   }
 
@@ -4323,6 +4384,16 @@ app.post('/webhook', async (req, res) => {
           return;
       }
 
+      if (lTxt.startsWith('/count')) {
+          const triage = await triageSpokenOrTextNLP(txt, false, []);
+          if (triage && triage.inventory_counts) {
+              await executeInventoryCount(triage.inventory_counts, dispatchTarget, worker?.fields?.['Full Name'] || callerIdentity.name);
+          } else {
+              await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to parse inventory count. Please use format: /count [item] [qty] or send a clear voice note.`);
+          }
+          return;
+      }
+
       if (lTxt.startsWith('/link ') || lTxt.startsWith('/l ')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         const matched = await lookupSite(null, targetQuery);
@@ -4342,24 +4413,28 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (lTxt.startsWith('/help') || lTxt === 'help' || lTxt === '?') {
-        let helpCard = `🤖 *TITAN OS COMMANDS*\n\n` +
-          `• Drop location pin ➔ Morning Check-In & Weather Tripwires\n` +
-          `• Send video walkaround ➔ Milestone & Punch List QA\n` +
-          `• Send audio memo ➔ Voice note / Parts request / Technical questions\n` +
-          `• /inv or /inventory ➔ Yard stock on hand & committed materials\n` +
-          `• /docs ➔ Pull blueprint / foundation PDF\n` +
-          `• /status ➔ Active court gate & tickets\n` +
-          `• /t ➔ List open field tickets only\n` +
-          `• /weather ➔ Hyperlocal wind & adhesive status\n` +
-          `• /specs ➔ Technical dimensions & CBSA rules`;
+        let helpCard = `🤖 *TITAN OS COMMANDS*\n\n`;
         
         if (isAuthorizedForFinance(callerIdentity)) {
-            helpCard += `\n\n*Finance & Executive Actions:*\n` +
-                        `• "what is my 30+ AR?" ➔ QuickBooks lookup\n` +
+            helpCard += `*Finance & Executive:*\n` +
+                        `• "what is my 30+ AR?" ➔ QBO lookup\n` +
                         `• /estimate or /invoice [client] [%] ➔ QBO approvals\n` +
-                        `• /exec ➔ Toggle executive pipeline` +
-                        `• /new ➔ View bulk court creation template`;
+                        `• /exec ➔ Toggle executive pipeline\n` +
+                        `• /new ➔ Bulk court creation template\n` +
+                        `• /count [item] [qty] ➔ Log inventory audit\n\n`;
         }
+        
+        helpCard += `*Field Operations:*\n` +
+          `• Drop location pin ➔ Check-In & Weather\n` +
+          `• Send video ➔ Milestone & QA Sweep\n` +
+          `• Send audio ➔ Voice note / Parts request\n` +
+          `• /inv ➔ Yard stock on hand & committed\n` +
+          `• /docs ➔ Pull blueprints\n` +
+          `• /status ➔ Active court gate & tickets\n` +
+          `• /t ➔ Open field tickets\n` +
+          `• /weather ➔ Local wind & adhesive status\n` +
+          `• /specs ➔ Tech dimensions & CBSA rules`;
+          
         await sendWhatsAppMessage(dispatchTarget, helpCard);
         return;
       }
@@ -4433,6 +4508,10 @@ app.post('/webhook', async (req, res) => {
 
       const triage = await triageSpokenOrTextNLP(txt, false, []);
       if (triage) {
+        if (triage.intent === 'INVENTORY_COUNT') {
+          await executeInventoryCount(triage.inventory_counts, dispatchTarget, worker?.fields?.['Full Name'] || callerIdentity.name);
+          return;
+        }
         if (triage.intent === 'CREATE_SITES') {
           if (!isAuthorizedForFinance(callerIdentity)) {
              await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Your profile lacks permissions to create new sites.`);
@@ -4593,7 +4672,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.17' });
+  res.status(200).json({ status: 'healthy', version: '6.0.18' });
 });
 
 // ====================================================================
@@ -4705,7 +4784,7 @@ startFridayNewsletterCron();
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.17 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.18 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
