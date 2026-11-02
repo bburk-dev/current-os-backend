@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.15 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.16 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * 44. Executive Maintenance Ticket Rollups
@@ -7,17 +7,18 @@
  * 46. INOC Nomenclature Sync (Nominal -> Operational)
  * 47. Technical Oracle RAG Engine (Autonomous PDF Ingestion)
  * 48. Autonomous Bulk Site Creation via Multimodal NLP (CREATE_SITES)
- * 49. Complete Turf Supplier Taxonomy Alignment (Other, Padel Magic, House, Mondo, Real Turf)
+ * 49. Complete Turf Supplier Taxonomy Alignment
  * 50. Autonomous Bulk State Mutation (Multi-Site ACTIONABLE_STATE_CHANGE)
- * 51. INOC Financial Dropdown Integration (40% Deposit Reeeived Schema Sync)
+ * 51. INOC Financial Dropdown Integration
  * 52. The Blameless Machine (Production Feedback Loop) & 9-Gate Expansion
- * 53. Relational Ticket Cross-Referencing (SR&ED Entry #088) & Kanban Status Transitions
+ * 53. Relational Ticket Cross-Referencing & Kanban Status Transitions
  * 54. Auto-Healer Null Payload Catch & Unified Bulk BOM Reservation Loop
- * 55. BPC-Exclusive Inventory Burn (Third-Party Container Bypass)
- * 56. Global Oracle Document Dispatch (Dual-Pass Retrieval Engine)
- * 57. Role-Based Access Control (RBAC) & Dynamic Help Menu / Site Template Generator
- * 58. Frictionless Sales Pipeline (Auto-Site Linking & Pasted Email Resolution)
+ * 55. BPC-Exclusive Inventory Burn
+ * 56. Global Oracle Document Dispatch
+ * 57. Role-Based Access Control (RBAC) & Dynamic Help Menu
+ * 58. Frictionless Sales Pipeline (Strict Assignment Mapping, No Phantom Sites)
  * 59. Gmail Inbound Monitor, Single-Ticket CRM Logging & AI Actionability Filter
+ * 60. Rob Wharton Executive Pipeline & /estimate /invoice Quick Commands
  */
 
 process.on('uncaughtException', (err) => {
@@ -104,6 +105,8 @@ const userActiveSiteMap = new Map();
 const dailyEasterEggTracker = new Map(); 
 
 let oracleFileURIs = [];
+let robExecEnabled = false;
+const ROB_WHARTON_PHONE = '13435405666';
 
 // ====================================================================
 // 1A. GLOBAL PROMPTS & CONSTANTS
@@ -151,6 +154,7 @@ const COMMAND_MAP = {
   '/media': 'MEDIA_RETRIEVAL',
   '/ar': 'AR_LOOKUP', 
   '/invoice': 'INVOICE_APPROVAL',
+  '/estimate': 'INVOICE_APPROVAL',
   '/specs': 'TECH_SPECS',
   '/border': 'BORDER_CLEARANCE',
   '/carm': 'BORDER_CLEARANCE',
@@ -162,7 +166,8 @@ const COMMAND_MAP = {
   '/plans': 'DOCUMENT_RETRIEVAL',
   '/help': 'HELP',
   '/?': 'HELP',
-  '/new': 'NEW_SITE_TEMPLATE'
+  '/new': 'NEW_SITE_TEMPLATE',
+  '/exec': 'EXECUTIVE_MODE_TOGGLE'
 };
 
 const VISUAL_TRIAGE_PROMPT = `
@@ -671,7 +676,6 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
   return null;
 }
 
-// V6 Native Supabase Upload SDK implementation
 async function uploadToSupabase(buffer, mimeType) {
   if (!buffer || !CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return { storagePath: null, signedUrl: null };
   
@@ -775,7 +779,6 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
   }
 }
 
-
 // ====================================================================
 // 2D. GMAIL REST API ENGINE (OAUTH2 REFRESH & MESSAGE DISPATCH)
 // ====================================================================
@@ -842,7 +845,6 @@ async function fetchLatestInboundEmail() {
       bodyText = Buffer.from(msg.payload.body.data, 'base64').toString('utf8');
     }
 
-    // Clean up forwarded message headers for cleaner WhatsApp preview body
     bodyText = bodyText.replace(/---------- Forwarded message ---------[\s\S]*?(Subject:|To:|Date:|From:).*?\n/gi, '').trim();
     bodyText = bodyText.replace(/On .*? wrote:\s*>?/gi, '').trim();
 
@@ -915,14 +917,15 @@ async function sendGmailReply({ to, fromAlias, subject, body, threadId, inReplyT
   }
 }
 
-// --- NEW: AUTONOMOUS AI EMAIL ACTIONABILITY FILTER ---
 async function evaluateEmailActionability(subject, body) {
-  const prompt = `You are the Titan OS Executive Inbox Filter. 
+  const prompt = `You are the Titan OS Executive Inbox Filter for Bounce Padel. 
   Your job is to keep the WhatsApp dispatch strictly focused on "action and immediacy" (communication, predictability, compliance).
   
-  Evaluate this email. DOES IT REQUIRE AN ACTION OR RESPONSE?
-  - TRUE (Actionable): Inquiries for courts/pricing, asks for foundation plans, technical questions, scheduling requests, client support needs, or direct task asks.
-  - FALSE (Noise): Real estate listings, newsletters, automated system alerts (e.g., Airtable, QuickBooks), generic CC'd chatter, spam, "Thank you" wrap-ups, or pure FYIs with no ask.
+  Evaluate this email. DOES IT REQUIRE AN ACTION OR RESPONSE FROM THE BUSINESS OWNER?
+  - TRUE (Actionable): Inquiries for courts/pricing from actual prospects, requests for foundation plans, technical questions, scheduling requests, client support needs, or direct task asks.
+  - FALSE (Noise): B2B sales pitches, vendor solicitations, SEO/marketing agency outreach, software demos, real estate listings, newsletters, automated system alerts (e.g., Airtable, QuickBooks), generic CC'd chatter, spam, "Thank you" wrap-ups, or pure FYIs with no ask.
+  
+  CRITICAL: If the email appears to be someone trying to sell YOU a service, product, or scheduling a "quick call" for their own gain, you MUST mark it FALSE.
   
   Respond strictly with JSON: {"is_actionable": boolean, "reason": "short explanation"}
   
@@ -944,7 +947,7 @@ async function evaluateEmailActionability(subject, body) {
     return JSON.parse(text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
   } catch (err) {
     console.error('[Email Filter Error]:', err.message);
-    return { is_actionable: true, reason: 'Error fallback' }; // Default to let it through if API fails
+    return { is_actionable: true, reason: 'Error fallback' }; 
   }
 }
 
@@ -1394,17 +1397,6 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
 
   const title = company !== 'Padel Venue Lead' ? `${company} (${leadName})` : leadName;
 
-  // Frictionless Sales Pipeline: Auto-create a temporary planning site to bind the lead ticket
-  const newSitePayload = {
-     'Site Name': title,
-     'Workflow Mode': 'PLANNING',
-     'Site Status': 'ACTIVE',
-     'Last Note': `[COMMERCIAL LEAD AUTO-GENERATED]`
-  };
-  const createdSite = await airtableWriteWithAutoDrop('Sites', newSitePayload);
-  
-  if (createdSite) invalidateAirtableCache('sites');
-
   const validStorage = storageResults.filter(s => s && s.signedUrl);
   const attachmentPayload = validStorage.map(s => ({ url: s.signedUrl }));
 
@@ -1427,10 +1419,6 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
     'Status': 'Open',
     'Notes': formattedNotes
   };
-  
-  if (createdSite && createdSite.id) {
-     assignmentPayload['Sites'] = [createdSite.id];
-  }
 
   if (attachmentPayload.length > 0) assignmentPayload['Attachment(s)'] = attachmentPayload;
   if (worker?.id) assignmentPayload['Worker'] = [worker.id];
@@ -1439,7 +1427,7 @@ async function handleCommercialLeadBatch({ items, storageResults, visualTriage, 
   const ticketId = createdAssignment?.fields?.['Assignment ID'] ? `#${createdAssignment.fields['Assignment ID']}` : 'LEAD';
 
   streamToDarkMatterVault({
-    siteId: createdSite?.id || null,
+    siteId: null,
     siteName: title,
     senderPhone: fromPhone,
     senderName: workerName,
@@ -2315,7 +2303,7 @@ async function fanOutToSubscribers(phoneNumbersString, messageBody, buttons = []
 
 async function fireInstallationJoyCannon(siteRecord, highestGate, workerName = 'A crew member') {
   try {
-    const staticExecutivePhones = '14379287172, 13435405666'; // Bob & Rob
+    const staticExecutivePhones = '14379287172, 13435405666'; 
     
     const subscribedPhones = siteRecord.fields['Subscribed Phones'];
     const linkedContactIds = siteRecord.fields['Linked Contacts'] || [];
@@ -3237,7 +3225,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.15 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.16 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -3963,45 +3951,11 @@ app.post('/webhook/gamecam', async (req, res) => {
   res.sendStatus(200);
 });
 
-// --- NEW: AUTONOMOUS AI EMAIL ACTIONABILITY FILTER ---
-async function evaluateEmailActionability(subject, body) {
-  const prompt = `You are the Titan OS Executive Inbox Filter. 
-  Your job is to keep the WhatsApp dispatch strictly focused on "action and immediacy" (communication, predictability, compliance).
-  
-  Evaluate this email. DOES IT REQUIRE AN ACTION OR RESPONSE?
-  - TRUE (Actionable): Inquiries for courts/pricing, asks for foundation plans, technical questions, scheduling requests, client support needs, or direct task asks.
-  - FALSE (Noise): Real estate listings, newsletters, automated system alerts (e.g., Airtable, QuickBooks), generic CC'd chatter, spam, "Thank you" wrap-ups, or pure FYIs with no ask.
-  
-  Respond strictly with JSON: {"is_actionable": boolean, "reason": "short explanation"}
-  
-  Subject: "${subject}"
-  Body: "${(body || '').slice(0, 1000)}"`;
-  
-  try {
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-    };
-    const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    return JSON.parse(text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-  } catch (err) {
-    console.error('[Email Filter Error]:', err.message);
-    return { is_actionable: true, reason: 'Error fallback' }; // Default to let it through if API fails
-  }
-}
-
 // ====================================================================
 // 15B. GMAIL PUB/SUB WEBHOOK INGESTION
 // ====================================================================
 
 app.post('/webhook/gmail', async (req, res) => {
-  // Always immediately acknowledge Pub/Sub pushes
   res.sendStatus(200);
 
   try {
@@ -4020,7 +3974,6 @@ app.post('/webhook/gmail', async (req, res) => {
     const rawPreview = email.body ? email.body.slice(0, 600) : email.snippet;
     const safePreview = sanitizeWA(rawPreview);
 
-    // --- AI SPAM FILTER ---
     const filterDecision = await evaluateEmailActionability(email.subject, safePreview);
     if (!filterDecision.is_actionable) {
        console.log(`[Gmail Filter] 🛑 Dropped noise: ${email.subject} | Reason: ${filterDecision.reason}`);
@@ -4031,7 +3984,13 @@ app.post('/webhook/gmail', async (req, res) => {
     const toMatch = email.to.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.to, email.to];
     const aliasReceivedAt = toMatch[2] ? toMatch[2].trim() : (email.to || 'Unknown');
 
-    // --- AUTONOMOUS CRM LOGGING ON INBOUND ---
+    let dispatchTarget = CONFIG.meta.targetVerifiedPhone;
+    const lowerAlias = aliasReceivedAt.toLowerCase();
+    
+    if (robExecEnabled && (lowerAlias.includes('rob') || lowerAlias.includes('wharton') || lowerAlias.includes('rw'))) {
+        dispatchTarget = ROB_WHARTON_PHONE;
+    }
+
     let airtableRecordId = null;
     let ticketIdStr = 'NEW';
     try {
@@ -4052,19 +4011,7 @@ app.post('/webhook/gmail', async (req, res) => {
             const siteArray = Array.isArray(tSites) ? tSites : [tSites];
             return siteArray.includes(targetSiteId) && (t.fields['Assignment Type'] === 'Sales');
          });
-      } else {
-         const newSitePayload = {
-           'Site Name': safeName,
-           'Workflow Mode': 'PLANNING',
-           'Site Status': 'ACTIVE',
-           'Last Note': `[EMAIL LEAD AUTO-GENERATED]`
-        };
-        const createdSite = await airtableWriteWithAutoDrop('Sites', newSitePayload);
-        if (createdSite) {
-            targetSiteId = createdSite.id;
-            invalidateAirtableCache('sites');
-        }
-      }
+      } 
 
       if (targetTicket) {
          airtableRecordId = targetTicket.id;
@@ -4092,7 +4039,7 @@ app.post('/webhook/gmail', async (req, res) => {
       console.error('[Gmail CRM Log Error]:', crmErr.message);
     }
 
-    userPendingEmailMap.set(CONFIG.meta.targetVerifiedPhone, {
+    userPendingEmailMap.set(dispatchTarget, {
       senderEmail,
       senderName,
       aliasReceivedAt,
@@ -4113,7 +4060,7 @@ app.post('/webhook/gmail', async (req, res) => {
       `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.\n\n` +
       `🎫 *Logged as Sales Ticket ${ticketIdStr}*`;
 
-    await sendWhatsAppMessage(CONFIG.meta.targetVerifiedPhone, emailCard);
+    await sendWhatsAppMessage(dispatchTarget, emailCard);
   } catch (err) {
     console.error('[Gmail Webhook Exception]:', err.message);
   }
@@ -4195,7 +4142,6 @@ app.post('/webhook', async (req, res) => {
       if (sent) {
         let ticketUpdateMsg = '';
         if (pendingEmail.airtableRecordId) {
-          // Autonomous CRM Update on Outbound Reply
           const openTickets = await getCachedOpenAssignments(true);
           const targetTicket = openTickets.find(t => t.id === pendingEmail.airtableRecordId);
           
@@ -4351,6 +4297,28 @@ app.post('/webhook', async (req, res) => {
       const txt = message.text?.body?.trim() || '';
       const lTxt = txt.toLowerCase();
       
+      if (lTxt === '/exec') {
+          if (fromPhone === CONFIG.meta.targetVerifiedPhone || fromPhone === ROB_WHARTON_PHONE) {
+              robExecEnabled = !robExecEnabled;
+              await sendWhatsAppMessage(fromPhone, `👔 *TITAN OS | EXECUTIVE MODE*\n━━━━━━━━━━━━━━━━━━━━\nRob Wharton's Gmail-to-WhatsApp dispatch pipeline is now ${robExecEnabled ? '*ACTIVE 🟢*' : '*DISABLED 🔴*'}.`);
+          }
+          return;
+      }
+
+      if (lTxt.startsWith('/estimate') || lTxt.startsWith('/invoice')) {
+          if (!isAuthorizedForFinance(callerIdentity)) {
+              await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Action requires Finance permissions.`);
+              return;
+          }
+          const triage = await triageSpokenOrTextNLP(txt, false, []);
+          if (triage) {
+              await handleInvoiceApproval(triage, dispatchTarget);
+          } else {
+              await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to parse estimate/invoice details. Please specify client name and percentage.`);
+          }
+          return;
+      }
+
       if (lTxt.startsWith('/link ') || lTxt.startsWith('/l ')) {
         const targetQuery = txt.split(' ').slice(1).join(' ').trim();
         const matched = await lookupSite(null, targetQuery);
@@ -4384,6 +4352,8 @@ app.post('/webhook', async (req, res) => {
         if (isAuthorizedForFinance(callerIdentity)) {
             helpCard += `\n\n*Finance & Executive Actions:*\n` +
                         `• "what is my 30+ AR?" ➔ QuickBooks lookup\n` +
+                        `• /estimate or /invoice [client] [%] ➔ QBO approvals\n` +
+                        `• /exec ➔ Toggle executive pipeline` +
                         `• /new ➔ View bulk court creation template`;
         }
         await sendWhatsAppMessage(dispatchTarget, helpCard);
@@ -4619,7 +4589,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.15' });
+  res.status(200).json({ status: 'healthy', version: '6.0.16' });
 });
 
 // ====================================================================
@@ -4731,7 +4701,7 @@ startFridayNewsletterCron();
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.15 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.16 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
