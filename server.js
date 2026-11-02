@@ -4058,7 +4058,7 @@ app.post('/webhook', async (req, res) => {
       });
 
       if (sent) {
-        // --- NEW: LOG CRM TICKET TO AIRTABLE ---
+        // --- NEW: AUTONOMOUS CRM LOGGING ---
         const todayStr = new Date().toISOString().split('T')[0];
         const ticketNotes = `[EMAIL CRM LOG - Replied via Titan OS]\nClient: ${pendingEmail.senderName} (${pendingEmail.senderEmail})\nSubject: ${pendingEmail.subject}\n\nTitan OS Dispatched Reply:\n"${polishedBody}"`;
         
