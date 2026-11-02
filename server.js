@@ -17,6 +17,7 @@
  * 56. Global Oracle Document Dispatch (Dual-Pass Retrieval Engine)
  * 57. Role-Based Access Control (RBAC) & Dynamic Help Menu / Site Template Generator
  * 58. Frictionless Sales Pipeline (Auto-Site Linking & Pasted Email Resolution)
+ * 59. Gmail Inbound Monitor & Gemini Polished Replies via WhatsApp
  */
 
 process.on('uncaughtException', (err) => {
@@ -82,7 +83,10 @@ const CONFIG = {
     baseUrl: 'https://quickbooks.api.intuit.com/v3/company'
   },
   google: {
-    apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
+    apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY,
+    gmailClientId: process.env.GMAIL_CLIENT_ID,
+    gmailClientSecret: process.env.GMAIL_CLIENT_SECRET,
+    gmailRefreshToken: process.env.GMAIL_REFRESH_TOKEN
   }
 };
 
@@ -768,6 +772,138 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
   } catch (err) {
     console.error('[QBO API Error]:', err.message);
     return null;
+  }
+}
+
+// ====================================================================
+// 2D. GMAIL REST API ENGINE (OAUTH2 REFRESH & MESSAGE DISPATCH)
+// ====================================================================
+
+const userPendingEmailMap = new Map();
+
+async function getGmailAccessToken() {
+  if (!CONFIG.google.gmailClientId || !CONFIG.google.gmailRefreshToken) {
+    console.error('[Gmail Engine] Missing Gmail OAuth credentials in CONFIG.');
+    return null;
+  }
+  try {
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CONFIG.google.gmailClientId,
+        client_secret: CONFIG.google.gmailClientSecret,
+        refresh_token: CONFIG.google.gmailRefreshToken,
+        grant_type: 'refresh_token'
+      })
+    });
+    const data = await res.json();
+    return data.access_token || null;
+  } catch (err) {
+    console.error('[Gmail Engine] Access token refresh failed:', err.message);
+    return null;
+  }
+}
+
+async function fetchLatestInboundEmail() {
+  const token = await getGmailAccessToken();
+  if (!token) return null;
+
+  try {
+    const listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread&maxResults=1', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const listData = await listRes.json();
+    if (!listData.messages || listData.messages.length === 0) return null;
+
+    const msgId = listData.messages[0].id;
+    const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const msg = await msgRes.json();
+
+    const headers = msg.payload?.headers || [];
+    const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+    const from = getHeader('From');
+    const subject = getHeader('Subject');
+    const messageIdHeader = getHeader('Message-ID');
+
+    let bodyText = '';
+    if (msg.payload?.parts) {
+      const textPart = msg.payload.parts.find(p => p.mimeType === 'text/plain') || msg.payload.parts[0];
+      if (textPart?.body?.data) {
+        bodyText = Buffer.from(textPart.body.data, 'base64').toString('utf8');
+      }
+    } else if (msg.payload?.body?.data) {
+      bodyText = Buffer.from(msg.payload.body.data, 'base64').toString('utf8');
+    }
+
+    // Mark email as read so it isn't repeatedly ingested
+    await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/modify`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ removeLabelIds: ['UNREAD'] })
+    });
+
+    return {
+      id: msgId,
+      threadId: msg.threadId,
+      from,
+      subject,
+      messageIdHeader,
+      snippet: msg.snippet,
+      body: bodyText.slice(0, 1500)
+    };
+  } catch (err) {
+    console.error('[Gmail Engine] Inbound email fetch failed:', err.message);
+    return null;
+  }
+}
+
+async function sendGmailReply({ to, subject, body, threadId, inReplyTo }) {
+  const token = await getGmailAccessToken();
+  if (!token) return false;
+
+  const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+  const messageParts = [
+    `To: ${to}`,
+    `Subject: ${utf8Subject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=utf-8',
+    'Content-Transfer-Encoding: 7bit'
+  ];
+
+  if (inReplyTo) messageParts.push(`In-Reply-To: ${inReplyTo}`);
+  if (threadId) messageParts.push(`References: ${inReplyTo || threadId}`);
+
+  messageParts.push('', body);
+
+  const rawMessage = Buffer.from(messageParts.join('\r\n'))
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  const payload = { raw: rawMessage };
+  if (threadId) payload.threadId = threadId;
+
+  try {
+    const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    return res.ok;
+  } catch (err) {
+    console.error('[Gmail Outbound] Send failed:', err.message);
+    return false;
   }
 }
 
@@ -3771,6 +3907,49 @@ async function processMediaBatch(batch) {
 // 15. INGRESS DISPATCH CONTROLLER & WEBHOOKS
 // ====================================================================
 
+// ====================================================================
+// 15B. GMAIL PUB/SUB WEBHOOK INGESTION
+// ====================================================================
+
+app.post('/webhook/gmail', async (req, res) => {
+  // Always immediately acknowledge Pub/Sub pushes
+  res.sendStatus(200);
+
+  try {
+    const email = await fetchLatestInboundEmail();
+    if (!email) return;
+
+    console.log(`[Gmail Webhook] Received inbound email from: ${email.from} | Subject: "${email.subject}"`);
+
+    const fromMatch = email.from.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.from, email.from];
+    const senderName = fromMatch[1].replace(/['"]/g, '').trim() || 'Inbound Prospect';
+    const senderEmail = fromMatch[2].trim();
+
+    // Cache context for voice reply
+    userPendingEmailMap.set(CONFIG.meta.targetVerifiedPhone, {
+      senderEmail,
+      senderName,
+      subject: email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject}`,
+      threadId: email.threadId,
+      messageIdHeader: email.messageIdHeader,
+      timestamp: Date.now()
+    });
+
+    const emailCard = `📬 *TITAN OS | INBOUND EMAIL RECEIVED*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `👤 *From:* ${senderName} (${senderEmail})\n` +
+      `📌 *Subject:* ${email.subject}\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `💬 *Preview:*\n"${email.snippet || email.body.slice(0, 200)}..."\n\n` +
+      `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.`;
+
+    const buttons = [{ id: `REPLY_EMAIL_${email.threadId}`, title: '🎙️ Reply via Voice' }];
+    await sendWhatsAppButtons(CONFIG.meta.targetVerifiedPhone, emailCard, buttons);
+  } catch (err) {
+    console.error('[Gmail Webhook Exception]:', err.message);
+  }
+});
+
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -3818,6 +3997,55 @@ app.post('/webhook', async (req, res) => {
     }
 
     const worker = callerIdentity.workerRecord || (fromPhone ? await lookupWorker(fromPhone) : null);
+
+    // --- GMAIL REPLY INTERCEPTOR ---
+    const pendingEmail = userPendingEmailMap.get(fromPhone);
+    if (pendingEmail && (Date.now() - pendingEmail.timestamp < 15 * 60 * 1000) && message.type !== 'location' && message.type !== 'interactive') {
+      userPendingEmailMap.delete(fromPhone);
+      let userReplyText = 'Thanks for reaching out.';
+      
+      if (message.type === 'text') {
+        userReplyText = message.text?.body?.trim();
+      } else if (message.type === 'audio' || message.type === 'voice') {
+        const mediaId = message[message.type].id;
+        const metaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+        const metaData = await metaRes.json().catch(() => ({}));
+        if (metaData?.url) {
+          const bufRes = await fetch(metaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+          if (bufRes.ok) {
+            const buf = Buffer.from(await bufRes.arrayBuffer());
+            const triage = await triageSpokenOrTextNLP(null, true, [{buffer: buf, mimeType: message[message.type].mime_type || 'audio/ogg'}]);
+            userReplyText = triage?.transcript_en || userReplyText;
+          }
+        }
+      }
+
+      const prompt = `You are Bob Burk from Bounce Padel. Turn this quick field tech note into a professional, courteous executive email reply.\n\nNote: "${userReplyText}"\n\nReturn ONLY the email body text.`;
+      const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      const gData = await geminiRes.json();
+      const polishedBody = gData.candidates?.[0]?.content?.parts?.[0]?.text || userReplyText;
+
+      const sent = await sendGmailReply({
+        to: pendingEmail.senderEmail,
+        subject: pendingEmail.subject,
+        body: polishedBody,
+        threadId: pendingEmail.threadId,
+        inReplyTo: pendingEmail.messageIdHeader
+      });
+
+      if (sent) {
+        await sendWhatsAppMessage(dispatchTarget, `✅ *Email Dispatched to ${pendingEmail.senderName}*\n\n"${polishedBody}"`);
+      } else {
+        await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to send email to ${pendingEmail.senderEmail}.`);
+      }
+      return;
+    }
+    // ---------------------------------
+
 
     // ROUTE 1: LOCATION PIN
     if (message.type === 'location') {
