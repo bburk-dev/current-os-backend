@@ -775,7 +775,6 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
   }
 }
 
-
 // ====================================================================
 // 2D. GMAIL REST API ENGINE (OAUTH2 REFRESH & MESSAGE DISPATCH)
 // ====================================================================
@@ -3939,11 +3938,11 @@ app.post('/webhook/gmail', async (req, res) => {
     console.log(`[Gmail Webhook] Received inbound email from: ${email.from} | Subject: "${email.subject}"`);
 
     const fromMatch = email.from.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.from, email.from];
-    const senderName = fromMatch[1].replace(/['"]/g, '').trim() || 'Inbound Prospect';
-    const senderEmail = fromMatch[2].trim();
+    const senderName = (fromMatch[1] || '').replace(/['"]/g, '').trim() || 'Inbound Prospect';
+    const senderEmail = (fromMatch[2] || '').trim();
     
     const toMatch = email.to.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.to, email.to];
-    const aliasReceivedAt = toMatch[2] ? toMatch[2].trim() : email.to;
+    const aliasReceivedAt = toMatch[2] ? toMatch[2].trim() : (email.to || 'Unknown');
 
     userPendingEmailMap.set(CONFIG.meta.targetVerifiedPhone, {
       senderEmail,
@@ -3961,10 +3960,10 @@ app.post('/webhook/gmail', async (req, res) => {
       `📥 *To Alias:* ${aliasReceivedAt}\n` +
       `📌 *Subject:* ${email.subject}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `💬 *Preview:*\n"${email.snippet || email.body.slice(0, 200)}..."\n\n` +
+      `💬 *Preview:*\n"${(email.snippet || email.body).slice(0, 200).replace(/&#39;/g, "'").replace(/&quot;/g, '"')}..."\n\n` +
       `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.`;
 
-    const buttons = [{ id: `REPLY_EMAIL_${email.threadId}`, title: '🎙️ Reply via Voice' }];
+    const buttons = [{ id: `REPLY_EMAIL_${email.threadId}`, title: 'Reply (Voice/Text)' }];
     await sendWhatsAppButtons(CONFIG.meta.targetVerifiedPhone, emailCard, buttons);
   } catch (err) {
     console.error('[Gmail Webhook Exception]:', err.message);
