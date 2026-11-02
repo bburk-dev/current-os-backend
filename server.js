@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.16 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.17 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * 44. Executive Maintenance Ticket Rollups
@@ -19,6 +19,7 @@
  * 58. Frictionless Sales Pipeline (Strict Assignment Mapping, No Phantom Sites)
  * 59. Gmail Inbound Monitor, Single-Ticket CRM Logging & AI Actionability Filter
  * 60. Rob Wharton Executive Pipeline & /estimate /invoice Quick Commands
+ * 61. Hardened CREATE_SITES Entity Extraction & Schema Mapping
  */
 
 process.on('uncaughtException', (err) => {
@@ -341,7 +342,7 @@ ROUTING INTENTS:
 22. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
 23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, brochures, blueprints, or CAD files for a specific site or generally.
 24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, foundation, glass specification, or dimension question that requires reading proprietary blueprints, manuals, or engineering files.
-25. "CREATE_SITES": User is requesting to create entirely NEW sites/courts. The user will list the names of the courts. Extract the list of names and any provided construction specifications to apply across all of them.
+25. "CREATE_SITES": User is requesting to create entirely NEW sites/courts. Extract the exact list of new court names into the "target_site_names" array, along with any provided construction specifications to apply across all of them.
 
 Extract:
 "queried_court_name": string or null,
@@ -3062,7 +3063,10 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
 }
 
 async function handleBulkSiteCreation(nlp, dispatchTarget, fromPhone) {
-  if (!nlp.new_site_names || nlp.new_site_names.length === 0) {
+  // FIXED: Explicitly grab target_site_names correctly after strict NLP update
+  const siteNames = nlp.target_site_names || nlp.new_site_names || [];
+
+  if (!siteNames || siteNames.length === 0) {
     await sendWhatsAppMessage(dispatchTarget, `⚠️ I heard a bulk creation command, but couldn't extract the specific court names.`);
     return;
   }
@@ -3088,7 +3092,7 @@ async function handleBulkSiteCreation(nlp, dispatchTarget, fromPhone) {
   if (nlp.deposit_status) specsToApply['Deposit Status'] = nlp.deposit_status;
 
   try {
-    for (const siteName of nlp.new_site_names) {
+    for (const siteName of siteNames) {
       const newRecordPayload = {
         'Site Name': siteName.trim(),
         'Workflow Mode': 'PLANNING',
@@ -3225,7 +3229,7 @@ async function handleAssetQuery(nlp, dispatchTarget) {
 }
 
 // ====================================================================
-// TITAN OS V6.0.16 — INVENTORY & ASSET STATE ENGINE
+// TITAN OS V6.0.17 — INVENTORY & ASSET STATE ENGINE
 // ====================================================================
 
 let memoryInventory = [];
@@ -4589,7 +4593,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.16' });
+  res.status(200).json({ status: 'healthy', version: '6.0.17' });
 });
 
 // ====================================================================
@@ -4701,7 +4705,7 @@ startFridayNewsletterCron();
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.16 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.17 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
