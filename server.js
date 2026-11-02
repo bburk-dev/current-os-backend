@@ -826,6 +826,7 @@ async function fetchLatestInboundEmail() {
     const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
 
     const from = getHeader('From');
+    const to = getHeader('To');
     const subject = getHeader('Subject');
     const messageIdHeader = getHeader('Message-ID');
 
@@ -839,7 +840,6 @@ async function fetchLatestInboundEmail() {
       bodyText = Buffer.from(msg.payload.body.data, 'base64').toString('utf8');
     }
 
-    // Mark email as read so it isn't repeatedly ingested
     await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/modify`, {
       method: 'POST',
       headers: {
@@ -853,6 +853,7 @@ async function fetchLatestInboundEmail() {
       id: msgId,
       threadId: msg.threadId,
       from,
+      to,
       subject,
       messageIdHeader,
       snippet: msg.snippet,
@@ -864,13 +865,14 @@ async function fetchLatestInboundEmail() {
   }
 }
 
-async function sendGmailReply({ to, subject, body, threadId, inReplyTo }) {
+async function sendGmailReply({ to, fromAlias, subject, body, threadId, inReplyTo }) {
   const token = await getGmailAccessToken();
   if (!token) return false;
 
   const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
   const messageParts = [
     `To: ${to}`,
+    `From: ${fromAlias}`,
     `Subject: ${utf8Subject}`,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=utf-8',
@@ -3912,7 +3914,6 @@ async function processMediaBatch(batch) {
 // ====================================================================
 
 app.post('/webhook/gmail', async (req, res) => {
-  // Always immediately acknowledge Pub/Sub pushes
   res.sendStatus(200);
 
   try {
@@ -3924,11 +3925,14 @@ app.post('/webhook/gmail', async (req, res) => {
     const fromMatch = email.from.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.from, email.from];
     const senderName = fromMatch[1].replace(/['"]/g, '').trim() || 'Inbound Prospect';
     const senderEmail = fromMatch[2].trim();
+    
+    const toMatch = email.to.match(/(.*?)\s*<(.+@.+?)>/) || [null, email.to, email.to];
+    const aliasReceivedAt = toMatch[2] ? toMatch[2].trim() : email.to;
 
-    // Cache context for voice reply
     userPendingEmailMap.set(CONFIG.meta.targetVerifiedPhone, {
       senderEmail,
       senderName,
+      aliasReceivedAt,
       subject: email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject}`,
       threadId: email.threadId,
       messageIdHeader: email.messageIdHeader,
@@ -3938,6 +3942,7 @@ app.post('/webhook/gmail', async (req, res) => {
     const emailCard = `📬 *TITAN OS | INBOUND EMAIL RECEIVED*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `👤 *From:* ${senderName} (${senderEmail})\n` +
+      `📥 *To Alias:* ${aliasReceivedAt}\n` +
       `📌 *Subject:* ${email.subject}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `💬 *Preview:*\n"${email.snippet || email.body.slice(0, 200)}..."\n\n` +
@@ -4031,6 +4036,7 @@ app.post('/webhook', async (req, res) => {
 
       const sent = await sendGmailReply({
         to: pendingEmail.senderEmail,
+        fromAlias: pendingEmail.aliasReceivedAt,
         subject: pendingEmail.subject,
         body: polishedBody,
         threadId: pendingEmail.threadId,
