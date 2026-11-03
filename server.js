@@ -22,9 +22,6 @@
  * 61. Hardened CREATE_SITES Entity Extraction & Schema Mapping
  * 62. Autonomous Multimodal Inventory Count Engine & Dynamic Role-Based /help
  * 63. Intelligent Maintenance Routing & Expanded Universal Help Directory
- * 64. [V6.0.19] Native C2PA Cryptographic Provenance Ingestion & Edge Hardware Anchoring
- * 65. [V6.0.19] Cross-Tenant Enclave Isolation
- * 66. [V6.0.19] Autonomous Predictive Risk Quantification & Lead-Time Decay Engine
  */
 
 process.on('uncaughtException', (err) => {
@@ -1654,7 +1651,7 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
 
 async function inspectBlindVisualGroundTruth(mediaItem, batchText = '', dispatchTarget, targetedSiteOverride, site) {
   const payload = {
-    system_instruction: { parts: [{ text: INDUSTRIAL_SYSTEM_PROMPT.split('OUTPUT SPECIFICATION')[0] + '\nClassify the physical environment. Is this a padel court? Output JSON {"is_padel_court": boolean, "detected_scene": string}' }] },
+    system_instruction: { parts: [{ text: INDUSTRIAL_SYSTEM_PROMPT.split('OUTPUT SPECIFICATION')[0] + '\nClassify the physical environment. Is this a padel court? (CRITICAL: A bare concrete foundation slab, earthworks, or pre-existing tennis court being prepped for construction MUST be classified as a valid padel court environment for Gate 1). Output JSON {"is_padel_court": boolean, "detected_scene": string}' }] },
     contents: [
       {
         parts: [
@@ -1664,7 +1661,7 @@ async function inspectBlindVisualGroundTruth(mediaItem, batchText = '', dispatch
               data: mediaItem.buffer.toString('base64')
             }
           },
-          { text: "Examine ONLY visual frames. Disregard any audio. Is this physically inside or at the apron of a padel court?" }
+          { text: "Examine ONLY visual frames. Disregard any audio. Is this physically inside or at the apron of a padel court? Remember, a plain concrete foundation is a valid padel court environment for Gate 1." }
         ]
       }
     ],
@@ -2180,7 +2177,7 @@ async function resolveCallerIdentity(fromPhone) {
 }
 
 // ====================================================================
-// 10. WHATSAPP MESSAGING & JOY Cannon ENGINE
+// 10. WHATSAPP MESSAGING & JOY CANNON ENGINE
 // ====================================================================
 
 async function sendWhatsAppReaction(toTarget, messageId, emoji = '⚡') {
@@ -3832,15 +3829,14 @@ async function processMediaBatch(batch) {
     lastNote: site?.fields?.['Last Note'] || '',
     isIndoor: indoorSite,
     workerLanguage: worker?.fields?.['Language'] || 'English',
-    tenant: tenantEnclaveId // Entry #102: Tenant Isolation
+    tenant: tenantEnclaveId 
   };
 
   let storageResults = [];
-  let c2paManifestHashes = []; // Entry #101: Hardware Anchoring
+  let c2paManifestHashes = []; 
 
   if (hasVisualMedia || items.some(i => i.type === 'audio' || i.type === 'voice')) {
     const uploadPromises = items.map(async item => {
-      // Generate SHA-256 hash of raw edge buffer for C2PA provenance ledger
       const hash = crypto.createHash('sha256').update(item.buffer).digest('hex');
       c2paManifestHashes.push(hash);
       return uploadToSupabase(item.buffer, item.mimeType);
@@ -3884,6 +3880,32 @@ async function processMediaBatch(batch) {
   const courtLabel = targetedSite?.fields?.['Site Name'] || 'Assigned Court';
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Installer';
   
+  if (forensicAudit.defect_origin === 'FABRICATION' || 
+      (forensicAudit.blockers_detected && forensicAudit.blockers_detected.some(b => /tab|jig|weld|hole|cut|offset|measurement|fabrication|shop|door/i.test(b)))) {
+      
+      const factoryPhones = '14379287172';
+      const validVideo = items.find(i => i.type === 'video');
+      let videoLink = null;
+      if (validVideo && storageResults.length > 0) {
+          const videoIndex = items.indexOf(validVideo);
+          if (storageResults[videoIndex] && storageResults[videoIndex].signedUrl) {
+              videoLink = storageResults[videoIndex].signedUrl;
+          }
+      }
+      
+      const toleranceAlert = `🏭 *TITAN OS | PRODUCTION TOLERANCE ALERT*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ *Defect Origin:* FABRICATION\n` +
+        `📍 *Location:* ${courtLabel}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `📋 *Issue Detected:*\n${forensicAudit.blockers_detected ? forensicAudit.blockers_detected.join('\n') : forensicAudit.summary}\n\n` +
+        (videoLink ? `🎥 *Forensic Video Record:*\n${videoLink}\n\n` : '') +
+        `_Action: Check active jig alignments and weld tolerances._`;
+        
+      console.log(`[Blameless Machine] Triggering Fabrication Alert for ${courtLabel}`);
+      await fanOutToSubscribers(factoryPhones, toleranceAlert);
+  }
+
   const siteMode = targetedSite?.fields?.['Workflow Mode'] || cumulativeContext.workflowMode || 'INSTALLATION';
   const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
 
@@ -3921,7 +3943,6 @@ async function processMediaBatch(batch) {
     const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => `Gate ${parseInt(String(g).replace(/\D/g, ''))}`);
     if (highestGate > 0) newlyVerifiedGates.push(`Gate ${highestGate}`);
 
-    // Entry #103: Predictive Risk Decay Engine
     let scheduleDecayRisk = "Nominal";
     if (hasBlockers && weatherTripwires.holds?.length > 0) {
        scheduleDecayRisk = "HIGH (48hr Compounding Delay Projected)";
@@ -4141,7 +4162,6 @@ app.post('/webhook', async (req, res) => {
     if (processedMessageMap.has(messageId)) return;
     processedMessageMap.set(messageId, Date.now());
 
-    // Entry #102: Cross-Tenant Context Isolation
     // Initialize an ephemeral RAM enclave bound to the inbound Meta WABA ID
     const tenantEnclaveId = CONFIG.meta.wabaId || 'default_tenant';
     const enclaveContext = {
@@ -4337,8 +4357,7 @@ app.post('/webhook', async (req, res) => {
               fromPhone,
               senderSource: 'Dispatch',
               indoorSite: false,
-              callerIdentity,
-              tenantEnclaveId: enclaveContext.tenant
+              callerIdentity
             });
           }
           
