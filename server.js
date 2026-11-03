@@ -336,7 +336,7 @@ ROUTING INTENTS:
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
 7. "TICKET_UPDATE": User is providing a status update, note, pasting an email response to a prospect, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker, OR explicitly change a ticket's status (e.g., "Starting work", "Paused", "Cancelled").
-8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on existing Sites (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness).
+8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on existing Sites (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness, light presence).
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies.
@@ -393,6 +393,7 @@ DATABASE FIELD MAPPING OVERRIDES:
 "year_installed": number | null
 "model_type": "Standard" | "Hurricane" | "Indoor" | "Outdoor Super Panoramic" | "Indoor Super Panoramic" | "Hurricane Super Panoramic" | "Pickleball" | "Sport Court" | "Decorative" | null
 "glass_thickness": "10mm" | "12mm" | null
+"light_presence": "Yes" | "No" | null
 
 OUTPUT FORMAT (JSON ONLY):
 {
@@ -436,6 +437,7 @@ OUTPUT FORMAT (JSON ONLY):
   "year_installed": number | null,
   "model_type": "string or null",
   "glass_thickness": "string or null",
+  "light_presence": "string or null",
   "transcript_en": "Clean English transcript",
   "transcript_es": "Clean Spanish transcript",
   "inventory_counts": [
@@ -3009,6 +3011,12 @@ async function handleActionableStateChange(nlp, site, worker, callerIdentity, di
   if (nlp.glass_thickness) { updatePayload['Glass Thickness'] = nlp.glass_thickness; updateNotes.push(`Glass: ${nlp.glass_thickness}`); }
   if (nlp.court_type) { updatePayload['Model Type'] = nlp.court_type; updateNotes.push(`Type: ${nlp.court_type}`); }
   if (nlp.a_frames_retrieved) { updatePayload['A-Frames Retrieved'] = true; updateNotes.push(`A-Frames: Picked up`); }
+  
+  // New Lights Column Logic
+  if (nlp.light_presence) { 
+      updatePayload['Light'] = nlp.light_presence; 
+      updateNotes.push(`Lights: ${nlp.light_presence}`); 
+  }
 
   if (Object.keys(updatePayload).length === 0) {
     if (/assign|ticket|chore|task|#\d+|reassign/i.test(rawText)) {
