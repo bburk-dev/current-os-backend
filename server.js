@@ -3460,7 +3460,7 @@ async function handleSpokenRoutingQuery(worker, fromPhone, dispatchTarget, calle
 
   // 1. Establish Origin
   const recentPin = lastDroppedCoordinates.get(fromPhone);
-  let originStr = "655 Harvey Settlement Road, Aurelia (Central Warehouse)";
+  let originStr = "655 Harvie Settlement Road, Unit 8, Orillia ON (Central Warehouse)";
   let hasLivePin = false;
 
   if (recentPin && (Date.now() - recentPin.timestamp < 12 * 60 * 60 * 1000)) {
