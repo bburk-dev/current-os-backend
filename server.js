@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.18 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.19 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * 44. Executive Maintenance Ticket Rollups
@@ -21,6 +21,7 @@
  * 60. Rob Wharton Executive Pipeline & /estimate /invoice Quick Commands
  * 61. Hardened CREATE_SITES Entity Extraction & Schema Mapping
  * 62. Autonomous Multimodal Inventory Count Engine & Dynamic Role-Based /help
+ * 63. Intelligent Maintenance Routing & Expanded Universal Help Directory
  */
 
 process.on('uncaughtException', (err) => {
@@ -170,7 +171,8 @@ const COMMAND_MAP = {
   '/help': 'HELP',
   '/?': 'HELP',
   '/new': 'NEW_SITE_TEMPLATE',
-  '/exec': 'EXECUTIVE_MODE_TOGGLE'
+  '/exec': 'EXECUTIVE_MODE_TOGGLE',
+  '/route': 'ROUTING'
 };
 
 const VISUAL_TRIAGE_PROMPT = `
@@ -1265,7 +1267,7 @@ function evaluateReadinessGate(siteRecord) {
     const blockers = [];
     if (!hasDeposit) blockers.push('Deposit Pending');
     if (!slabCured) blockers.push(cureMsg);
-    if (!roadsOpen) blockers.push(roadMsg);
+    if (!roadsOpen) push(roadMsg);
     return {
       status: 'HOLD: PRE-CON BLOCKED 🔴',
       details: blockers.join(' • '),
@@ -3453,6 +3455,95 @@ async function handleSpokenInventorySnapshot(dispatchTarget) {
   await sendWhatsAppMessage(dispatchTarget, card.trim());
 }
 
+async function handleSpokenRoutingQuery(worker, fromPhone, dispatchTarget, callerIdentity) {
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Technician';
+
+  // 1. Establish Origin
+  const recentPin = lastDroppedCoordinates.get(fromPhone);
+  let originStr = "655 Harvey Settlement Road, Aurelia (Central Warehouse)";
+  let hasLivePin = false;
+
+  if (recentPin && (Date.now() - recentPin.timestamp < 12 * 60 * 60 * 1000)) {
+    originStr = `${recentPin.lat.toFixed(6)}, ${recentPin.lon.toFixed(6)}`;
+    hasLivePin = true;
+  }
+
+  // 2. Fetch Maintenance Assignments
+  const allAssignments = await getCachedOpenAssignments(true);
+  const workerAssignments = allAssignments.filter(a => {
+    const wId = a.fields['Worker'];
+    const isAssigned = Array.isArray(wId) ? wId.includes(worker?.id) : wId === worker?.id;
+    const isMaintenance = a.fields['Assignment Type'] === 'Service' || (a.fields['Task Category'] || '').toLowerCase().includes('maintenance');
+    return isAssigned && isMaintenance;
+  });
+
+  if (workerAssignments.length === 0) {
+    await sendWhatsAppMessage(dispatchTarget, `🗺️ *TITAN OS | ROUTING*\nNo active maintenance jobs found for ${workerName}.`);
+    return;
+  }
+
+  // 3. Resolve Site Locations
+  const sites = await getCachedSites();
+  const routePoints = [];
+
+  for (const job of workerAssignments) {
+    const siteIds = job.fields['Sites'] || job.fields['Site'] || [];
+    const siteArray = Array.isArray(siteIds) ? siteIds : [siteIds];
+    for (const sId of siteArray) {
+        const jobSite = sites.find(s => s.id === sId);
+        if (jobSite) {
+          const coords = await resolveCoordinates(jobSite);
+          if (coords) {
+             routePoints.push({
+                ticket: job.fields['Assignment ID'] ? `#${job.fields['Assignment ID']}` : 'WO',
+                siteName: jobSite.fields['Site Name'],
+                notes: (job.fields['Notes'] || '').split('\n')[0].substring(0, 50),
+                lat: coords.lat,
+                lon: coords.lon
+             });
+          }
+        }
+    }
+  }
+
+  if (routePoints.length === 0) {
+      await sendWhatsAppMessage(dispatchTarget, `🗺️ *TITAN OS | ROUTING*\nFound ${workerAssignments.length} jobs, but could not resolve geospatial coordinates for them.`);
+      return;
+  }
+
+  // 4. Gemini Spatial Optimization
+  const prompt = `You are Titan OS Logistics. Optimize this driving route for ${workerName}.
+  ORIGIN: ${originStr}
+  STOPS: ${JSON.stringify(routePoints)}
+
+  Calculate the most efficient order. Output a clean WhatsApp message strictly starting with "🗺️ *OPTIMIZED ROUTE FOR ${workerName.toUpperCase()}*"
+  List the stops in order 1, 2, 3... with the site name, ticket number, and a brief note. Keep it highly concise.`;
+
+  try {
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.1 }
+    };
+    const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    let routingCard = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Route calculation failed.';
+
+    if (!hasLivePin) {
+       routingCard += `\n\n_Note: Route calculated from Central Warehouse. Drop a location pin to route from your current location._`;
+    }
+
+    await sendWhatsAppMessage(dispatchTarget, routingCard);
+  } catch (err) {
+    console.error('[Routing Engine Error]:', err.message);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to calculate intelligent route for your ${workerAssignments.length} jobs.`);
+  }
+}
+
 // ====================================================================
 // 14. CONVERSATIONAL TEXT & VOICE TRIAGE ENGINE
 // ====================================================================
@@ -4425,9 +4516,10 @@ app.post('/webhook', async (req, res) => {
         }
         
         helpCard += `*Field Operations:*\n` +
-          `• Drop location pin ➔ Check-In & Weather\n` +
+          `• Drop location pin ➔ Check-In & Set Route Origin\n` +
           `• Send video ➔ Milestone & QA Sweep\n` +
           `• Send audio ➔ Voice note / Parts request\n` +
+          `• /route ➔ Optimize route for active maintenance jobs\n` +
           `• /inv ➔ Yard stock on hand & committed\n` +
           `• /docs ➔ Pull blueprints\n` +
           `• /status ➔ Active court gate & tickets\n` +
@@ -4436,6 +4528,11 @@ app.post('/webhook', async (req, res) => {
           `• /specs ➔ Tech dimensions & CBSA rules`;
           
         await sendWhatsAppMessage(dispatchTarget, helpCard);
+        return;
+      }
+
+      if (lTxt.startsWith('/route')) {
+        await handleSpokenRoutingQuery(worker, fromPhone, dispatchTarget, callerIdentity);
         return;
       }
       
@@ -4672,7 +4769,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.18' });
+  res.status(200).json({ status: 'healthy', version: '6.0.19' });
 });
 
 // ====================================================================
@@ -4784,7 +4881,7 @@ startFridayNewsletterCron();
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.18 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.19 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
