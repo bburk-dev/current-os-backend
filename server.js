@@ -1267,7 +1267,7 @@ function evaluateReadinessGate(siteRecord) {
     const blockers = [];
     if (!hasDeposit) blockers.push('Deposit Pending');
     if (!slabCured) blockers.push(cureMsg);
-    if (!roadsOpen) push(roadMsg);
+    if (!roadsOpen) blockers.push(roadMsg);
     return {
       status: 'HOLD: PRE-CON BLOCKED 🔴',
       details: blockers.join(' • '),
@@ -4257,7 +4257,17 @@ app.post('/webhook', async (req, res) => {
 
     // --- GMAIL REPLY INTERCEPTOR ---
     const pendingEmail = userPendingEmailMap.get(fromPhone);
-    if (pendingEmail && (Date.now() - pendingEmail.timestamp < 15 * 60 * 1000) && message.type !== 'location' && message.type !== 'interactive') {
+    
+    // SYSTEM COMMAND PREEMPTION SHIELD
+    let isSystemCommand = false;
+    if (message.type === 'text') {
+      const bTxt = message.text?.body?.trim().toLowerCase() || '';
+      if (bTxt.startsWith('/') || bTxt === 'help' || bTxt === '?') {
+        isSystemCommand = true;
+      }
+    }
+
+    if (pendingEmail && (Date.now() - pendingEmail.timestamp < 15 * 60 * 1000) && message.type !== 'location' && message.type !== 'interactive' && !isSystemCommand) {
       userPendingEmailMap.delete(fromPhone);
       let userReplyText = 'Thanks for reaching out.';
       
@@ -4517,14 +4527,14 @@ app.post('/webhook', async (req, res) => {
         
         helpCard += `*Field Operations:*\n` +
           `• Drop location pin ➔ Check-In & Set Route Origin\n` +
+          `• /route ➔ Optimize route for maintenance jobs\n` +
+          `• /status ➔ Active court gate & tickets\n` +
+          `• /w or /weather ➔ Local wind & adhesive status\n` +
           `• Send video ➔ Milestone & QA Sweep\n` +
           `• Send audio ➔ Voice note / Parts request\n` +
-          `• /route ➔ Optimize route for active maintenance jobs\n` +
           `• /inv ➔ Yard stock on hand & committed\n` +
           `• /docs ➔ Pull blueprints\n` +
-          `• /status ➔ Active court gate & tickets\n` +
           `• /t ➔ Open field tickets\n` +
-          `• /weather ➔ Local wind & adhesive status\n` +
           `• /specs ➔ Tech dimensions & CBSA rules`;
           
         await sendWhatsAppMessage(dispatchTarget, helpCard);
