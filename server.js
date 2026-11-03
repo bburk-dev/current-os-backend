@@ -336,7 +336,7 @@ ROUTING INTENTS:
 5. "READINESS_QUERY": User is asking if a court is ready to mobilize, foundation cured, or deposit received.
 6. "WORK_ORDER_CLOSEOUT": Spoken completion of a task/ticket.
 7. "TICKET_UPDATE": User is providing a status update, note, pasting an email response to a prospect, or asking to reassign, move, or allocate an active ticket/chore/supply request to a different site or worker, OR explicitly change a ticket's status (e.g., "Starting work", "Paused", "Cancelled").
-8. "ACTIONABLE_STATE_CHANGE": Specific commands to update database fields on existing Sites (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness, light presence).
+8. "ACTIONABLE_STATE_CHANGE": Specific commands or declarative statements to update database fields on existing Sites (deposit status, slab dates, crews, site status, foundation type, steel color, turf color, turf supplier, year installed, model type, glass thickness, light presence). Example: "Steele has black steel and blue turf."
 9. "DARK_MATTER": Genuine jobsite notes (hardware delivered, GC delay, traffic notes, logistical reminders, supplier updates).
 10. "PURE_NOISE": Casual banter, greetings, emojis ("thanks", "ok", "coffee").
 11. "SUPPLY_REQUEST": Installer or field crew requesting missing parts, hardware, tools, or supplies.
@@ -346,7 +346,7 @@ ROUTING INTENTS:
 15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
 16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
 17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
-18. "COURT_SPECS_QUERY": User is asking about the physical specifications, colors, materials, year, model/court type, or suppliers of a specific court.
+18. "COURT_SPECS_QUERY": User is explicitly asking a question about the physical specifications, colors, materials, year, model/court type, or suppliers of a specific court. (e.g. "What color is the turf?")
 19. "MAINTENANCE_QUERY": User is specifically asking to see open maintenance tickets, repair tasks, or service calls across the network.
 20. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
 21. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
@@ -4134,10 +4134,10 @@ app.post('/webhook/gmail', async (req, res) => {
       `📌 *Subject:* ${safeSubject}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `💬 *Body Preview:*\n"${safePreview}..."\n\n` +
-      `👉 *To reply:* Reply to this message with a voice note or text. Titan OS will polish it and dispatch the email directly.\n\n` +
       `🎫 *Logged as Sales Ticket ${ticketIdStr}*`;
 
-    await sendWhatsAppMessage(dispatchTarget, emailCard);
+    const buttons = [{ id: `GMAIL_REPLY_${dispatchTarget}`, title: '✉️ Reply via Email' }];
+    await sendWhatsAppButtons(dispatchTarget, emailCard, buttons);
   } catch (err) {
     console.error('[Gmail Webhook Exception]:', err.message);
   }
@@ -4196,7 +4196,7 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    if (pendingEmail && (Date.now() - pendingEmail.timestamp < 15 * 60 * 1000) && message.type !== 'location' && message.type !== 'interactive' && !isSystemCommand) {
+    if (pendingEmail && pendingEmail.draftingModeActive && (Date.now() - pendingEmail.timestamp < 15 * 60 * 1000) && message.type !== 'location' && message.type !== 'interactive' && !isSystemCommand) {
       userPendingEmailMap.delete(fromPhone);
       let userReplyText = 'Thanks for reaching out.';
       
@@ -4322,6 +4322,18 @@ app.post('/webhook', async (req, res) => {
         const estimateId = parts[2];
         const percentage = parts[3];
         await sendWhatsAppMessage(dispatchTarget, `✅ QuickBooks API called. Generated ${percentage}% Draw Invoice for Estimate #${estimateId}.`);
+        return;
+      }
+
+      if (btnId.startsWith('GMAIL_REPLY_')) {
+        const pending = userPendingEmailMap.get(fromPhone);
+        if (pending) {
+            pending.draftingModeActive = true;
+            pending.timestamp = Date.now();
+            await sendWhatsAppMessage(dispatchTarget, `🎙️ *Drafting Mode Active*\nSend a voice note or text message now to draft your reply to ${pending.senderName}.`);
+        } else {
+            await sendWhatsAppMessage(dispatchTarget, `⚠️ Email reply window has expired.`);
+        }
         return;
       }
       
@@ -4661,8 +4673,7 @@ app.post('/webhook', async (req, res) => {
           fromPhone,
           senderSource: 'Dispatch',
           indoorSite: false,
-          callerIdentity,
-          tenantEnclaveId: enclaveContext.tenant
+          callerIdentity
         });
       }
 
