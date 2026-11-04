@@ -1,7 +1,7 @@
 {
   "name": "titan-os",
-  "version": "6.0.0",
-  "description": "Titan OS V6.0 Headless ERP: Supabase Postgres, Gemini 2.5 Flash, Meta WhatsApp Webhook",
+  "version": "6.0.22",
+  "description": "Titan OS V6.0 Headless ERP: Supabase Postgres, Gemini 2.5 Pro, Meta WhatsApp Webhook",
   "main": "server.js",
   "private": true,
   "scripts": {
