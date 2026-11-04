@@ -1602,6 +1602,12 @@ async function handleTicketOrLeadUpdate({ rawText, entityName, explicitTicketId,
   if (targetSite) {
     updatePayload['Sites'] = [targetSite.id];
     reassignedSiteName = targetSite.fields['Site Name'];
+    
+    // Auto-promote priority if VIP court
+    const classif = targetSite.fields['Court Classification'] || '';
+    if (classif.includes('UHNW') || classif.includes('Tournament') || classif.includes('VIP')) {
+       updatePayload['Priority'] = 'Critical';
+    }
   }
 
   let assignedWorkerName = null;
@@ -3118,6 +3124,22 @@ async function handleBulkSiteCreation(nlp, dispatchTarget, fromPhone) {
 
   try {
     for (const siteName of siteNames) {
+      
+      // Auto QBO Client Name Mapper (Founders Log #95 / Feature Add)
+      let clientNameMatch = null;
+      if (CONFIG.qbo.companyId && CONFIG.qbo.accessToken) {
+          try {
+              const searchTerm = siteName.trim().split(' ')[0].replace(/'/g, "\\'");
+              const custQuery = `select * from Customer where DisplayName LIKE '%${searchTerm}%' MAXRESULTS 1`;
+              const qboData = await qboApiRequest(custQuery);
+              if (qboData && qboData.QueryResponse && qboData.QueryResponse.Customer && qboData.QueryResponse.Customer.length > 0) {
+                  clientNameMatch = qboData.QueryResponse.Customer[0].DisplayName;
+              }
+          } catch(e) {
+              console.log('[QBO Sync] Silent bypass on auto-link client name for', siteName);
+          }
+      }
+
       const newRecordPayload = {
         'Site Name': siteName.trim(),
         'Workflow Mode': 'PLANNING',
@@ -3126,9 +3148,8 @@ async function handleBulkSiteCreation(nlp, dispatchTarget, fromPhone) {
         ...specsToApply
       };
 
-      if (locationString) {
-        newRecordPayload['Site location'] = locationString;
-      }
+      if (clientNameMatch) newRecordPayload['Client Name'] = clientNameMatch;
+      if (locationString) newRecordPayload['Site location'] = locationString;
 
       const createdSite = await airtableWriteWithAutoDrop('Sites', newRecordPayload);
       if (createdSite?.id) {
@@ -3751,7 +3772,9 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     const senderName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Field Crew';
     const siteLabel = site?.fields?.['Site Name'] || triage.matched_site_name || 'Central Operations';
 
-    const isHighPriority = (triage.gravity_score >= 3 || triage.urgency === 'HIGH' || triage.urgency === 'MEDIUM');
+    const classif = site?.fields?.['Court Classification'] || '';
+    const isVIP = /UHNW|Tournament|VIP/i.test(classif);
+    const isHighPriority = (triage.gravity_score >= 3 || triage.urgency === 'HIGH' || triage.urgency === 'MEDIUM' || isVIP);
     const isExecMode = site?.fields?.['Workflow Mode'] === 'EXECUTIVE';
 
     if (isHighPriority || isExecMode) {
@@ -3770,7 +3793,7 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
         rawText: triage.transcript_en,
         category: triage.dark_matter_category || 'Logistics',
         distilledContext: triage.distilled_context || triage.transcript_en,
-        urgency: triage.urgency || 'LOW',
+        urgency: isVIP ? 'HIGH' : (triage.urgency || 'LOW'),
         gravityScore: triage.gravity_score || 1
       });
 
@@ -3936,16 +3959,21 @@ async function processMediaBatch(batch) {
 
   if (siteMode === 'INSTALLATION') {
     const highestGate = forensicAudit.highest_gate || (forensicAudit.verified_gates?.length ? Math.max(...forensicAudit.verified_gates) : 0);
-    const progressPercent = Math.min(1.0, highestGate / TOTAL_GATES);
     const inProgressGates = forensicAudit.in_progress_gates || (highestGate < TOTAL_GATES ? [highestGate + 1] : []);
     const gateLabel = GATE_NAMES[highestGate] ? `${highestGate}. ${GATE_NAMES[highestGate]}` : `Gate ${highestGate}`;
     const cleanSummary = forensicAudit.summary || forensicAudit.transcript_en || 'Construction sweep recorded.';
     const compactGateStatus = inProgressGates.length ? `${highestGate}. ${GATE_NAMES[highestGate] || 'Verified'} (${inProgressGates.join(' & ')} In Progress)` : gateLabel;
 
     const previouslyCleared = targetedSite?.fields?.['Cleared Milestones'] || [];
-    const isNewMilestone = highestGate > 0 && !previouslyCleared.includes(`Gate ${highestGate}`);
     const newlyVerifiedGates = (forensicAudit.verified_gates || []).map(g => `Gate ${parseInt(String(g).replace(/\D/g, ''))}`);
     if (highestGate > 0) newlyVerifiedGates.push(`Gate ${highestGate}`);
+    
+    const allClearedSet = new Set([...previouslyCleared, ...newlyVerifiedGates]);
+    const allCleared = Array.from(allClearedSet);
+    
+    const isNewMilestone = highestGate > 0 && !previouslyCleared.includes(`Gate ${highestGate}`);
+
+    const progressPercent = Math.min(1.0, allCleared.length / TOTAL_GATES);
 
     let scheduleDecayRisk = "Nominal";
     if (hasBlockers && weatherTripwires.holds?.length > 0) {
@@ -3956,11 +3984,19 @@ async function processMediaBatch(batch) {
 
     let milestoneTimestamps = {};
     try {
-      if (targetedSite?.fields?.['Milestone Timestamps JSON']) milestoneTimestamps = JSON.parse(targetedSite.fields['Milestone Timestamps JSON']);
+      if (targetedSite?.fields?.['Milestone Timestamps JSON']) {
+          milestoneTimestamps = JSON.parse(targetedSite.fields['Milestone Timestamps JSON']);
+      }
     } catch (e) {}
 
     let velocityMessage = '';
-    if (highestGate > 0 && !milestoneTimestamps[highestGate]) milestoneTimestamps[highestGate] = new Date().toISOString();
+    const nowIso = new Date().toISOString();
+    newlyVerifiedGates.forEach(gateStr => {
+        const gateNum = gateStr.replace(/\D/g, '');
+        if (gateNum && !milestoneTimestamps[gateNum]) {
+            milestoneTimestamps[gateNum] = nowIso;
+        }
+    });
 
     if (highestGate >= TOTAL_GATES && milestoneTimestamps['1'] && isNewMilestone) {
       const start = new Date(milestoneTimestamps['1']);
@@ -3970,8 +4006,6 @@ async function processMediaBatch(batch) {
     }
 
     if (targetedSite) {
-      const allCleared = Array.from(new Set([...previouslyCleared, ...newlyVerifiedGates]));
-
       const updatePayload = {
         'Cleared Milestones': allCleared,
         'Current Gate': compactGateStatus,
