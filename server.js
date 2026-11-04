@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.19 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
+ * TITAN OS V6.0.22 — HEADLESS ERP & CONVERSATIONAL DATABASE ADMIN
  * Model: Gemini 2.5 Pro
  * 
  * 44. Executive Maintenance Ticket Rollups
@@ -22,6 +22,13 @@
  * 61. Hardened CREATE_SITES Entity Extraction & Schema Mapping
  * 62. Autonomous Multimodal Inventory Count Engine & Dynamic Role-Based /help
  * 63. Intelligent Maintenance Routing & Expanded Universal Help Directory
+ * 64. Formula-Free Non-Linear Mathematical Completion Engine (allCleared.length / TOTAL_GATES)
+ * 65. Autonomous Cross-Ledger QBO CustomerRef Binding for Net-New Sites
+ * 66. Milestone Timestamps JSON Keyed Map & Stage Transition Velocity Tracking
+ * 67. Interactive Edge Management ("God Mode" Interactive Blocker Resolution)
+ * 68. Dynamic Meteorological Pulse Contextualization ("Empathetic Supervisor")
+ * 69. VIP Court Classification Priority Override Escalation (UHNW/Tournament)
+ * 70. Algorithmic Foundation Whitelisting for Stage 1 Blind Visual Gate
  */
 
 process.on('uncaughtException', (err) => {
@@ -232,7 +239,7 @@ DO NOT evaluate background courts or adjacent courts. Disregard courts seen in t
 
 PADEL COURT 9-GATE PHYSICAL CONSTRUCTION RUBRIC (SUPER PANORAMIC SPEC):
 When inspecting video frames, visually identify completed physical stages:
-- Gate 1: "Foundation & Slab" (Cured concrete pad, existing sport court, or existing tennis foundation)
+- Gate 1: "Foundation & Slab" (Cured concrete pad, existing sport court, or existing tennis foundation. NOTE: A clean poured concrete slab with no frame yet IS a verified Gate 1!)
 - Gate 2: "Steel Frame" (Vertical steel posts and perimeter frame beams bolted upright. NOTE: Super Panoramic courts do NOT have corner posts)
 - Gate 3: "Mesh Panels" (Lower and upper wire mesh fencing panels bolted to steel posts)
 - Gate 4: "Glass Installed" (Tempered glass panels mounted and secured via glass tabs. NOTE: Do not look for frame channels)
@@ -3125,7 +3132,7 @@ async function handleBulkSiteCreation(nlp, dispatchTarget, fromPhone) {
   try {
     for (const siteName of siteNames) {
       
-      // Auto QBO Client Name Mapper (Founders Log #95 / Feature Add)
+      // Auto QBO Client Name Mapper
       let clientNameMatch = null;
       if (CONFIG.qbo.companyId && CONFIG.qbo.accessToken) {
           try {
@@ -3973,6 +3980,7 @@ async function processMediaBatch(batch) {
     
     const isNewMilestone = highestGate > 0 && !previouslyCleared.includes(`Gate ${highestGate}`);
 
+    // Mathematical formula-free completion percentage
     const progressPercent = Math.min(1.0, allCleared.length / TOTAL_GATES);
 
     let scheduleDecayRisk = "Nominal";
@@ -4375,6 +4383,38 @@ app.post('/webhook', async (req, res) => {
         }
         return;
       }
+
+      if (btnId.startsWith('ACTION_BLOCKER_')) {
+        const parts = btnId.split('_');
+        const actionType = parts[2];
+        const targetSiteId = parts[3];
+        
+        const allSites = await getCachedSites();
+        const targetSite = allSites.find(s => s.id === targetSiteId);
+        const siteName = targetSite?.fields?.['Site Name'] || 'Site';
+        
+        if (actionType === 'ORDER') {
+           const todayStr = new Date().toISOString().split('T')[0];
+           const payload = {
+              'Date': todayStr,
+              'Assignment Type': 'Supply Delivery',
+              'Task Category': 'Logistics',
+              'Priority': 'High',
+              'Source': 'God Mode Button Order',
+              'Status': 'Open',
+              'Notes': `[APPROVED LOGISTICS RUN]: Emergency order approved by HQ for ${siteName}.`,
+              'Sites': [targetSiteId]
+           };
+           await airtableWriteWithAutoDrop('Daily Assignments', payload);
+           invalidateAirtableCache('assignments');
+           await sendWhatsAppMessage(dispatchTarget, `🚚 *Supply Run Dispatched:*\nLogistics ticket opened for *${siteName}*.`);
+        } else if (actionType === 'IGNORE') {
+           await airtableWriteWithAutoDrop('Sites', { 'Blocker Active': false }, targetSiteId);
+           invalidateAirtableCache('sites');
+           await sendWhatsAppMessage(dispatchTarget, `✅ Blocker dismissed for *${siteName}*.`);
+        }
+        return;
+      }
       
       return;
     }
@@ -4759,7 +4799,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.19' });
+  res.status(200).json({ status: 'healthy', version: '6.0.22' });
 });
 
 // ====================================================================
@@ -4871,7 +4911,7 @@ startFridayNewsletterCron();
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.19 RUNNING ON PORT ${PORT}`);
+  console.log(`🚀 TITAN OS V6.0.22 RUNNING ON PORT ${PORT}`);
   console.log(`====================================================================`);
   
   if (!global.supabase) {
