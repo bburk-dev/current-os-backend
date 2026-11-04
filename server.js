@@ -1148,7 +1148,7 @@ async function streamToDarkMatterVault({
 
   const payload = {
     site_id: siteId || null,
-    siteName: siteName || 'Central Operations',
+    site_name: siteName || 'Central Operations',
     sender_phone: senderPhone || null,
     sender_name: senderName || 'Field Tech',
     raw_text: rawText,
@@ -4263,7 +4263,18 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      const prompt = `You are Bob Burk from Bounce Padel. Turn this quick field tech note into a professional, courteous executive email reply.\n\nNote: "${userReplyText}"\n\nReturn ONLY the email body text.`;
+      const prompt = `You are Bob Burk, Founder of Bounce Padel (a padel court construction company). 
+Turn this quick voice note into a professional executive email reply.
+
+CRITICAL CONTEXT & MANDATES:
+1. You are the vendor providing quotes, specs, and services to the client/prospect, NOT purchasing from them.
+2. NEVER use placeholders like [Sender's Name]. Extract the prospect's name directly from the voice note (e.g. if the note says "Tell John...", address it to John). If no name is clearly dictated, use a generic professional greeting (e.g. "Hi there,").
+3. Do not address the email to "${pendingEmail.senderName}" if it appears to be a forwarded internal alias.
+
+Note: "${userReplyText}"
+
+Return ONLY the email body text.`;
+      
       const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
