@@ -45,9 +45,9 @@ try {
 
 const express = require('express');
 const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
 const cluster = require('cluster');
 const os = require('os');
-const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1148,7 +1148,7 @@ async function streamToDarkMatterVault({
 
   const payload = {
     site_id: siteId || null,
-    site_name: siteName || 'Central Operations',
+    siteName: siteName || 'Central Operations',
     sender_phone: senderPhone || null,
     sender_name: senderName || 'Field Tech',
     raw_text: rawText,
@@ -4782,4 +4782,185 @@ app.post('/webhook', async (req, res) => {
         try {
           const currentBatch = mediaDebounceQueues.get(queueKey);
           mediaDebounceQueues.delete(queueKey);
-          if (!currentBatch
+          if (!currentBatch || currentBatch.items.length === 0) return;
+
+          await processMediaBatch(currentBatch);
+        } catch (batchErr) {
+          console.error('[Debouncer Batch Error]:', batchErr);
+        }
+      }, DEBOUNCE_DELAY_MS);
+
+      return;
+    }
+
+  } catch (err) {
+    console.error('[Runtime Exception in /webhook]:', err);
+  }
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy', version: '6.0.22' });
+});
+
+// ====================================================================
+// 16. META WABA INITIALIZATION SCRIPT
+// ====================================================================
+async function autoSubscribeMetaWebhook() {
+  const token = CONFIG.meta.accessToken;
+  if (!token) {
+    console.warn('[Meta Handshake] No META_ACCESS_TOKEN configured in environment.');
+    return;
+  }
+
+  const targetPhone = CONFIG.meta.targetVerifiedPhone;
+  const discoveredWabaIds = new Set();
+  if (CONFIG.meta.wabaId) discoveredWabaIds.add(String(CONFIG.meta.wabaId).trim());
+
+  try {
+    const debugRes = await fetch(`${CONFIG.meta.graphApiUrl}/debug_token?input_token=${token}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (debugRes.ok) {
+      const debugData = await debugRes.json();
+      const scopes = debugData?.data?.granular_scopes || [];
+      for (const scope of scopes) {
+        if (scope.scope?.includes('whatsapp_business') && Array.isArray(scope.target_ids)) {
+          scope.target_ids.forEach(id => discoveredWabaIds.add(String(id)));
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Meta Handshake] Debug token inspection note:', e.message);
+  }
+
+  const businessCandidates = ['34682330288078617'];
+  try {
+    const bizRes = await fetch(`${CONFIG.meta.graphApiUrl}/me/businesses`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (bizRes.ok) {
+      const bizData = await bizRes.json();
+      (bizData?.data || []).forEach(b => businessCandidates.push(b.id));
+    }
+  } catch (e) {}
+
+  for (const bId of businessCandidates) {
+    for (const endpoint of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+      try {
+        const wRes = await fetch(`${CONFIG.meta.graphApiUrl}/${bId}/${endpoint}?fields=id,name`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (wRes.ok) {
+          const wData = await wRes.json();
+          (wData?.data || []).forEach(w => discoveredWabaIds.add(String(w.id)));
+        }
+      } catch (e) {}
+    }
+  }
+
+  console.log(`📡 [Meta Handshake] Discovered WABA Candidate IDs: [${Array.from(discoveredWabaIds).join(', ') || 'None'}]`);
+
+  let matchedPhone = false;
+  for (const wabaId of discoveredWabaIds) {
+    try {
+      const pRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        const numbers = pData?.data || [];
+        for (const num of numbers) {
+          const cleanDisplay = (num.display_phone_number || '').replace(/\D/g, '');
+          if (cleanDisplay.includes(targetPhone) || targetPhone.includes(cleanDisplay) || num.id === CONFIG.meta.phoneNumberId) {
+            CONFIG.meta.phoneNumberId = num.id;
+            CONFIG.meta.wabaId = wabaId;
+            matchedPhone = true;
+            console.log(`📱 [Meta Handshake] Matched verified number +1 289-221-7329 -> Active Phone Number ID: ${num.id} (WABA: ${wabaId})`);
+            break;
+          }
+        }
+      }
+
+      const subRes = await fetch(`${CONFIG.meta.graphApiUrl}/${wabaId}/subscribed_apps`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const subData = await subRes.json();
+      console.log(`📡 [Meta Handshake] Subscribed App to WABA ${wabaId}:`, subData);
+    } catch (err) {
+      console.warn(`[Meta Handshake] Note for WABA ${wabaId}:`, err.message);
+    }
+  }
+
+  if (!matchedPhone && CONFIG.meta.phoneNumberId) {
+    try {
+      const vRes = await fetch(`${CONFIG.meta.graphApiUrl}/${CONFIG.meta.phoneNumberId}?fields=id,display_phone_number,verified_name`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (vRes.ok) {
+        const vData = await vRes.json();
+        console.log(`📱 [Meta Handshake] Active Phone ID ${vData.id} verified: ${vData.display_phone_number} (${vData.verified_name || 'Active'})`);
+      }
+    } catch (e) {}
+  }
+}
+
+// ====================================================================
+// 17. CLUSTER ORCHESTRATION & SERVER BOOT
+// ====================================================================
+
+const numCPUs = process.env.WEB_CONCURRENCY || os.cpus().length || 1;
+
+if (cluster.isPrimary) {
+  console.log(`====================================================================`);
+  console.log(`🚀 TITAN OS V6.0.22 PRIMARY ORCHESTRATOR RUNNING`);
+  console.log(`====================================================================`);
+  console.log(`[Cluster Engine] Forking ${numCPUs} concurrent worker processes...`);
+
+  // 1. Singletons: Run crons ONLY on the primary process to prevent duplicate dispatches
+  startFridayNewsletterCron();
+  setInterval(syncOracleDocs, 24 * 60 * 60 * 1000);
+
+  // 2. Fork Node child processes based on Render WEB_CONCURRENCY / CPU availability
+  for (let i = 0; i < numCPUs; i++) {
+    cluster.fork();
+  }
+
+  // 3. Auto-Healer: Resurrect dead workers instantly to maintain throughput
+  cluster.on('exit', (worker, code, signal) => {
+    console.error(`[CRITICAL] Worker ${worker.process.pid} died (${signal || code}). Orchestrator spinning up a replacement...`);
+    cluster.fork();
+  });
+
+} else {
+  // Worker Processes: Bind to shared port and hydrate independent RAM caches
+  app.listen(PORT, '0.0.0.0', async () => {
+    console.log(`[Cluster Engine] Worker ${process.pid} online and listening on PORT ${PORT}`);
+    
+    if (!global.supabase) {
+      global.supabase = createClient(
+        CONFIG.supabase.url,
+        CONFIG.supabase.serviceRoleKey,
+        { auth: { persistSession: false } }
+      );
+    }
+
+    // Only allow Worker 1 to handle the Meta handshake to avoid rate-limiting the Graph API
+    if (cluster.worker.id === 1) {
+      await autoSubscribeMetaWebhook();
+    }
+
+    // Hydrate the Cache-Aside Engine into this specific worker's RAM
+    try {
+      await getCachedSites();
+      await getCachedWorkers();
+      await getCachedContacts();
+      await getCachedOpenAssignments();
+      await refreshInventoryCache();
+      await syncOracleDocs(); 
+    } catch (err) {
+      console.error(`[Worker ${process.pid} Cache Hydration Error]:`, err.message);
+    }
+  });
+}
