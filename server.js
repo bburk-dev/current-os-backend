@@ -3904,6 +3904,10 @@ async function processMediaBatch(batch) {
         
       console.log(`[Blameless Machine] Triggering Fabrication Alert for ${courtLabel}`);
       await fanOutToSubscribers(factoryPhones, toleranceAlert);
+      
+      if (targetedSite) {
+        await airtableWriteWithAutoDrop('Sites', { 'Review Queue': true }, targetedSite.id);
+      }
   }
 
   const siteMode = targetedSite?.fields?.['Workflow Mode'] || cumulativeContext.workflowMode || 'INSTALLATION';
@@ -3952,7 +3956,7 @@ async function processMediaBatch(batch) {
 
     let milestoneTimestamps = {};
     try {
-      if (targetedSite?.fields?.['Milestone Timestamps']) milestoneTimestamps = JSON.parse(targetedSite.fields['Milestone Timestamps']);
+      if (targetedSite?.fields?.['Milestone Timestamps JSON']) milestoneTimestamps = JSON.parse(targetedSite.fields['Milestone Timestamps JSON']);
     } catch (e) {}
 
     let velocityMessage = '';
@@ -3971,7 +3975,8 @@ async function processMediaBatch(batch) {
       const updatePayload = {
         'Cleared Milestones': allCleared,
         'Current Gate': compactGateStatus,
-        'Milestone Timestamps': JSON.stringify(milestoneTimestamps),
+        'Completion %': progressPercent,
+        'Milestone Timestamps JSON': JSON.stringify(milestoneTimestamps),
         'Last Note': `[SWEEP - ${workerName} at ${timeStr}]:\n${cleanSummary}\n[C2PA Hash: ${c2paManifestHashes[0]?.substring(0,8)}]`,
         'Last Intent': hasBlockers ? 'ACTION_REQUIRED' : 'MILESTONE_PROGRESS',
         'Blocker Active': hasBlockers,
