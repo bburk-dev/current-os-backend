@@ -355,7 +355,7 @@ ROUTING INTENTS:
 15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
 16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
 17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
-18. "COURT_SPECS_QUERY": User is explicitly asking a question about the physical specifications, colors, materials, year, model/court type, or suppliers of a specific court. (e.g. "What color is the turf?")
+18. "COURT_SPECS_QUERY": User is explicitly asking a question about the physical specifications, configuration, colors, materials, year, model/court type, or suppliers of a specific court. (e.g. "What color is the turf?", "court config site-wise", "tell me about the court at...")
 19. "MAINTENANCE_QUERY": User is specifically asking to see open maintenance tickets, repair tasks, or service calls across the network.
 20. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
 21. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
@@ -3204,8 +3204,17 @@ async function handleSpokenSpecsQuery(queriedName, fallbackSite, dispatchTarget)
   const steelColor = targetSite.fields['Steel Color'] || 'Unspecified';
   const turfColor = targetSite.fields['Turf Color'] || 'Unspecified';
   const turfSupplier = targetSite.fields['Turf Supplier'] || 'Unspecified';
+  const lights = targetSite.fields['Light'] || targetSite.fields['Lights'] || 'Unspecified';
 
-  const specCard = `📍 *${siteName}* is a ${courtType} featuring ${steelColor} steel and ${turfColor} ${turfSupplier} turf.`;
+  const specCard = `📋 *TITAN OS | COURT CONFIGURATION*\n` +
+                   `━━━━━━━━━━━━━━━━━━━━\n` +
+                   `🏟️ *Site:* ${siteName}\n` +
+                   `🏗️ *Model:* ${courtType}\n` +
+                   `🎨 *Steel:* ${steelColor}\n` +
+                   `🌱 *Turf:* ${turfColor} (${turfSupplier})\n` +
+                   `💡 *Lights:* ${lights}\n` +
+                   `━━━━━━━━━━━━━━━━━━━━`;
+
   await sendWhatsAppMessage(dispatchTarget, specCard);
 }
 
@@ -4263,15 +4272,15 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      const prompt = `You are Bob Burk, Founder of Bounce Padel (a padel court construction company). 
-Turn this quick voice note into a professional executive email reply.
-
+      const prompt = `You are drafting an outbound email on behalf of Bob Burk, Founder of Bounce Padel (a padel court construction vendor). 
+      
 CRITICAL CONTEXT & MANDATES:
-1. You are the vendor providing quotes, specs, and services to the client/prospect, NOT purchasing from them.
-2. NEVER use placeholders like [Sender's Name]. Extract the prospect's name directly from the voice note (e.g. if the note says "Tell John...", address it to John). If no name is clearly dictated, use a generic professional greeting (e.g. "Hi there,").
-3. Do not address the email to "${pendingEmail.senderName}" if it appears to be a forwarded internal alias.
+1. Bob is dictating this note to send TO the client (${pendingEmail.senderName}). 
+2. Bob is the one PROVIDING the estimates, quotes, and services. The client is receiving them. Do NOT reverse these roles.
+3. Turn his dictated note into a professional, courteous executive email reply. 
+4. Never use placeholders like [Sender's Name].
 
-Note: "${userReplyText}"
+Bob's Note: "${userReplyText}"
 
 Return ONLY the email body text.`;
       
