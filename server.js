@@ -3204,7 +3204,7 @@ async function handleSpokenSpecsQuery(queriedName, fallbackSite, dispatchTarget)
   const steelColor = targetSite.fields['Steel Color'] || 'Unspecified';
   const turfColor = targetSite.fields['Turf Color'] || 'Unspecified';
   const turfSupplier = targetSite.fields['Turf Supplier'] || 'Unspecified';
-  const lights = targetSite.fields['Light'] || targetSite.fields['Lights'] || 'Unspecified';
+  const lightStatus = targetSite.fields['Light'] || 'Unspecified';
 
   const specCard = `📋 *TITAN OS | COURT CONFIGURATION*\n` +
                    `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -3212,7 +3212,7 @@ async function handleSpokenSpecsQuery(queriedName, fallbackSite, dispatchTarget)
                    `🏗️ *Model:* ${courtType}\n` +
                    `🎨 *Steel:* ${steelColor}\n` +
                    `🌱 *Turf:* ${turfColor} (${turfSupplier})\n` +
-                   `💡 *Lights:* ${lights}\n` +
+                   `💡 *Lights:* ${lightStatus}\n` +
                    `━━━━━━━━━━━━━━━━━━━━`;
 
   await sendWhatsAppMessage(dispatchTarget, specCard);
