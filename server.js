@@ -355,15 +355,16 @@ ROUTING INTENTS:
 15. "AR_LOOKUP": User is asking about outstanding balances, what someone owes, or payment status.
 16. "INVOICE_APPROVAL": User is commanding to send an invoice, convert an estimate, or bill a client based on an existing estimate.
 17. "CREATE_INVOICE": User is commanding to create a brand new invoice from scratch for an existing client.
-18. "COURT_SPECS_QUERY": User is explicitly asking a question about the physical specifications, configuration, colors, materials, year, model/court type, or suppliers of a specific court. (e.g. "What color is the turf?", "court config site-wise", "tell me about the court at...")
-19. "MAINTENANCE_QUERY": User is specifically asking to see open maintenance tickets, repair tasks, or service calls across the network.
-20. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
-21. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
-22. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
-23. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, brochures, blueprints, or CAD files for a specific site or generally.
-24. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, foundation, glass specification, or dimension question that requires reading proprietary blueprints, manuals, or engineering files.
-25. "CREATE_SITES": User is requesting to create entirely NEW sites/courts. Extract the exact list of new court names into the "target_site_names" array, along with any provided construction specifications to apply across all of them.
-26. "INVENTORY_COUNT": User is reporting a physical inventory count of items/SKUs via voice, text, or tally sheet. Extract the item name and the quantity.
+18. "CREATE_ESTIMATE": User is commanding to create a brand new estimate/quote from scratch for an existing or new client.
+19. "COURT_SPECS_QUERY": User is explicitly asking a question about the physical specifications, configuration, colors, materials, year, model/court type, or suppliers of a specific court. (e.g. "What color is the turf?", "court config site-wise", "tell me about the court at...")
+20. "MAINTENANCE_QUERY": User is specifically asking to see open maintenance tickets, repair tasks, or service calls across the network.
+21. "ASSET_TRANSFER": User is moving, staging, dropping off, or assigning equipment/tools (e.g. hilti, suction cups, laser level) to a site.
+22. "ASSET_QUERY": User is asking where a specific tool, asset, or piece of equipment is currently located.
+23. "INVENTORY_QUERY": User is asking about warehouse inventory levels, stock on hand, available turf, glass, steel, fasteners, or reorder status.
+24. "DOCUMENT_RETRIEVAL": User is asking to retrieve, download, or get technical documents, foundation plans, brochures, blueprints, or CAD files for a specific site or generally.
+25. "ORACLE_QUERY": User is asking a deep technical, engineering, structural, foundation, glass specification, or dimension question that requires reading proprietary blueprints, manuals, or engineering files.
+26. "CREATE_SITES": User is requesting to create entirely NEW sites/courts. Extract the exact list of new court names into the "target_site_names" array, along with any provided construction specifications to apply across all of them.
+27. "INVENTORY_COUNT": User is reporting a physical inventory count of items/SKUs via voice, text, or tally sheet. Extract the item name and the quantity.
 
 Extract:
 "queried_court_name": string or null,
@@ -406,7 +407,7 @@ DATABASE FIELD MAPPING OVERRIDES:
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY" | "ORACLE_QUERY" | "CREATE_SITES" | "INVENTORY_COUNT",
+  "intent": "LOCATION_QUERY" | "WEATHER_QUERY" | "STATUS_QUERY" | "TICKET_QUERY" | "READINESS_QUERY" | "WORK_ORDER_CLOSEOUT" | "TICKET_UPDATE" | "ACTIONABLE_STATE_CHANGE" | "DARK_MATTER" | "PURE_NOISE" | "FREIGHT_UPDATE" | "SUPPLY_REQUEST" | "HISTORICAL_REFERENCE" | "MEDIA_RETRIEVAL" | "AR_LOOKUP" | "INVOICE_APPROVAL" | "CREATE_INVOICE" | "CREATE_ESTIMATE" | "COURT_SPECS_QUERY" | "ASSET_TRANSFER" | "ASSET_QUERY" | "INVENTORY_QUERY" | "DOCUMENT_RETRIEVAL" | "MAINTENANCE_QUERY" | "ORACLE_QUERY" | "CREATE_SITES" | "INVENTORY_COUNT",
   "queried_court_name": "string or null",
   "matched_site_name": "string or null",
   "target_site_names": ["string"],
@@ -807,6 +808,56 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
     console.error('[QBO API Error]:', err.message);
     return null;
   }
+}
+
+/**
+ * Resolves an existing QBO customer or provisions a net-new one autonomously.
+ * Adheres to Titan OS Zero-UI data entry principles.
+ */
+async function findOrCreateQboCustomer(clientName, email = null, phone = null) {
+  if (!clientName) return null;
+  const cleanName = clientName.trim().replace(/'/g, "\\'");
+  
+  // 1. Attempt to resolve existing customer
+  const query = `select * from Customer where DisplayName LIKE '%${cleanName}%' MAXRESULTS 1`;
+  const qboData = await qboApiRequest(query);
+  
+  if (qboData?.QueryResponse?.Customer?.[0]) {
+    return { 
+      value: qboData.QueryResponse.Customer[0].Id, 
+      name: qboData.QueryResponse.Customer[0].DisplayName 
+    };
+  }
+  
+  // 2. Provision net-new customer
+  const payload = { DisplayName: clientName.trim() };
+  if (email) payload.PrimaryEmailAddr = { Address: email.trim() };
+  if (phone) payload.PrimaryPhone = { FreeFormNumber: phone.replace(/[^\d+]/g, '') };
+  
+  try {
+    const createRes = await qboApiRequest('/customer', 'POST', payload);
+    if (createRes?.Customer) {
+      return { 
+        value: createRes.Customer.Id, 
+        name: createRes.Customer.DisplayName 
+      };
+    }
+  } catch (err) {
+    console.error('[QBO Customer Provisioning Error]:', err.message);
+    
+    // 3. Fallback for strict DisplayName uniqueness collisions
+    const fallbackName = `${clientName.trim()} (New)`;
+    payload.DisplayName = fallbackName;
+    const fallbackRes = await qboApiRequest('/customer', 'POST', payload).catch(() => null);
+    
+    if (fallbackRes?.Customer) {
+       return { 
+         value: fallbackRes.Customer.Id, 
+         name: fallbackRes.Customer.DisplayName 
+       };
+    }
+  }
+  return null;
 }
 
 // ====================================================================
@@ -2911,6 +2962,51 @@ async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
   await sendWhatsAppMessage(dispatchTarget, arCard);
 }
 
+async function handleEstimateCreation(nlp, dispatchTarget) {
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
+  const amount = nlp.qbo_amount;
+  const lineItems = nlp.qbo_line_items || 'Standard Estimate';
+
+  if (!customerNameTarget || !amount) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name and total amount to draft an estimate.`);
+    return;
+  }
+
+  const customerRef = await findOrCreateQboCustomer(customerNameTarget, nlp.email, nlp.phone);
+  if (!customerRef) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
+    return;
+  }
+
+  const estPayload = {
+    CustomerRef: customerRef,
+    Line: [{
+      Amount: amount,
+      DetailType: "SalesItemLineDetail",
+      Description: lineItems,
+      SalesItemLineDetail: { 
+        Qty: 1, 
+        UnitPrice: amount, 
+        ItemRef: { value: "1" } 
+      }
+    }]
+  };
+
+  const createRes = await qboApiRequest('/estimate', 'POST', estPayload);
+  if (createRes && createRes.Estimate) {
+    const estCard = `🧾 *TITAN OS | ESTIMATE CREATED*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `*Estimate:* #${createRes.Estimate.DocNumber}\n` +
+                    `*Client:* ${customerRef.name}\n` +
+                    `*Amount:* $${parseFloat(amount).toFixed(2)}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `✅ Estimate generated successfully in QuickBooks Online.`;
+    await sendWhatsAppMessage(dispatchTarget, estCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create estimate in QuickBooks. Check API logs.`);
+  }
+}
+
 async function handleInvoiceApproval(nlp, dispatchTarget) {
   const estimateNum = nlp.qbo_estimate_number;
   const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
@@ -2965,27 +3061,39 @@ async function handleInvoiceCreation(nlp, dispatchTarget) {
     return;
   }
 
-  const cleanName = customerNameTarget.replace(/'/g, "\\'");
-  const custQuery = `select * from Customer where DisplayName LIKE '${cleanName}%' MAXRESULTS 1`;
-  const qboData = await qboApiRequest(custQuery);
-
-  if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Customer || qboData.QueryResponse.Customer.length === 0) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Client "${customerNameTarget}" not found in QuickBooks.`);
+  const customerRef = await findOrCreateQboCustomer(customerNameTarget, nlp.email, nlp.phone);
+  if (!customerRef) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
     return;
   }
 
-  const customer = qboData.QueryResponse.Customer[0];
-  
-  const invCard = `🧾 *TITAN OS | INVOICE DRAFTED*\n` +
-                  `━━━━━━━━━━━━━━━━━━━━\n` +
-                  `*Client:* ${customer.DisplayName}\n` +
-                  `*Scope:* ${lineItems}\n` +
-                  `*Amount:* $${parseFloat(amount).toFixed(2)} (+HST)\n` +
-                  `━━━━━━━━━━━━━━━━━━━━\n` +
-                  `Tap below to generate the invoice and email the client.`;
+  const invoicePayload = {
+    CustomerRef: customerRef,
+    Line: [{
+      Amount: amount,
+      DetailType: "SalesItemLineDetail",
+      Description: lineItems,
+      SalesItemLineDetail: { 
+        Qty: 1, 
+        UnitPrice: amount, 
+        ItemRef: { value: "1" } 
+      }
+    }]
+  };
 
-  const buttons = [{ id: `QBO_NEW_INV_${customer.Id}`, title: `✉️ Send Invoice` }];
-  await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
+  const createRes = await qboApiRequest('/invoice', 'POST', invoicePayload);
+  if (createRes && createRes.Invoice) {
+    const invCard = `🧾 *TITAN OS | INVOICE CREATED*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `*Invoice:* #${createRes.Invoice.DocNumber}\n` +
+                    `*Client:* ${customerRef.name}\n` +
+                    `*Amount:* $${parseFloat(amount).toFixed(2)}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `✅ Invoice generated successfully in QuickBooks Online.`;
+    await sendWhatsAppMessage(dispatchTarget, invCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create invoice in QuickBooks.`);
+  }
 }
 
 async function handleActionableStateChange(nlp, site, worker, callerIdentity, dispatchTarget, rawText = '') {
@@ -3734,6 +3842,15 @@ async function triageVoiceMemoBatch(items, cumulativeContext, worker, site, from
     return;
   }
 
+  if (triage.intent === 'CREATE_ESTIMATE') {
+    if (!isAuthorizedForFinance(callerIdentity)) {
+        await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Action requires Finance permissions.`);
+        return;
+    }
+    await handleEstimateCreation(triage, dispatchTarget);
+    return;
+  }
+
   if (triage.intent === 'CREATE_INVOICE') {
     if (!isAuthorizedForFinance(callerIdentity)) {
         await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Action requires Finance permissions.`);
@@ -4387,8 +4504,48 @@ Return ONLY the email body text.`;
       if (btnId.startsWith('QBO_CONVERT_')) {
         const parts = btnId.split('_');
         const estimateId = parts[2];
-        const percentage = parts[3];
-        await sendWhatsAppMessage(dispatchTarget, `✅ QuickBooks API called. Generated ${percentage}% Draw Invoice for Estimate #${estimateId}.`);
+        const percentage = parseFloat(parts[3]);
+
+        const estRes = await qboApiRequest(`select * from Estimate where Id = '${estimateId}'`);
+        const estimate = estRes?.QueryResponse?.Estimate?.[0];
+        if (!estimate) {
+          await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to fetch Estimate #${estimateId} from QuickBooks.`);
+          return;
+        }
+
+        const totalAmt = parseFloat(estimate.TotalAmt);
+        const drawAmt = (totalAmt * (percentage / 100)).toFixed(2);
+        
+        const firstItemRef = estimate.Line?.find(l => l.DetailType === 'SalesItemLineDetail')?.SalesItemLineDetail?.ItemRef || { value: '1', name: 'Services' };
+
+        const invoicePayload = {
+          CustomerRef: estimate.CustomerRef,
+          Line: [
+            {
+              Amount: drawAmt,
+              DetailType: "SalesItemLineDetail",
+              Description: `${percentage}% Draw based on Estimate #${estimate.DocNumber}`,
+              SalesItemLineDetail: {
+                Qty: 1,
+                UnitPrice: drawAmt,
+                ItemRef: firstItemRef
+              }
+            }
+          ],
+          LinkedTxn: [
+            {
+              TxnId: estimate.Id,
+              TxnType: "Estimate"
+            }
+          ]
+        };
+
+        const invRes = await qboApiRequest('/invoice', 'POST', invoicePayload);
+        if (invRes && invRes.Invoice) {
+           await sendWhatsAppMessage(dispatchTarget, `✅ *Invoice #${invRes.Invoice.DocNumber} Created*\nSuccessfully generated $${drawAmt} draw invoice for ${estimate.CustomerRef.name}.`);
+        } else {
+           await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to convert estimate to invoice in QuickBooks.`);
+        }
         return;
       }
 
@@ -4518,7 +4675,13 @@ Return ONLY the email body text.`;
           }
           const triage = await triageSpokenOrTextNLP(txt, false, []);
           if (triage) {
-              await handleInvoiceApproval(triage, dispatchTarget);
+              if (triage.intent === 'CREATE_ESTIMATE') {
+                  await handleEstimateCreation(triage, dispatchTarget);
+              } else if (triage.intent === 'CREATE_INVOICE') {
+                  await handleInvoiceCreation(triage, dispatchTarget);
+              } else {
+                  await handleInvoiceApproval(triage, dispatchTarget);
+              }
           } else {
               await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to parse estimate/invoice details. Please specify client name and percentage.`);
           }
@@ -4694,6 +4857,14 @@ Return ONLY the email body text.`;
               return;
           }
           await handleInvoiceApproval(triage, dispatchTarget);
+          return;
+        }
+        if (triage.intent === 'CREATE_ESTIMATE') {
+          if (!isAuthorizedForFinance(callerIdentity)) {
+              await sendWhatsAppMessage(dispatchTarget, `⚠️ Unauthorized. Action requires Finance permissions.`);
+              return;
+          }
+          await handleEstimateCreation(triage, dispatchTarget);
           return;
         }
         if (triage.intent === 'CREATE_INVOICE') {
