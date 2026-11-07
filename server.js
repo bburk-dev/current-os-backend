@@ -814,11 +814,14 @@ async function qboApiRequest(pathOrQuery, method = 'GET', body = null, isRetry =
  * Resolves an existing QBO customer or provisions a net-new one autonomously.
  * Adheres to Titan OS Zero-UI data entry principles.
  */
+/**
+ * Resolves an existing QBO customer or provisions a net-new one autonomously.
+ * Adheres to Titan OS Zero-UI data entry principles.
+ */
 async function findOrCreateQboCustomer(clientName, email = null, phone = null) {
   if (!clientName) return null;
   const cleanName = clientName.trim().replace(/'/g, "\\'");
   
-  // 1. Attempt to resolve existing customer
   const query = `select * from Customer where DisplayName LIKE '%${cleanName}%' MAXRESULTS 1`;
   const qboData = await qboApiRequest(query);
   
@@ -829,7 +832,6 @@ async function findOrCreateQboCustomer(clientName, email = null, phone = null) {
     };
   }
   
-  // 2. Provision net-new customer
   const payload = { DisplayName: clientName.trim() };
   if (email) payload.PrimaryEmailAddr = { Address: email.trim() };
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone.replace(/[^\d+]/g, '') };
@@ -845,7 +847,6 @@ async function findOrCreateQboCustomer(clientName, email = null, phone = null) {
   } catch (err) {
     console.error('[QBO Customer Provisioning Error]:', err.message);
     
-    // 3. Fallback for strict DisplayName uniqueness collisions
     const fallbackName = `${clientName.trim()} (New)`;
     payload.DisplayName = fallbackName;
     const fallbackRes = await qboApiRequest('/customer', 'POST', payload).catch(() => null);
@@ -858,6 +859,63 @@ async function findOrCreateQboCustomer(clientName, email = null, phone = null) {
     }
   }
   return null;
+}
+/**
+ * Drafts highly detailed QBO line items natively using the Gemini File API RAG Context
+ * powered by the Oracle Docs Airtable sync.
+ */
+async function generateQboLineItemsFromOracle(rawPrompt) {
+  const parts = oracleFileURIs.map(item => ({ 
+    file_data: { mime_type: 'application/pdf', file_uri: item.uri } 
+  }));
+
+  parts.push({ 
+    text: `You are Titan OS, drafting a QuickBooks Estimate/Invoice.
+    User's verbal request: "${rawPrompt}"
+    Match the user's requested scope (pricing, installations, delivery) to the professional technical verbiage found in the attached sample estimates. 
+    Separate delivery, installation, or distinct courts into separate line items if requested. 
+    Return STRICTLY JSON as an array of Line objects. 
+    Example format:
+    [
+      {
+        "Amount": 70000,
+        "DetailType": "SalesItemLineDetail",
+        "Description": "Panoramic Padel Court - BLACK\\nMain steel structure...\\nGlass...",
+        "SalesItemLineDetail": { "Qty": 1, "UnitPrice": 70000, "ItemRef": { "value": "1" } }
+      }
+    ]` 
+  });
+  
+  const payload = { 
+    contents: [{ role: 'user', parts }], 
+    generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } 
+  };
+  
+  try {
+     const res = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+     });
+     
+     if (res.ok) {
+       const data = await res.json();
+       const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+       const parsed = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+       
+       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+       if (parsed && parsed.Line && Array.isArray(parsed.Line)) return parsed.Line;
+     }
+  } catch (err) {
+    console.error('[Oracle RAG Line Item Error]:', err);
+  }
+  
+  return [{
+      Amount: 1000, 
+      DetailType: "SalesItemLineDetail",
+      Description: rawPrompt.substring(0, 100) + " (Auto-Generated Fallback)",
+      SalesItemLineDetail: { Qty: 1, UnitPrice: 1000, ItemRef: { value: "1" } }
+  }];
 }
 
 // ====================================================================
@@ -2962,13 +3020,11 @@ async function handleSpokenARLookup(queriedEntity, dispatchTarget) {
   await sendWhatsAppMessage(dispatchTarget, arCard);
 }
 
-async function handleEstimateCreation(nlp, dispatchTarget) {
-  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
-  const amount = nlp.qbo_amount;
-  const lineItems = nlp.qbo_line_items || 'Standard Estimate';
+async function handleEstimateCreation(nlp, dispatchTarget, rawText) {
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name || nlp.matched_site_name;
 
-  if (!customerNameTarget || !amount) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name and total amount to draft an estimate.`);
+  if (!customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name to draft an estimate.`);
     return;
   }
 
@@ -2977,6 +3033,114 @@ async function handleEstimateCreation(nlp, dispatchTarget) {
     await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
     return;
   }
+
+  await sendWhatsAppMessage(dispatchTarget, `🧠 *TITAN OS* | Generating Oracle-backed scope for ${customerRef.name}...`);
+  
+  const lineItems = await generateQboLineItemsFromOracle(rawText || nlp.transcript_en || nlp.update_note);
+
+  const estPayload = {
+    CustomerRef: customerRef,
+    Line: lineItems
+  };
+
+  const createRes = await qboApiRequest('/estimate', 'POST', estPayload);
+  if (createRes && createRes.Estimate) {
+    const total = parseFloat(createRes.Estimate.TotalAmt).toFixed(2);
+    const estCard = `🧾 *TITAN OS | ESTIMATE CREATED*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `*Estimate:* #${createRes.Estimate.DocNumber}\n` +
+                    `*Client:* ${customerRef.name}\n` +
+                    `*Total (w/ Tax):* $${total}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `✅ Estimate generated successfully in QuickBooks Online using Oracle blueprints.`;
+    await sendWhatsAppMessage(dispatchTarget, estCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create estimate in QuickBooks. Check API logs.`);
+  }
+}
+
+async function handleInvoiceCreation(nlp, dispatchTarget, rawText) {
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name || nlp.matched_site_name;
+
+  if (!customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name to create a new invoice.`);
+    return;
+  }
+
+  const customerRef = await findOrCreateQboCustomer(customerNameTarget, nlp.email, nlp.phone);
+  if (!customerRef) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
+    return;
+  }
+
+  await sendWhatsAppMessage(dispatchTarget, `🧠 *TITAN OS* | Generating Oracle-backed scope for ${customerRef.name}...`);
+
+  const lineItems = await generateQboLineItemsFromOracle(rawText || nlp.transcript_en || nlp.update_note);
+
+  const invoicePayload = {
+    CustomerRef: customerRef,
+    Line: lineItems
+  };
+
+  const createRes = await qboApiRequest('/invoice', 'POST', invoicePayload);
+  if (createRes && createRes.Invoice) {
+    const total = parseFloat(createRes.Invoice.TotalAmt).toFixed(2);
+    const invCard = `🧾 *TITAN OS | INVOICE DRAFTED*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `*Invoice:* #${createRes.Invoice.DocNumber}\n` +
+                    `*Client:* ${customerRef.name}\n` +
+                    `*Total (w/ Tax):* $${total}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `✅ Invoice generated successfully in QuickBooks Online using Oracle blueprints.`;
+    await sendWhatsAppMessage(dispatchTarget, invCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create invoice in QuickBooks.`);
+  }
+}
+
+async function handleInvoiceApproval(nlp, dispatchTarget) {
+  const estimateNum = nlp.qbo_estimate_number;
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
+  const percentage = parseFloat(nlp.qbo_invoice_percentage) || 100;
+
+  if (!estimateNum && !customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the estimate number or client name to convert (e.g., "Convert Burke site to 50% invoice").`);
+    return;
+  }
+
+  let estQuery = '';
+  if (estimateNum) {
+    estQuery = `select * from Estimate where DocNumber = '${estimateNum}'`;
+  } else {
+    const cleanName = customerNameTarget.replace(/'/g, "\\'");
+    estQuery = `select * from Estimate where CustomerRef.name LIKE '%${cleanName}%' and TxnStatus='Pending' MAXRESULTS 1`;
+  }
+
+  const qboData = await qboApiRequest(estQuery);
+
+  if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Estimate || qboData.QueryResponse.Estimate.length === 0) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate a pending Estimate for ${estimateNum ? '#' + estimateNum : customerNameTarget} in QuickBooks.`);
+    return;
+  }
+
+  const estimate = qboData.QueryResponse.Estimate[0];
+  const customerName = estimate.CustomerRef.name;
+  const totalAmount = parseFloat(estimate.TotalAmt);
+  const drawAmount = (totalAmount * (percentage / 100)).toFixed(2);
+
+  const invCard = `🧾 *TITAN OS | INVOICE APPROVAL*\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `*Estimate:* #${estimate.DocNumber}\n` +
+                  `*Client:* ${customerName}\n` +
+                  `*Draw Split:* ${percentage}%\n` +
+                  `*Est Total:* $${totalAmount.toFixed(2)}\n` +
+                  `*Invoice Amount:* $${drawAmount}\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `Tap below to generate the ${percentage}% invoice natively in QBO.`;
+
+  const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `✉️ Create ${percentage}% Inv` }];
+  await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
+}
 
   const estPayload = {
     CustomerRef: customerRef,
@@ -3051,13 +3215,11 @@ async function handleInvoiceApproval(nlp, dispatchTarget) {
   await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
 }
 
-async function handleInvoiceCreation(nlp, dispatchTarget) {
-  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
-  const amount = nlp.qbo_amount;
-  const lineItems = nlp.qbo_line_items || 'Standard Service';
+async function handleEstimateCreation(nlp, dispatchTarget, rawText) {
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name || nlp.matched_site_name;
 
-  if (!customerNameTarget || !amount) {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name and total amount to create a new invoice.`);
+  if (!customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name to draft an estimate.`);
     return;
   }
 
@@ -3066,6 +3228,211 @@ async function handleInvoiceCreation(nlp, dispatchTarget) {
     await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
     return;
   }
+
+  await sendWhatsAppMessage(dispatchTarget, `🧠 *TITAN OS* | Generating Oracle-backed scope for ${customerRef.name}...`);
+  
+  const lineItems = await generateQboLineItemsFromOracle(rawText || nlp.transcript_en || nlp.update_note);
+
+  const estPayload = {
+    CustomerRef: customerRef,
+    Line: lineItems
+  };
+
+  const createRes = await qboApiRequest('/estimate', 'POST', estPayload);
+  if (createRes && createRes.Estimate) {
+    const total = parseFloat(createRes.Estimate.TotalAmt).toFixed(2);
+    const estCard = `🧾 *TITAN OS | ESTIMATE CREATED*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `*Estimate:* #${createRes.Estimate.DocNumber}\n` +
+                    `*Client:* ${customerRef.name}\n` +
+                    `*Total (w/ Tax):* $${total}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `✅ Estimate generated successfully in QuickBooks Online using Oracle blueprints.`;
+    await sendWhatsAppMessage(dispatchTarget, estCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create estimate in QuickBooks. Check API logs.`);
+  }
+}
+
+async function handleInvoiceCreation(nlp, dispatchTarget, rawText) {
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name || nlp.matched_site_name;
+
+  if (!customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name to create a new invoice.`);
+    return;
+  }
+
+  const customerRef = await findOrCreateQboCustomer(customerNameTarget, nlp.email, nlp.phone);
+  if (!customerRef) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
+    return;
+  }
+
+  await sendWhatsAppMessage(dispatchTarget, `🧠 *TITAN OS* | Generating Oracle-backed scope for ${customerRef.name}...`);
+
+  const lineItems = await generateQboLineItemsFromOracle(rawText || nlp.transcript_en || nlp.update_note);
+
+  const invoicePayload = {
+    CustomerRef: customerRef,
+    Line: lineItems
+  };
+
+  const createRes = await qboApiRequest('/invoice', 'POST', invoicePayload);
+  if (createRes && createRes.Invoice) {
+    const total = parseFloat(createRes.Invoice.TotalAmt).toFixed(2);
+    const invCard = `🧾 *TITAN OS | INVOICE DRAFTED*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `*Invoice:* #${createRes.Invoice.DocNumber}\n` +
+                    `*Client:* ${customerRef.name}\n` +
+                    `*Total (w/ Tax):* $${total}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `✅ Invoice generated successfully in QuickBooks Online using Oracle blueprints.`;
+    await sendWhatsAppMessage(dispatchTarget, invCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create invoice in QuickBooks.`);
+  }
+}
+
+async function handleEstimateCreation(nlp, dispatchTarget, rawText) {
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name || nlp.matched_site_name;
+
+  if (!customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name to draft an estimate.`);
+    return;
+  }
+
+  const customerRef = await findOrCreateQboCustomer(customerNameTarget, nlp.email, nlp.phone);
+  if (!customerRef) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
+    return;
+  }
+
+  await sendWhatsAppMessage(dispatchTarget, `🧠 *TITAN OS* | Generating Oracle-backed scope for ${customerRef.name}...`);
+  
+  const lineItems = await generateQboLineItemsFromOracle(rawText || nlp.transcript_en || nlp.update_note);
+
+  const estPayload = {
+    CustomerRef: customerRef,
+    Line: lineItems
+  };
+
+  const createRes = await qboApiRequest('/estimate', 'POST', estPayload);
+  if (createRes && createRes.Estimate) {
+    const total = parseFloat(createRes.Estimate.TotalAmt).toFixed(2);
+    const estCard = `🧾 *TITAN OS | ESTIMATE CREATED*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `*Estimate:* #${createRes.Estimate.DocNumber}\n` +
+                    `*Client:* ${customerRef.name}\n` +
+                    `*Total (w/ Tax):* $${total}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `✅ Estimate generated successfully in QuickBooks Online using Oracle blueprints.`;
+    await sendWhatsAppMessage(dispatchTarget, estCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create estimate in QuickBooks. Check API logs.`);
+  }
+}
+
+async function handleInvoiceCreation(nlp, dispatchTarget, rawText) {
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name || nlp.matched_site_name;
+
+  if (!customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name to create a new invoice.`);
+    return;
+  }
+
+  const customerRef = await findOrCreateQboCustomer(customerNameTarget, nlp.email, nlp.phone);
+  if (!customerRef) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
+    return;
+  }
+
+  await sendWhatsAppMessage(dispatchTarget, `🧠 *TITAN OS* | Generating Oracle-backed scope for ${customerRef.name}...`);
+
+  const lineItems = await generateQboLineItemsFromOracle(rawText || nlp.transcript_en || nlp.update_note);
+
+  const invoicePayload = {
+    CustomerRef: customerRef,
+    Line: lineItems
+  };
+
+  const createRes = await qboApiRequest('/invoice', 'POST', invoicePayload);
+  if (createRes && createRes.Invoice) {
+    const total = parseFloat(createRes.Invoice.TotalAmt).toFixed(2);
+    const invCard = `🧾 *TITAN OS | INVOICE DRAFTED*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `*Invoice:* #${createRes.Invoice.DocNumber}\n` +
+                    `*Client:* ${customerRef.name}\n` +
+                    `*Total (w/ Tax):* $${total}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `✅ Invoice generated successfully in QuickBooks Online using Oracle blueprints.`;
+    await sendWhatsAppMessage(dispatchTarget, invCard);
+  } else {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create invoice in QuickBooks.`);
+  }
+}
+
+async function handleInvoiceApproval(nlp, dispatchTarget) {
+  const estimateNum = nlp.qbo_estimate_number;
+  const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
+  const percentage = parseFloat(nlp.qbo_invoice_percentage) || 100;
+
+  if (!estimateNum && !customerNameTarget) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the estimate number or client name to convert (e.g., "Convert Burke site to 50% invoice").`);
+    return;
+  }
+
+  let estQuery = '';
+  if (estimateNum) {
+    estQuery = `select * from Estimate where DocNumber = '${estimateNum}'`;
+  } else {
+    const cleanName = customerNameTarget.replace(/'/g, "\\'");
+    estQuery = `select * from Estimate where CustomerRef.name LIKE '%${cleanName}%' and TxnStatus='Pending' MAXRESULTS 1`;
+  }
+
+  const qboData = await qboApiRequest(estQuery);
+
+  if (!qboData || !qboData.QueryResponse || !qboData.QueryResponse.Estimate || qboData.QueryResponse.Estimate.length === 0) {
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Could not locate a pending Estimate for ${estimateNum ? '#' + estimateNum : customerNameTarget} in QuickBooks.`);
+    return;
+  }
+
+  const estimate = qboData.QueryResponse.Estimate[0];
+  const customerName = estimate.CustomerRef.name;
+  const totalAmount = parseFloat(estimate.TotalAmt);
+  const drawAmount = (totalAmount * (percentage / 100)).toFixed(2);
+
+  const invCard = `🧾 *TITAN OS | INVOICE APPROVAL*\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `*Estimate:* #${estimate.DocNumber}\n` +
+                  `*Client:* ${customerName}\n` +
+                  `*Draw Split:* ${percentage}%\n` +
+                  `*Est Total:* $${totalAmount.toFixed(2)}\n` +
+                  `*Invoice Amount:* $${drawAmount}\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `Tap below to generate the ${percentage}% invoice natively in QBO.`;
+
+  const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `✉️ Create ${percentage}% Inv` }];
+  await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
+}
+
+  const estimate = qboData.QueryResponse.Estimate[0];
+  const customerName = estimate.CustomerRef.name;
+  const totalAmount = parseFloat(estimate.TotalAmt);
+  const drawAmount = (totalAmount * (percentage / 100)).toFixed(2);
+
+  const invCard = `🧾 *TITAN OS | INVOICE APPROVAL*\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `*Estimate:* #${estimate.DocNumber}\n` +
+                  `*Client:* ${customerName}\n` +
+                  `*Draw Split:* ${percentage}%\n` +
+                  `*Est Total:* $${totalAmount.toFixed(2)}\n` +
+                  `*Invoice Amount:* $${drawAmount}\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `Tap below to generate the ${percentage}% invoice natively in QBO.`;
+
+  const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `✉️ Create ${percentage}% Inv` }];
+  await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
+}
 
   const invoicePayload = {
     CustomerRef: customerRef,
