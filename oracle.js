@@ -4,7 +4,13 @@
  * Purpose: Gemini File API Ingestion, Caching, and Engineering Lookup
  */
 
-const fetch = require('node-fetch'); // Remove if running Node 18+ with native fetch
+// Defensive inclusion for backwards compatibility, though native fetch is preferred in Node 18+
+let fetch;
+try {
+  fetch = require('node-fetch');
+} catch (err) {
+  fetch = globalThis.fetch;
+}
 
 // ====================================================================
 // 1. KNOWLEDGE BASE SYNCHRONIZATION
@@ -149,7 +155,7 @@ Question: ${userQuery}`
   }
 }
 
-moduleexports = {
+module.exports = {
   syncOracleDocs,
   handleOracleQuery
 };
