@@ -453,6 +453,33 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// D. INBOUND EMAIL WEBHOOK (ZAPIER / SENDGRID / MAILGUN)
+app.post('/api/inbound-email', async (req, res) => {
+  res.sendStatus(200); // Acknowledge receipt immediately
+
+  try {
+    const emailPayload = {
+      from: req.body.from || '',
+      to: req.body.to || '',
+      cc: req.body.cc || '',
+      subject: req.body.subject || 'No Subject',
+      text: req.body.text || req.body.body_plain || '',
+      html: req.body.html || req.body.body_html || ''
+    };
+
+    if (!emailPayload.from || (!emailPayload.text && !emailPayload.html)) {
+      console.warn('[Email Ingress] Ignored malformed email payload.');
+      return;
+    }
+
+    console.log(`[Email Ingress] Processing email from ${emailPayload.from}: "${emailPayload.subject}"`);
+    await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
+
+  } catch (err) {
+    console.error('[Runtime Exception in /api/inbound-email]:', err);
+  }
+});
+
 // Helper: Resolve Caller Identity
 async function resolveIdentity(fromPhone) {
     const workers = await getCachedWorkers();
