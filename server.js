@@ -1,7 +1,7 @@
 /**
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Cluster Boot, Cron Jobs, Cache Management, and Webhook Routing
+ * Purpose: Cluster Boot, Cron Jobs, Cache Management, and Native Meta Webhook Routing
  */
 
 // ====================================================================
@@ -55,7 +55,7 @@ const CONFIG = {
   supabase: {
     url: process.env.SUPABASE_URL,
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
-    bucket: process.env.STORAGE_BUCKET || 'inbound-media',
+    bucket: process.env.STORAGE_BUCKET || process.env.SUPABASE_MEDIA_BUCKET || 'titan-private-media',
     tableDarkMatter: 'dark_matter_vault'
   },
   gemini: {
@@ -191,10 +191,15 @@ async function hydrateQBOCache() {
           .single();
 
       if (error) throw error;
-      if (data) {
+      if (data && data.access_token && !data.access_token.includes('pending_auth') && !data.access_token.includes('PASTE_')) {
           memoryCache.qbo.accessToken = data.access_token;
           memoryCache.qbo.expiresAt = new Date(data.expires_at).getTime();
-          console.log('[Cache Engine] QBO Cryptographic State Hydrated into RAM');
+          
+          // Connect Supabase access token directly to runtime CONFIG for finance.js
+          CONFIG.qbo.accessToken = data.access_token;
+          console.log('[Cache Engine] QBO Cryptographic State Hydrated into RAM and CONFIG');
+      } else {
+          console.warn('[Cache Engine] QBO Credentials in Supabase are unauthenticated or using template placeholders.');
       }
   } catch (err) {
       console.warn('[Cache Engine] Failed to hydrate QBO credentials:', err.message);
@@ -361,7 +366,7 @@ async function dispatchExecutiveNewsletter() {
 }
 
 // ====================================================================
-// 4. INGRESS WEBHOOK CONTROLLER
+// 4. INGRESS WEBHOOK CONTROLLER (NATIVE META GRAPH API)
 // ====================================================================
 
 const app = express();
@@ -374,25 +379,32 @@ app.get('/webhook', (req, res) => {
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === CONFIG.meta.verifyToken) {
+    console.log('[Titan OS] Meta Webhook Subscription Verified.');
     return res.status(200).send(challenge);
   }
   return res.sendStatus(403);
 });
 
 app.post('/webhook', async (req, res) => {
+  // Always immediately acknowledge receipt to Meta to prevent dropped retries
   res.sendStatus(200);
 
   const body = req.body;
-  const entry = body?.entry?.[0];
+  if (!body || body.object !== 'whatsapp_business_account') return;
+
+  const entry = body.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
   const message = changes?.messages?.[0];
   
+  // Ignore delivery receipts and read statuses
   if (!message) return;
 
   const rawFrom = message.from || '';
-  const messageId = message.id;
-  const fromPhone = rawFrom.replace(/\D/g, '');
+  const messageId = message.id || `msg_${Date.now()}`;
+  const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
+
+  console.log(`[Webhook Ingress] Message received from ${dispatchTarget} (Type: ${message.type || 'text'})`);
 
   try {
     const callerIdentity = await resolveIdentity(fromPhone);
@@ -419,68 +431,73 @@ app.post('/webhook', async (req, res) => {
       if (whatsapp.sendWhatsAppReaction) {
           whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍').catch(() => {});
       }
-      const userLat = message.location.latitude;
-      const userLon = message.location.longitude;
+      const userLat = message.location?.latitude;
+      const userLon = message.location?.longitude;
       
-      if (whatsapp.lastDroppedCoordinates) {
-          whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
-      }
-
-      const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
-      if (!weatherCheck.safe && whatsapp.sendWhatsAppMessage) {
-          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`);
-      }
-
-      const allSites = await getCachedSites();
-      const nearby = [];
-      for (const s of allSites) {
-        if (whatsapp.resolveCoordinates) {
-            const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
-            if (coords) {
-              const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
-              if (dist <= 800) nearby.push({ site: s, distance: dist });
-            }
+      if (userLat && userLon) {
+        if (whatsapp.lastDroppedCoordinates) {
+            whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
         }
-      }
-      nearby.sort((a, b) => a.distance - b.distance);
 
-      if (nearby.length > 0 && whatsapp.bindSiteContext) {
-        await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
-      } else if (whatsapp.sendWhatsAppMessage) {
-        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Pin received (${userLat.toFixed(4)}, ${userLon.toFixed(4)}), but no Bounce Padel courts are located within 800m.`);
+        const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
+        if (!weatherCheck.safe && whatsapp.sendWhatsAppMessage) {
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`);
+        }
+
+        const allSites = await getCachedSites();
+        const nearby = [];
+        for (const s of allSites) {
+          if (whatsapp.resolveCoordinates) {
+              const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
+              if (coords) {
+                const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+                if (dist <= 800) nearby.push({ site: s, distance: dist });
+              }
+          }
+        }
+        nearby.sort((a, b) => a.distance - b.distance);
+
+        if (nearby.length > 0 && whatsapp.bindSiteContext) {
+          await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
+        } else if (whatsapp.sendWhatsAppMessage) {
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Pin received (${userLat.toFixed(4)}, ${userLon.toFixed(4)}), but no Bounce Padel courts are located within 800m.`);
+        }
       }
       return;
     }
 
-    // B. TEXT NLP COMMANDS
-    if (message.type === 'text') {
-      const txt = message.text?.body?.trim() || '';
+    // B. TEXT NLP COMMANDS & NATURAL LANGUAGE PRE-EMPTION
+    const rawText = message.text?.body || '';
+    if (message.type === 'text' || rawText) {
+      const txt = rawText.trim();
       const lTxt = txt.toLowerCase();
 
-      console.log(`[Text Engine] Inbound message from ${dispatchTarget}: "${txt}"`);
+      console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget}`);
 
-      // 1. Headless Finance Intent Pre-emption (AR Aging, Estimates, Invoices)
-      const isFinanceQuery = lTxt.startsWith('/estimate') || 
-                             lTxt.startsWith('/invoice') || 
-                             lTxt.startsWith('/ar') ||
-                             lTxt.includes('ar') || 
-                             lTxt.includes('aging') || 
-                             lTxt.includes('open invoice') ||
-                             lTxt.includes('balance') ||
-                             lTxt.includes('30+');
+      // 1. Natural Language & Slash Command Accounts Receivable Ingress
+      const isARQuery = lTxt.includes('ar') || 
+                        lTxt.includes('30+') || 
+                        lTxt.includes('+30') || 
+                        lTxt.includes('aging') || 
+                        lTxt.includes('balance') || 
+                        lTxt.includes('open invoice') || 
+                        lTxt.startsWith('/ar');
 
-      if (isFinanceQuery) {
-          console.log(`[Finance Engine] Routing financial query: "${txt}"`);
-          if (lTxt.includes('ar') || lTxt.includes('aging') || lTxt.startsWith('/ar') || lTxt.includes('30+')) {
-              if (finance && finance.handleARLookup) {
-                  await finance.handleARLookup(CONFIG, dispatchTarget, (c, t, m) => whatsapp.sendWhatsAppMessage(c, t, m));
-              } else if (finance && finance.getAgingReport) {
-                  const report = await finance.getAgingReport(CONFIG, 30);
-                  if (whatsapp.sendWhatsAppMessage) await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, report);
-              }
-              return;
+      if (isARQuery) {
+          console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget}`);
+          if (finance && finance.handleARLookup) {
+              await finance.handleARLookup(CONFIG, dispatchTarget, (c, t, m) => whatsapp.sendWhatsAppMessage(c, t, m));
+          } else if (finance && finance.getAgingReport) {
+              const report = await finance.getAgingReport(CONFIG, 30);
+              if (whatsapp.sendWhatsAppMessage) await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, report);
+          } else {
+              console.warn('[Finance Engine] AR lookup handler not exported in finance.js');
           }
+          return;
+      }
 
+      // 2. Structured Invoicing and Estimates
+      if (lTxt.startsWith('/estimate') || lTxt.startsWith('/invoice')) {
           if (whatsapp.triageSpokenOrTextNLP) {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
               if (triage) {
@@ -496,7 +513,7 @@ app.post('/webhook', async (req, res) => {
           return;
       }
       
-      // 2. Oracle Engine Intent
+      // 3. Oracle RAG Engine
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
           if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
@@ -505,18 +522,18 @@ app.post('/webhook', async (req, res) => {
           return;
       }
 
-      // 3. Inventory Engine Intent
-      if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('stock') || lTxt.includes('inventory')) {
+      // 4. Inventory Tracking
+      if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
           if (inventory && inventory.handleSpokenInventorySnapshot) {
               await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m));
           }
           return;
       }
 
-      // 4. Fallback Generic Conversational Triage
+      // 5. Fallback Conversational Intent Routing
       if (whatsapp.triageSpokenOrTextNLP) {
           const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-          console.log(`[Text Engine] Triage classified intent: ${triage?.intent || 'UNKNOWN'}`);
+          console.log(`[Text Engine] General triage resolved: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
       }
       
       return;
@@ -532,15 +549,17 @@ app.post('/webhook', async (req, res) => {
           whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
       }
 
-      const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-      const metaMediaData = await metaMediaRes.json().catch(() => ({}));
-      
-      if (!metaMediaRes.ok || !metaMediaData?.url) return;
+      let mediaBuffer = null;
+      if (CONFIG.meta.accessToken) {
+        const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+        const metaMediaData = await metaMediaRes.json().catch(() => ({}));
+        if (metaMediaRes.ok && metaMediaData?.url) {
+          const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+        }
+      }
 
-      const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-      if (!mediaBufferRes.ok) return;
-      
-      const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+      if (!mediaBuffer) return;
       const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
 
       if (whatsapp.mediaDebounceQueues) {
@@ -683,7 +702,7 @@ if (cluster.isPrimary) {
           await inventory.refreshInventoryCache(CONFIG);
       }
       
-      // Hydrate Headless Finance QBO Hot Cache into RAM
+      // Hydrate Headless Finance QBO Hot Cache into RAM and CONFIG
       await hydrateQBOCache();
 
     } catch (err) {
