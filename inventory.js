@@ -4,14 +4,6 @@
  * Purpose: Multimodal Hardware Extraction, Auto-Reorder Integration, and Cache Sync
  */
 
-// Defensive inclusion for backwards compatibility
-let fetch;
-try {
-  fetch = require('node-fetch');
-} catch (err) {
-  fetch = globalThis.fetch;
-}
-
 // In-memory cache for inventory items
 let inventoryCache = [];
 let lastInventoryFetch = 0;
