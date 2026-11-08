@@ -2,7 +2,7 @@
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Cluster Boot, Cron Jobs, Cache Management, Native Meta Graph Webhooks,
- *          Media Batch Execution (Receipts/Sweeps), and Autonomous Zero-UI Site Provisioning
+ *          Autonomous QBO Token Refresh, Media Batch Execution, and Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -68,13 +68,24 @@ const CONFIG = {
   },
   qbo: {
     companyId: process.env.QBO_COMPANY_ID,
-    accessToken: process.env.QBO_ACCESS_TOKEN, 
+    clientId: process.env.QBO_CLIENT_ID,
+    clientSecret: process.env.QBO_CLIENT_SECRET,
+    accessToken: process.env.QBO_ACCESS_TOKEN,
+    refreshToken: null,
     baseUrl: 'https://quickbooks.api.intuit.com/v3/company'
   },
   google: {
     apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
   }
 };
+
+// Universal WhatsApp message dispatcher adapter: handles both (target, text) and (CONFIG, target, text)
+function dispatchOutboundWhatsApp(targetOrConfig, textOrTarget, possibleText) {
+  if (possibleText !== undefined) {
+    return whatsapp.sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText);
+  }
+  return whatsapp.sendWhatsAppMessage(CONFIG, targetOrConfig, textOrTarget);
+}
 
 // ====================================================================
 // 2. STATE MACHINES & CACHE-ASIDE ENGINE
@@ -99,6 +110,7 @@ const memoryCache = {
   coordinates: new Map(),
   qbo: {
     accessToken: null,
+    refreshToken: null,
     expiresAt: null
   }
 };
@@ -178,6 +190,7 @@ async function getCachedOpenAssignments(forceRefresh = false) {
   }
 }
 
+// Autonomous QBO Token Hydration & Auto-Refresh Daemon
 async function hydrateQBOCache() {
   if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) {
       console.warn('[Cache Engine] Supabase credentials missing. Bypassing QBO state hydration.');
@@ -187,15 +200,57 @@ async function hydrateQBOCache() {
       const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.serviceRoleKey);
       const { data, error } = await supabase
           .from('qbo_credentials')
-          .select('access_token, expires_at')
+          .select('access_token, refresh_token, expires_at')
           .eq('id', 'primary_tenant')
           .single();
 
       if (error) throw error;
       if (data && data.access_token && !data.access_token.includes('pending_auth') && !data.access_token.includes('PASTE_')) {
+          const expiresAt = new Date(data.expires_at).getTime();
+          const now = Date.now();
+
+          // If token is expired or within 5 minutes of expiring, refresh using refresh_token
+          if (now >= expiresAt - 300000 && data.refresh_token && CONFIG.qbo.clientId && CONFIG.qbo.clientSecret) {
+              console.log('[Cache Engine] QBO Access Token expired or near expiry. Initiating refresh...');
+              const basicAuth = Buffer.from(`${CONFIG.qbo.clientId}:${CONFIG.qbo.clientSecret}`).toString('base64');
+              const refreshRes = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
+                  method: 'POST',
+                  headers: {
+                      'Accept': 'application/json',
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                      'Authorization': `Basic ${basicAuth}`
+                  },
+                  body: new URLSearchParams({
+                      grant_type: 'refresh_token',
+                      refresh_token: data.refresh_token
+                  })
+              });
+
+              if (refreshRes.ok) {
+                  const refreshed = await refreshRes.json();
+                  const newExpiresAt = new Date(Date.now() + (refreshed.expires_in * 1000)).toISOString();
+                  
+                  await supabase.from('qbo_credentials').update({
+                      access_token: refreshed.access_token,
+                      refresh_token: refreshed.refresh_token || data.refresh_token,
+                      expires_at: newExpiresAt,
+                      updated_at: new Date().toISOString()
+                  }).eq('id', 'primary_tenant');
+
+                  data.access_token = refreshed.access_token;
+                  data.refresh_token = refreshed.refresh_token || data.refresh_token;
+                  console.log('[Cache Engine] QBO Cryptographic State Successfully Auto-Refreshed & Sealed in DB');
+              } else {
+                  console.warn('[Cache Engine] QBO Token Refresh HTTP error:', refreshRes.status);
+              }
+          }
+
           memoryCache.qbo.accessToken = data.access_token;
+          memoryCache.qbo.refreshToken = data.refresh_token;
           memoryCache.qbo.expiresAt = new Date(data.expires_at).getTime();
+
           CONFIG.qbo.accessToken = data.access_token;
+          CONFIG.qbo.refreshToken = data.refresh_token;
           console.log('[Cache Engine] QBO Cryptographic State Hydrated into RAM and CONFIG');
       } else {
           console.warn('[Cache Engine] QBO Credentials in Supabase are unauthenticated or using placeholders.');
@@ -504,7 +559,7 @@ app.post('/webhook', async (req, res) => {
       const txt = rawText.trim();
       const lTxt = txt.toLowerCase();
 
-      console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget}`);
+      console.log(`[Text Engine] Inbound message: "${txt}" from ${dispatchTarget}`);
 
       // 0. Zero-UI Site Provisioning Handler
       const isCreateSiteQuery = lTxt.startsWith('create site') || 
@@ -524,18 +579,14 @@ app.post('/webhook', async (req, res) => {
             .trim();
 
           if (!siteName) {
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
               return;
           }
 
           const pendingGeo = pendingNewSiteRequests.get(fromPhone) || whatsapp.lastDroppedCoordinates?.get(fromPhone);
           
           if (!pendingGeo || (Date.now() - pendingGeo.timestamp > 2 * 60 * 60 * 1000)) {
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
               return;
           }
 
@@ -572,13 +623,9 @@ app.post('/webhook', async (req, res) => {
                   `✅ Digital twin active. You are now checked in to *${siteName}*.\n` +
                   `Send photos, voice memos, or video sweeps to begin logging progress.${weatherNote}`;
 
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, confirmMsg);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, confirmMsg);
           } else {
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
           }
           return;
       }
@@ -600,10 +647,10 @@ app.post('/webhook', async (req, res) => {
       if (isARQuery) {
           console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget}`);
           if (finance && finance.handleARLookup) {
-              await finance.handleARLookup(CONFIG, dispatchTarget, (c, t, m) => whatsapp.sendWhatsAppMessage(c, t, m));
+              await finance.handleARLookup(CONFIG, dispatchTarget, dispatchOutboundWhatsApp);
           } else if (finance && finance.getAgingReport) {
               const report = await finance.getAgingReport(CONFIG, 30);
-              if (whatsapp.sendWhatsAppMessage) await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, report);
+              await dispatchOutboundWhatsApp(dispatchTarget, report);
           } else {
               console.warn('[Finance Engine] AR lookup handler not exported in finance.js');
           }
@@ -616,11 +663,11 @@ app.post('/webhook', async (req, res) => {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
               if (triage) {
                   if (triage.intent === 'CREATE_ESTIMATE' && finance.handleEstimateCreation) {
-                      await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+                      await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
                   } else if (triage.intent === 'CREATE_INVOICE' && finance.handleInvoiceCreation) {
-                      await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+                      await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
                   } else if (finance && finance.handleInvoiceApproval) {
-                      await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m), (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+                      await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
                   }
               }
           }
@@ -631,7 +678,7 @@ app.post('/webhook', async (req, res) => {
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
           if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-              await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+              await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
           }
           return;
       }
@@ -639,7 +686,7 @@ app.post('/webhook', async (req, res) => {
       // 4. Inventory Tracking
       if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
           if (inventory && inventory.handleSpokenInventorySnapshot) {
-              await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m));
+              await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => dispatchOutboundWhatsApp(t, m));
           }
           return;
       }
@@ -654,7 +701,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ================================================================
-    // C. MULTIMEDIA INTAKE (Sliding Window Debouncer & Batch Processing)
+    // C. MULTIMEDIA INTAKE (Sliding Window Debouncer & Batch Execution)
     // ================================================================
     if (message.type === 'video' || message.type === 'image' || message.type === 'audio' || message.type === 'voice') {
       const mediaObj = message[message.type];
@@ -705,20 +752,17 @@ app.post('/webhook', async (req, res) => {
              
              console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
 
-             // DISPATCH MULTIMODAL MEDIA TO INGESTION ENGINES
              try {
                if (whatsapp && whatsapp.processMediaBatch) {
                  await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
                } else if (finance && finance.handleReceiptUpload) {
-                 await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget);
+                 await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp);
                } else {
-                 console.warn('[Batch Engine] Neither whatsapp.processMediaBatch nor finance.handleReceiptUpload found.');
+                 console.warn('[Batch Engine] No registered batch media handler.');
                }
              } catch (batchErr) {
                console.error('[Batch Engine Failure]:', batchErr);
-               if (whatsapp.sendWhatsAppMessage) {
-                 await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
-               }
+               await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
              }
           }, 3500);
       }
