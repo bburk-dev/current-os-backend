@@ -2,7 +2,7 @@
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Cluster Boot, Cron Jobs, Cache Management, Native Meta Graph Webhooks,
- *          Media Batch Execution, and Autonomous Zero-UI Site Provisioning Protocol
+ *          Media Batch Execution (Receipts/Sweeps), and Autonomous Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -372,7 +372,6 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// TOP-LEVEL INGRESS DIAGNOSTIC LOGGER
 app.use((req, res, next) => {
   if (req.path === '/webhook') {
     console.log(`[HTTP INGRESS] ${req.method} /webhook from ${req.ip || req.headers['x-forwarded-for']}`);
@@ -380,7 +379,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// META WEBHOOK VERIFICATION ENDPOINT
+// Meta Webhook Verification Handshake
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -394,7 +393,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// INBOUND MESSAGE PROCESSING PIPELINE
+// Inbound Event Pipeline
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
@@ -584,7 +583,7 @@ app.post('/webhook', async (req, res) => {
           return;
       }
 
-      // 1. Natural Language & Slash Command Accounts Receivable Ingress
+      // 1. Headless Accounts Receivable (QBO) Ingress
       const isARQuery = lTxt === 'ar' || 
                         lTxt.startsWith('ar ') || 
                         lTxt.endsWith(' ar') || 
@@ -611,7 +610,7 @@ app.post('/webhook', async (req, res) => {
           return;
       }
 
-      // 2. Structured Invoicing and Estimates
+      // 2. Structured Invoicing & Estimates
       if (lTxt.startsWith('/estimate') || lTxt.startsWith('/invoice')) {
           if (whatsapp.triageSpokenOrTextNLP) {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
