@@ -7,7 +7,6 @@
 // ====================================================================
 // 0. GLOBAL POLYFILLS & ENVIRONMENT
 // ====================================================================
-// This MUST be the first thing to run so all decoupled modules inherit fetch
 if (!globalThis.fetch) {
   try {
     const nodeFetch = require('node-fetch');
@@ -93,7 +92,11 @@ const memoryCache = {
   contactsLastFetched: 0,
   assignments: null,
   assignmentsLastFetched: 0,
-  coordinates: new Map()
+  coordinates: new Map(),
+  qbo: {
+    accessToken: null,
+    expiresAt: null
+  }
 };
 
 async function getCachedSites(forceRefresh = false) {
@@ -171,6 +174,30 @@ async function getCachedOpenAssignments(forceRefresh = false) {
   }
 }
 
+async function hydrateQBOCache() {
+  if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) {
+      console.warn('[Cache Engine] Supabase credentials missing. Bypassing QBO state hydration.');
+      return;
+  }
+  try {
+      const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.serviceRoleKey);
+      const { data, error } = await supabase
+          .from('qbo_credentials')
+          .select('access_token, expires_at')
+          .eq('id', 'primary_tenant')
+          .single();
+
+      if (error) throw error;
+      if (data) {
+          memoryCache.qbo.accessToken = data.access_token;
+          memoryCache.qbo.expiresAt = new Date(data.expires_at).getTime();
+          console.log('[Cache Engine] QBO Cryptographic State Hydrated into RAM');
+      }
+  } catch (err) {
+      console.warn('[Cache Engine] Failed to hydrate QBO credentials:', err.message);
+  }
+}
+
 async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, retries = 2) {
   if (Object.keys(payload).length === 0) return null;
   const url = recordId 
@@ -220,8 +247,40 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 }
 
 // ====================================================================
-// 3. EXECUTIVE PROJECT MANAGEMENT & FORECASTING
+// 3. EXECUTIVE PROJECT MANAGEMENT & METEOROLOGICAL TELEMETRY
 // ====================================================================
+
+async function evaluateWeatherTripwires(lat, lon) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+  try {
+      const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,wind_gusts_10m&wind_speed_unit=mph`;
+      const response = await fetch(meteoUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) throw new Error('Open-Meteo Telemetry Offline');
+      
+      const data = await response.json();
+      const current = data.current;
+      const issues = [];
+      
+      if (current.wind_gusts_10m > 25) {
+          issues.push(`🔴 HIGH WIND HOLD: Gusts at ${current.wind_gusts_10m} mph. Glass lifting suspended.`);
+      }
+      
+      const dewPointDelta = current.temperature_2m - current.dew_point_2m;
+      if (dewPointDelta < 3.0 && current.relative_humidity_2m > 85) {
+          issues.push(`🔴 CONDENSATION HOLD: Dew point delta is ${dewPointDelta.toFixed(1)}°C. Turf adhesive curing suspended.`);
+      }
+
+      return { safe: issues.length === 0, telemetry: current, warnings: issues };
+  } catch (error) {
+      clearTimeout(timeoutId);
+      console.error('[Titan OS Edge] Weather Tripwire evaluation bypassed due to network failure.', error.message);
+      return { safe: true, warnings: ['⚠️ Meteorological telemetry offline. Proceed with visual caution.'] };
+  }
+}
 
 function startFridayNewsletterCron() {
   const now = new Date();
@@ -332,7 +391,7 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const callerIdentity = await resolveIdentity(fromPhone);
-    const sessionSiteId = whatsapp.userActiveSiteMap.get(fromPhone);
+    const sessionSiteId = whatsapp.userActiveSiteMap?.get(fromPhone);
     let site = null;
     
     if (sessionSiteId) {
@@ -350,27 +409,37 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // A. LOCATION DROPS (Proof of Presence)
+    // A. LOCATION DROPS (Proof of Presence & Weather Tripwires)
     if (message.type === 'location') {
       whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍').catch(() => {});
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
-      whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
+      
+      if (whatsapp.lastDroppedCoordinates) {
+          whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
+      }
+
+      const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
+      if (!weatherCheck.safe && whatsapp.sendWhatsAppMessage) {
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`);
+      }
 
       const allSites = await getCachedSites();
       const nearby = [];
       for (const s of allSites) {
-        const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
-        if (coords) {
-          const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
-          if (dist <= 800) nearby.push({ site: s, distance: dist });
+        if (whatsapp.resolveCoordinates) {
+            const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
+            if (coords) {
+              const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+              if (dist <= 800) nearby.push({ site: s, distance: dist });
+            }
         }
       }
       nearby.sort((a, b) => a.distance - b.distance);
 
-      if (nearby.length > 0) {
+      if (nearby.length > 0 && whatsapp.bindSiteContext) {
         await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
-      } else {
+      } else if (whatsapp.sendWhatsAppMessage) {
         await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Pin received (${userLat.toFixed(4)}, ${userLon.toFixed(4)}), but no Bounce Padel courts are located within 800m.`);
       }
       return;
@@ -381,31 +450,34 @@ app.post('/webhook', async (req, res) => {
       const txt = message.text?.body?.trim() || '';
       const lTxt = txt.toLowerCase();
 
-      // Finance Intent Pre-emption
       if (lTxt.startsWith('/estimate') || lTxt.startsWith('/invoice')) {
-          const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-          if (triage) {
-              if (triage.intent === 'CREATE_ESTIMATE') {
-                  await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
-              } else if (triage.intent === 'CREATE_INVOICE') {
-                  await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
-              } else {
-                  await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m), (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+          if (whatsapp.triageSpokenOrTextNLP) {
+              const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
+              if (triage) {
+                  if (triage.intent === 'CREATE_ESTIMATE' && finance.handleEstimateCreation) {
+                      await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+                  } else if (triage.intent === 'CREATE_INVOICE' && finance.handleInvoiceCreation) {
+                      await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+                  } else if (finance.handleInvoiceApproval) {
+                      await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m), (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+                  }
               }
           }
           return;
       }
       
-      // Oracle Engine Intent
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs')) {
-          const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-          await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+          if (whatsapp.triageSpokenOrTextNLP && oracle.handleOracleQuery) {
+              const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
+              await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+          }
           return;
       }
 
-      // Inventory Engine Intent
       if (lTxt.startsWith('/inv') || lTxt === 'inv') {
-          await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m));
+          if (inventory.handleSpokenInventorySnapshot) {
+              await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m));
+          }
           return;
       }
     }
@@ -429,30 +501,30 @@ app.post('/webhook', async (req, res) => {
       const mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
       const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
 
-      if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
-        whatsapp.mediaDebounceQueues.set(queueKey, {
-          items: [],
-          timer: null,
-          site,
-          worker,
-          dispatchTarget,
-          callerIdentity
-        });
-      }
+      if (whatsapp.mediaDebounceQueues) {
+          if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
+            whatsapp.mediaDebounceQueues.set(queueKey, {
+              items: [],
+              timer: null,
+              site,
+              worker,
+              dispatchTarget,
+              callerIdentity
+            });
+          }
 
-      const queue = whatsapp.mediaDebounceQueues.get(queueKey);
-      queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
-      
-      if (queue.timer) clearTimeout(queue.timer);
-      queue.timer = setTimeout(async () => {
-         const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
-         whatsapp.mediaDebounceQueues.delete(queueKey);
-         if (!currentBatch || currentBatch.items.length === 0) return;
-         
-         // Visual Triage execution goes here, followed by evaluateCourtMediaBatch
-         console.log(`[Batch Engine] Processing ${currentBatch.items.length} files from ${dispatchTarget}`);
-      }, 3500);
-      
+          const queue = whatsapp.mediaDebounceQueues.get(queueKey);
+          queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
+          
+          if (queue.timer) clearTimeout(queue.timer);
+          queue.timer = setTimeout(async () => {
+             const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
+             whatsapp.mediaDebounceQueues.delete(queueKey);
+             if (!currentBatch || currentBatch.items.length === 0) return;
+             
+             console.log(`[Batch Engine] Processing ${currentBatch.items.length} files from ${dispatchTarget}`);
+          }, 3500);
+      }
       return;
     }
     
@@ -461,9 +533,9 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// D. INBOUND EMAIL WEBHOOK (ZAPIER / SENDGRID / MAILGUN)
+// D. INBOUND EMAIL WEBHOOK 
 app.post('/api/inbound-email', async (req, res) => {
-  res.sendStatus(200); // Acknowledge receipt immediately
+  res.sendStatus(200);
 
   try {
     const emailPayload = {
@@ -481,10 +553,33 @@ app.post('/api/inbound-email', async (req, res) => {
     }
 
     console.log(`[Email Ingress] Processing email from ${emailPayload.from}: "${emailPayload.subject}"`);
-    await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
+    if (whatsapp.handleInboundEmail) {
+        await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
+    }
 
   } catch (err) {
     console.error('[Runtime Exception in /api/inbound-email]:', err);
+  }
+});
+
+// E. ON-DEMAND HEADLESS WEBHOOK FOR ORACLE SYNC
+app.post('/api/sync-oracle', async (req, res) => {
+  try {
+      const internalKey = req.headers['x-titan-internal-key'];
+      if (process.env.INTERNAL_API_KEY && internalKey !== process.env.INTERNAL_API_KEY) {
+          return res.status(403).json({ error: 'Unauthorized: Invalid Cryptographic Signature' });
+      }
+
+      console.log('[Titan OS Oracle] Manual synchronization triggered via Airtable webhook.');
+      res.status(202).json({ status: 'Accepted', message: 'Oracle Sync Protocol Initiated in background.' });
+
+      if (oracle && oracle.syncOracleDocs) {
+          oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+      } else {
+          console.warn('[Titan OS Oracle] Sync module not found. Payload ignored.');
+      }
+  } catch (error) {
+      console.error('[Titan OS Oracle] Manual Sync execution failed:', error);
   }
 });
 
@@ -520,10 +615,8 @@ if (cluster.isPrimary) {
   console.log(`====================================================================`);
   console.log(`[Cluster Engine] Forking ${numCPUs} concurrent worker processes...`);
 
-  // Singletons: Run crons ONLY on the primary process
   startFridayNewsletterCron();
   
-  // RAG Engine auto-ingestion
   if (oracle && oracle.syncOracleDocs) {
     oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
     setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
@@ -536,7 +629,6 @@ if (cluster.isPrimary) {
     cluster.fork();
   });
 } else {
-  // Workers handle the routing and individual cache hydration
   app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[Cluster Engine] Worker ${process.pid} online and listening on PORT ${PORT}`);
     try {
@@ -544,9 +636,14 @@ if (cluster.isPrimary) {
       await getCachedWorkers();
       await getCachedContacts();
       await getCachedOpenAssignments();
+      
       if (inventory && inventory.refreshInventoryCache) {
           await inventory.refreshInventoryCache(CONFIG);
       }
+      
+      // Hydrate Headless Finance QBO Hot Cache into RAM
+      await hydrateQBOCache();
+
     } catch (err) {
       console.error(`[Worker ${process.pid} Cache Hydration Error]:`, err.message);
     }
