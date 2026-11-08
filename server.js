@@ -32,6 +32,9 @@ const oracle = require('./oracle');
 const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
 
+let qboAuth;
+try { qboAuth = require('./services/qboAuth'); } catch (e) { /* Fallback to finance module if combined */ }
+
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
 // ====================================================================
@@ -352,7 +355,9 @@ async function dispatchExecutiveNewsletter() {
               `${darkMatterContent}\n\n` +
               `_Generated autonomously. Have a great weekend._`;
               
-  await whatsapp.fanOutToSubscribers(CONFIG, CONFIG.meta.targetVerifiedPhone, msg);
+  if (whatsapp && whatsapp.fanOutToSubscribers) {
+      await whatsapp.fanOutToSubscribers(CONFIG, CONFIG.meta.targetVerifiedPhone, msg);
+  }
 }
 
 // ====================================================================
@@ -411,7 +416,9 @@ app.post('/webhook', async (req, res) => {
 
     // A. LOCATION DROPS (Proof of Presence & Weather Tripwires)
     if (message.type === 'location') {
-      whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍').catch(() => {});
+      if (whatsapp.sendWhatsAppReaction) {
+          whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍').catch(() => {});
+      }
       const userLat = message.location.latitude;
       const userLon = message.location.longitude;
       
@@ -450,7 +457,30 @@ app.post('/webhook', async (req, res) => {
       const txt = message.text?.body?.trim() || '';
       const lTxt = txt.toLowerCase();
 
-      if (lTxt.startsWith('/estimate') || lTxt.startsWith('/invoice')) {
+      console.log(`[Text Engine] Inbound message from ${dispatchTarget}: "${txt}"`);
+
+      // 1. Headless Finance Intent Pre-emption (AR Aging, Estimates, Invoices)
+      const isFinanceQuery = lTxt.startsWith('/estimate') || 
+                             lTxt.startsWith('/invoice') || 
+                             lTxt.startsWith('/ar') ||
+                             lTxt.includes('ar') || 
+                             lTxt.includes('aging') || 
+                             lTxt.includes('open invoice') ||
+                             lTxt.includes('balance') ||
+                             lTxt.includes('30+');
+
+      if (isFinanceQuery) {
+          console.log(`[Finance Engine] Routing financial query: "${txt}"`);
+          if (lTxt.includes('ar') || lTxt.includes('aging') || lTxt.startsWith('/ar') || lTxt.includes('30+')) {
+              if (finance && finance.handleARLookup) {
+                  await finance.handleARLookup(CONFIG, dispatchTarget, (c, t, m) => whatsapp.sendWhatsAppMessage(c, t, m));
+              } else if (finance && finance.getAgingReport) {
+                  const report = await finance.getAgingReport(CONFIG, 30);
+                  if (whatsapp.sendWhatsAppMessage) await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, report);
+              }
+              return;
+          }
+
           if (whatsapp.triageSpokenOrTextNLP) {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
               if (triage) {
@@ -458,7 +488,7 @@ app.post('/webhook', async (req, res) => {
                       await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
                   } else if (triage.intent === 'CREATE_INVOICE' && finance.handleInvoiceCreation) {
                       await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
-                  } else if (finance.handleInvoiceApproval) {
+                  } else if (finance && finance.handleInvoiceApproval) {
                       await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m), (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
                   }
               }
@@ -466,20 +496,30 @@ app.post('/webhook', async (req, res) => {
           return;
       }
       
-      if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs')) {
-          if (whatsapp.triageSpokenOrTextNLP && oracle.handleOracleQuery) {
+      // 2. Oracle Engine Intent
+      if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
+          if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
               await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
           }
           return;
       }
 
-      if (lTxt.startsWith('/inv') || lTxt === 'inv') {
-          if (inventory.handleSpokenInventorySnapshot) {
+      // 3. Inventory Engine Intent
+      if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('stock') || lTxt.includes('inventory')) {
+          if (inventory && inventory.handleSpokenInventorySnapshot) {
               await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m));
           }
           return;
       }
+
+      // 4. Fallback Generic Conversational Triage
+      if (whatsapp.triageSpokenOrTextNLP) {
+          const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
+          console.log(`[Text Engine] Triage classified intent: ${triage?.intent || 'UNKNOWN'}`);
+      }
+      
+      return;
     }
 
     // C. MULTIMEDIA INTAKE (Debouncer Aggregation)
@@ -488,7 +528,9 @@ app.post('/webhook', async (req, res) => {
       const mediaId = mediaObj.id;
       const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
       
-      whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
+      if (whatsapp.sendWhatsAppReaction) {
+          whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
+      }
 
       const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
       const metaMediaData = await metaMediaRes.json().catch(() => ({}));
@@ -553,7 +595,7 @@ app.post('/api/inbound-email', async (req, res) => {
     }
 
     console.log(`[Email Ingress] Processing email from ${emailPayload.from}: "${emailPayload.subject}"`);
-    if (whatsapp.handleInboundEmail) {
+    if (whatsapp && whatsapp.handleInboundEmail) {
         await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
     }
 
