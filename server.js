@@ -9,7 +9,7 @@ const cluster = require('cluster');
 const os = require('os');
 const { createClient } = require('@supabase/supabase-js');
 
-// Defensive inclusion for backwards compatibility, though native fetch is preferred in Node 18+
+// Defensive inclusion for backwards compatibility
 let fetch;
 try {
   fetch = require('node-fetch');
