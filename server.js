@@ -1,8 +1,8 @@
 /**
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Cluster Boot, Cron Jobs, Cache Management, Pure Native Meta Graph Webhooks,
- *          Autonomous QBO Token Refresh, Media Batch Execution, and Zero-UI Site Provisioning
+ * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
+ *          Multimodal Receipt/Sweep Batching, and Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -34,7 +34,7 @@ const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
 
 // ====================================================================
-// 1. GLOBAL CONFIGURATION & SECRETS
+// 1. GLOBAL CONFIGURATION & SECRETS (NO WHAPI)
 // ====================================================================
 const PORT = process.env.PORT || 3000;
 const numCPUs = process.env.WEB_CONCURRENCY || os.cpus().length || 1;
@@ -79,6 +79,14 @@ const CONFIG = {
   }
 };
 
+// Universal WhatsApp message dispatcher adapter
+function dispatchOutboundWhatsApp(targetOrConfig, textOrTarget, possibleText) {
+  if (possibleText !== undefined) {
+    return whatsapp.sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText);
+  }
+  return whatsapp.sendWhatsAppMessage(CONFIG, targetOrConfig, textOrTarget);
+}
+
 // ====================================================================
 // 2. STATE MACHINES & CACHE-ASIDE ENGINE
 // ====================================================================
@@ -86,8 +94,6 @@ const CONFIG = {
 let oracleFileURIs = [];
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
-
-// Ephemeral buffer for off-site GPS pins awaiting naming confirmation
 const pendingNewSiteRequests = new Map();
 
 const memoryCache = {
@@ -412,7 +418,7 @@ async function dispatchExecutiveNewsletter() {
 }
 
 // ====================================================================
-// 4. INGRESS WEBHOOK CONTROLLER (PURE NATIVE META GRAPH API)
+// 4. INGRESS WEBHOOK CONTROLLER (NATIVE META GRAPH API ONLY)
 // ====================================================================
 
 const app = express();
@@ -445,7 +451,7 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
   const body = req.body;
-  if (!body || body.object !== 'whatsapp_business_account') return;
+  if (!body) return;
 
   const entry = body.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
@@ -498,8 +504,8 @@ app.post('/webhook', async (req, res) => {
         }
 
         const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
-        if (!weatherCheck.safe && whatsapp.sendWhatsAppMessage) {
-            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`);
+        if (!weatherCheck.safe) {
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`);
         }
 
         const allSites = await getCachedSites();
@@ -535,9 +541,7 @@ app.post('/webhook', async (req, res) => {
             `👉 *CREATE SITE: [Site Name]*\n` +
             `_(e.g., CREATE SITE: Miami Shores Club)_`;
 
-          if (whatsapp.sendWhatsAppMessage) {
-            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, promptMsg);
-          }
+          await dispatchOutboundWhatsApp(dispatchTarget, promptMsg);
         }
       }
       return;
@@ -571,18 +575,14 @@ app.post('/webhook', async (req, res) => {
             .trim();
 
           if (!siteName) {
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
               return;
           }
 
           const pendingGeo = pendingNewSiteRequests.get(fromPhone) || whatsapp.lastDroppedCoordinates?.get(fromPhone);
           
           if (!pendingGeo || (Date.now() - pendingGeo.timestamp > 2 * 60 * 60 * 1000)) {
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
               return;
           }
 
@@ -619,13 +619,9 @@ app.post('/webhook', async (req, res) => {
                   `✅ Digital twin active. You are now checked in to *${siteName}*.\n` +
                   `Send photos, voice memos, or video sweeps to begin logging progress.${weatherNote}`;
 
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, confirmMsg);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, confirmMsg);
           } else {
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
           }
           return;
       }
@@ -647,12 +643,10 @@ app.post('/webhook', async (req, res) => {
       if (isARQuery) {
           console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget}`);
           if (finance && finance.handleARLookup) {
-              await finance.handleARLookup(CONFIG, dispatchTarget, (c, t, m) => whatsapp.sendWhatsAppMessage(c, t, m));
+              await finance.handleARLookup(CONFIG, dispatchTarget, dispatchOutboundWhatsApp);
           } else if (finance && finance.getAgingReport) {
               const report = await finance.getAgingReport(CONFIG, 30);
-              if (whatsapp.sendWhatsAppMessage) {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, report);
-              }
+              await dispatchOutboundWhatsApp(dispatchTarget, report);
           } else {
               console.warn('[Finance Engine] AR lookup handler not exported in finance.js');
           }
@@ -665,11 +659,11 @@ app.post('/webhook', async (req, res) => {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
               if (triage) {
                   if (triage.intent === 'CREATE_ESTIMATE' && finance.handleEstimateCreation) {
-                      await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+                      await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
                   } else if (triage.intent === 'CREATE_INVOICE' && finance.handleInvoiceCreation) {
-                      await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+                      await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
                   } else if (finance && finance.handleInvoiceApproval) {
-                      await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m), (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+                      await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
                   }
               }
           }
@@ -680,7 +674,7 @@ app.post('/webhook', async (req, res) => {
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
           if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
               const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-              await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, (c,t,m) => whatsapp.sendWhatsAppMessage(c,t,m));
+              await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
           }
           return;
       }
@@ -688,7 +682,7 @@ app.post('/webhook', async (req, res) => {
       // 4. Inventory Tracking
       if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
           if (inventory && inventory.handleSpokenInventorySnapshot) {
-              await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m));
+              await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => dispatchOutboundWhatsApp(t, m));
           }
           return;
       }
@@ -703,12 +697,12 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ================================================================
-    // C. MULTIMEDIA INTAKE (Sliding Window Debouncer & Batch Processing)
+    // C. MULTIMEDIA INTAKE (Sliding Window Debouncer & Batch Execution)
     // ================================================================
-    if (message.type === 'video' || message.type === 'image' || message.type === 'audio' || message.type === 'voice' || message.type === 'document') {
+    if (message.type === 'video' || message.type === 'image' || message.type === 'audio' || message.type === 'voice') {
       const mediaObj = message[message.type];
-      const mediaId = mediaObj?.id;
-      const mimeType = mediaObj?.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
+      const mediaId = mediaObj.id;
+      const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
       
       if (whatsapp.sendWhatsAppReaction) {
           whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
@@ -744,7 +738,7 @@ app.post('/webhook', async (req, res) => {
           }
 
           const queue = whatsapp.mediaDebounceQueues.get(queueKey);
-          queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj?.caption || '' });
+          queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
           
           if (queue.timer) clearTimeout(queue.timer);
           queue.timer = setTimeout(async () => {
@@ -754,20 +748,17 @@ app.post('/webhook', async (req, res) => {
              
              console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
 
-             // DISPATCH MULTIMODAL MEDIA TO INGESTION ENGINES
              try {
                if (whatsapp && whatsapp.processMediaBatch) {
                  await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
                } else if (finance && finance.handleReceiptUpload) {
-                 await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, (c, t, m) => whatsapp.sendWhatsAppMessage(c, t, m));
+                 await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp);
                } else {
-                 console.warn('[Batch Engine] Neither whatsapp.processMediaBatch nor finance.handleReceiptUpload found.');
+                 console.warn('[Batch Engine] No registered batch media handler.');
                }
              } catch (batchErr) {
                console.error('[Batch Engine Failure]:', batchErr);
-               if (whatsapp.sendWhatsAppMessage) {
-                 await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
-               }
+               await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
              }
           }, 3500);
       }
@@ -890,3 +881,11 @@ if (cluster.isPrimary) {
       if (inventory && inventory.refreshInventoryCache) {
           await inventory.refreshInventoryCache(CONFIG);
       }
+      
+      await hydrateQBOCache();
+
+    } catch (err) {
+      console.error(`[Worker ${process.pid} Cache Hydration Error]:`, err.message);
+    }
+  });
+}
