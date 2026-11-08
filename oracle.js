@@ -4,14 +4,6 @@
  * Purpose: Gemini File API Ingestion, Caching, and Engineering Lookup
  */
 
-// Defensive inclusion for backwards compatibility, though native fetch is preferred in Node 18+
-let fetch;
-try {
-  fetch = require('node-fetch');
-} catch (err) {
-  fetch = globalThis.fetch;
-}
-
 // ====================================================================
 // 1. KNOWLEDGE BASE SYNCHRONIZATION
 // ====================================================================
