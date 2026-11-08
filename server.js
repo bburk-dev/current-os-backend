@@ -4,20 +4,28 @@
  * Purpose: Cluster Boot, Cron Jobs, Cache Management, and Webhook Routing
  */
 
+// ====================================================================
+// 0. GLOBAL POLYFILLS & ENVIRONMENT
+// ====================================================================
+// This MUST be the first thing to run so all decoupled modules inherit fetch
+if (!globalThis.fetch) {
+  try {
+    const nodeFetch = require('node-fetch');
+    globalThis.fetch = nodeFetch;
+    globalThis.Headers = nodeFetch.Headers;
+    globalThis.Request = nodeFetch.Request;
+    globalThis.Response = nodeFetch.Response;
+  } catch (err) {
+    console.warn('[System] native fetch not found and node-fetch not installed.');
+  }
+}
+
+try { require('dotenv').config(); } catch (e) {}
+
 const express = require('express');
 const cluster = require('cluster');
 const os = require('os');
 const { createClient } = require('@supabase/supabase-js');
-
-// Defensive inclusion for backwards compatibility
-let fetch;
-try {
-  fetch = require('node-fetch');
-} catch (err) {
-  fetch = globalThis.fetch;
-}
-
-try { require('dotenv').config(); } catch (e) {}
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
@@ -516,8 +524,10 @@ if (cluster.isPrimary) {
   startFridayNewsletterCron();
   
   // RAG Engine auto-ingestion
-  oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-  setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
+  if (oracle && oracle.syncOracleDocs) {
+    oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
+  }
 
   for (let i = 0; i < numCPUs; i++) cluster.fork();
 
@@ -534,7 +544,9 @@ if (cluster.isPrimary) {
       await getCachedWorkers();
       await getCachedContacts();
       await getCachedOpenAssignments();
-      await inventory.refreshInventoryCache(CONFIG);
+      if (inventory && inventory.refreshInventoryCache) {
+          await inventory.refreshInventoryCache(CONFIG);
+      }
     } catch (err) {
       console.error(`[Worker ${process.pid} Cache Hydration Error]:`, err.message);
     }
