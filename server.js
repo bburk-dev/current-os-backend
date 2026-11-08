@@ -1,7 +1,8 @@
 /**
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Cluster Boot, Cron Jobs, Cache Management, and Native Meta Webhook Routing
+ * Purpose: Cluster Boot, Cron Jobs, Cache Management, Native Meta Graph Webhooks,
+ *          Media Batch Execution, and Autonomous Zero-UI Site Provisioning Protocol
  */
 
 // ====================================================================
@@ -31,9 +32,6 @@ const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
-
-let qboAuth;
-try { qboAuth = require('./services/qboAuth'); } catch (e) { /* Fallback to finance module if combined */ }
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -85,6 +83,9 @@ const CONFIG = {
 let oracleFileURIs = [];
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
+
+// Ephemeral buffer for off-site GPS pins awaiting naming confirmation
+const pendingNewSiteRequests = new Map();
 
 const memoryCache = {
   sites: null,
@@ -194,12 +195,10 @@ async function hydrateQBOCache() {
       if (data && data.access_token && !data.access_token.includes('pending_auth') && !data.access_token.includes('PASTE_')) {
           memoryCache.qbo.accessToken = data.access_token;
           memoryCache.qbo.expiresAt = new Date(data.expires_at).getTime();
-          
-          // Connect Supabase access token directly to runtime CONFIG for finance.js
           CONFIG.qbo.accessToken = data.access_token;
           console.log('[Cache Engine] QBO Cryptographic State Hydrated into RAM and CONFIG');
       } else {
-          console.warn('[Cache Engine] QBO Credentials in Supabase are unauthenticated or using template placeholders.');
+          console.warn('[Cache Engine] QBO Credentials in Supabase are unauthenticated or using placeholders.');
       }
   } catch (err) {
       console.warn('[Cache Engine] Failed to hydrate QBO credentials:', err.message);
@@ -373,30 +372,41 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// TOP-LEVEL INGRESS DIAGNOSTIC LOGGER
+app.use((req, res, next) => {
+  if (req.path === '/webhook') {
+    console.log(`[HTTP INGRESS] ${req.method} /webhook from ${req.ip || req.headers['x-forwarded-for']}`);
+  }
+  next();
+});
+
+// META WEBHOOK VERIFICATION ENDPOINT
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === CONFIG.meta.verifyToken) {
-    console.log('[Titan OS] Meta Webhook Subscription Verified.');
+    console.log('[Meta Handshake] Webhook Verified Successfully with Meta.');
     return res.status(200).send(challenge);
   }
+  console.warn('[Meta Handshake] Rejected. Verify token mismatch or invalid mode.');
   return res.sendStatus(403);
 });
 
+// INBOUND MESSAGE PROCESSING PIPELINE
 app.post('/webhook', async (req, res) => {
-  // Always immediately acknowledge receipt to Meta to prevent dropped retries
   res.sendStatus(200);
 
   const body = req.body;
-  if (!body || body.object !== 'whatsapp_business_account') return;
+  if (!body) return;
 
   const entry = body.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
-  const message = changes?.messages?.[0];
   
-  // Ignore delivery receipts and read statuses
+  if (changes?.statuses) return; // Drop read/delivery receipts
+
+  const message = changes?.messages?.[0];
   if (!message) return;
 
   const rawFrom = message.from || '';
@@ -404,7 +414,7 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
 
-  console.log(`[Webhook Ingress] Message received from ${dispatchTarget} (Type: ${message.type || 'text'})`);
+  console.log(`[Meta Ingress] Processing message from ${dispatchTarget} (Type: ${message.type || 'text'})`);
 
   try {
     const callerIdentity = await resolveIdentity(fromPhone);
@@ -426,7 +436,9 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // A. LOCATION DROPS (Proof of Presence & Weather Tripwires)
+    // ================================================================
+    // A. LOCATION DROPS (Proof of Presence, Weather & Site Discovery)
+    // ================================================================
     if (message.type === 'location') {
       if (whatsapp.sendWhatsAppReaction) {
           whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍').catch(() => {});
@@ -459,14 +471,35 @@ app.post('/webhook', async (req, res) => {
 
         if (nearby.length > 0 && whatsapp.bindSiteContext) {
           await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
-        } else if (whatsapp.sendWhatsAppMessage) {
-          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Pin received (${userLat.toFixed(4)}, ${userLon.toFixed(4)}), but no Bounce Padel courts are located within 800m.`);
+        } else {
+          console.log(`[Site Engine] Unmapped location pin dropped at (${userLat.toFixed(5)}, ${userLon.toFixed(5)}) by ${dispatchTarget}`);
+          
+          pendingNewSiteRequests.set(fromPhone, {
+            lat: userLat,
+            lon: userLon,
+            timestamp: Date.now()
+          });
+
+          const promptMsg = `📍 *UNREGISTERED LOCATION DETECTED*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `Coordinates: \`${userLat.toFixed(5)}, ${userLon.toFixed(5)}\`\n` +
+            `No Bounce Padel courts were located within 800m.\n\n` +
+            `Would you like to register this as a *NEW SITE*?\n\n` +
+            `Reply with the site name:\n` +
+            `👉 *CREATE SITE: [Site Name]*\n` +
+            `_(e.g., CREATE SITE: Miami Shores Club)_`;
+
+          if (whatsapp.sendWhatsAppMessage) {
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, promptMsg);
+          }
         }
       }
       return;
     }
 
-    // B. TEXT NLP COMMANDS & NATURAL LANGUAGE PRE-EMPTION
+    // ================================================================
+    // B. TEXT NLP COMMANDS, SITE PROVISIONING & FINANCE ROUTING
+    // ================================================================
     const rawText = message.text?.body || '';
     if (message.type === 'text' || rawText) {
       const txt = rawText.trim();
@@ -474,10 +507,92 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget}`);
 
+      // 0. Zero-UI Site Provisioning Handler
+      const isCreateSiteQuery = lTxt.startsWith('create site') || 
+                                lTxt.startsWith('new site') || 
+                                lTxt.startsWith('/createsite') || 
+                                lTxt.startsWith('/newsite') ||
+                                (pendingNewSiteRequests.has(fromPhone) && (lTxt.startsWith('yes') || lTxt.startsWith('site:')));
+
+      if (isCreateSiteQuery) {
+          let siteName = txt
+            .replace(/^create\s+site:?/i, '')
+            .replace(/^new\s+site:?/i, '')
+            .replace(/^\/createsite:?/i, '')
+            .replace(/^\/newsite:?/i, '')
+            .replace(/^yes,?:?/i, '')
+            .replace(/^site:?/i, '')
+            .trim();
+
+          if (!siteName) {
+              if (whatsapp.sendWhatsAppMessage) {
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
+              }
+              return;
+          }
+
+          const pendingGeo = pendingNewSiteRequests.get(fromPhone) || whatsapp.lastDroppedCoordinates?.get(fromPhone);
+          
+          if (!pendingGeo || (Date.now() - pendingGeo.timestamp > 2 * 60 * 60 * 1000)) {
+              if (whatsapp.sendWhatsAppMessage) {
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
+              }
+              return;
+          }
+
+          console.log(`[Site Engine] Provisioning "${siteName}" at (${pendingGeo.lat}, ${pendingGeo.lon}) for ${dispatchTarget}`);
+          
+          const newRecord = await airtableWriteWithAutoDrop('Sites', {
+              'Site Name': siteName,
+              'Workflow Mode': 'INSTALLATION',
+              'Site Status': 'ACTIVE',
+              'Latitude': pendingGeo.lat,
+              'Longitude': pendingGeo.lon
+          });
+
+          if (newRecord && newRecord.id) {
+              pendingNewSiteRequests.delete(fromPhone);
+              await getCachedSites(true);
+
+              if (whatsapp.userActiveSiteMap) {
+                  whatsapp.userActiveSiteMap.set(fromPhone, newRecord.id);
+              }
+
+              const weather = await evaluateWeatherTripwires(pendingGeo.lat, pendingGeo.lon);
+              let weatherNote = '';
+              if (!weather.safe) {
+                  weatherNote = `\n\n⚠️ *METEOROLOGICAL WARNING*\n${weather.warnings.join('\n')}`;
+              }
+
+              const confirmMsg = `🏟️ *NEW SITE PROVISIONED*\n` +
+                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `📍 *Site:* ${siteName}\n` +
+                  `🌐 *Coordinates:* \`${pendingGeo.lat.toFixed(5)}, ${pendingGeo.lon.toFixed(5)}\`\n` +
+                  `⚙️ *Mode:* INSTALLATION\n` +
+                  `📊 *Status:* ACTIVE\n\n` +
+                  `✅ Digital twin active. You are now checked in to *${siteName}*.\n` +
+                  `Send photos, voice memos, or video sweeps to begin logging progress.${weatherNote}`;
+
+              if (whatsapp.sendWhatsAppMessage) {
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, confirmMsg);
+              }
+          } else {
+              if (whatsapp.sendWhatsAppMessage) {
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
+              }
+          }
+          return;
+      }
+
       // 1. Natural Language & Slash Command Accounts Receivable Ingress
-      const isARQuery = lTxt.includes('ar') || 
-                        lTxt.includes('30+') || 
+      const isARQuery = lTxt === 'ar' || 
+                        lTxt.startsWith('ar ') || 
+                        lTxt.endsWith(' ar') || 
+                        lTxt.includes('ar +') || 
+                        lTxt.includes('ar+') || 
+                        lTxt.includes('+ 30') || 
                         lTxt.includes('+30') || 
+                        lTxt.includes('30+') || 
                         lTxt.includes('aging') || 
                         lTxt.includes('balance') || 
                         lTxt.includes('open invoice') || 
@@ -533,13 +648,15 @@ app.post('/webhook', async (req, res) => {
       // 5. Fallback Conversational Intent Routing
       if (whatsapp.triageSpokenOrTextNLP) {
           const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-          console.log(`[Text Engine] General triage resolved: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
+          console.log(`[Text Engine] General triage: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
       }
       
       return;
     }
 
-    // C. MULTIMEDIA INTAKE (Debouncer Aggregation)
+    // ================================================================
+    // C. MULTIMEDIA INTAKE (Sliding Window Debouncer & Batch Processing)
+    // ================================================================
     if (message.type === 'video' || message.type === 'image' || message.type === 'audio' || message.type === 'voice') {
       const mediaObj = message[message.type];
       const mediaId = mediaObj.id;
@@ -550,7 +667,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       let mediaBuffer = null;
-      if (CONFIG.meta.accessToken) {
+      if (CONFIG.meta.accessToken && mediaId) {
         const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
         const metaMediaData = await metaMediaRes.json().catch(() => ({}));
         if (metaMediaRes.ok && metaMediaData?.url) {
@@ -559,7 +676,11 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      if (!mediaBuffer) return;
+      if (!mediaBuffer) {
+        console.warn(`[Media Ingress] Failed to download media buffer for id: ${mediaId}`);
+        return;
+      }
+
       const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
 
       if (whatsapp.mediaDebounceQueues) {
@@ -583,7 +704,23 @@ app.post('/webhook', async (req, res) => {
              whatsapp.mediaDebounceQueues.delete(queueKey);
              if (!currentBatch || currentBatch.items.length === 0) return;
              
-             console.log(`[Batch Engine] Processing ${currentBatch.items.length} files from ${dispatchTarget}`);
+             console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
+
+             // DISPATCH MULTIMODAL MEDIA TO INGESTION ENGINES
+             try {
+               if (whatsapp && whatsapp.processMediaBatch) {
+                 await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
+               } else if (finance && finance.handleReceiptUpload) {
+                 await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget);
+               } else {
+                 console.warn('[Batch Engine] Neither whatsapp.processMediaBatch nor finance.handleReceiptUpload found.');
+               }
+             } catch (batchErr) {
+               console.error('[Batch Engine Failure]:', batchErr);
+               if (whatsapp.sendWhatsAppMessage) {
+                 await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
+               }
+             }
           }, 3500);
       }
       return;
@@ -594,7 +731,9 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// ====================================================================
 // D. INBOUND EMAIL WEBHOOK 
+// ====================================================================
 app.post('/api/inbound-email', async (req, res) => {
   res.sendStatus(200);
 
@@ -623,7 +762,9 @@ app.post('/api/inbound-email', async (req, res) => {
   }
 });
 
+// ====================================================================
 // E. ON-DEMAND HEADLESS WEBHOOK FOR ORACLE SYNC
+// ====================================================================
 app.post('/api/sync-oracle', async (req, res) => {
   try {
       const internalKey = req.headers['x-titan-internal-key'];
@@ -644,7 +785,7 @@ app.post('/api/sync-oracle', async (req, res) => {
   }
 });
 
-// Helper: Resolve Caller Identity
+// Helper: Resolve Caller Identity from Relational Workers Cache
 async function resolveIdentity(fromPhone) {
     const workers = await getCachedWorkers();
     const cleanDigits = fromPhone.replace(/\D/g, '');
@@ -702,7 +843,6 @@ if (cluster.isPrimary) {
           await inventory.refreshInventoryCache(CONFIG);
       }
       
-      // Hydrate Headless Finance QBO Hot Cache into RAM and CONFIG
       await hydrateQBOCache();
 
     } catch (err) {
