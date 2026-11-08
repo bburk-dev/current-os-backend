@@ -8,7 +8,14 @@ const express = require('express');
 const cluster = require('cluster');
 const os = require('os');
 const { createClient } = require('@supabase/supabase-js');
-const fetch = require('node-fetch'); // Remove if running Node 18+
+
+// Defensive inclusion for backwards compatibility, though native fetch is preferred in Node 18+
+let fetch;
+try {
+  fetch = require('node-fetch');
+} catch (err) {
+  fetch = globalThis.fetch;
+}
 
 try { require('dotenv').config(); } catch (e) {}
 
