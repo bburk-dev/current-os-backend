@@ -5,7 +5,6 @@
  */
 
 const crypto = require('crypto');
-const fetch = require('node-fetch'); // Remove if running Node 18+ with native fetch
 
 // ====================================================================
 // 1. IN-MEMORY DEBOUNCERS & GEOSPATIAL CACHES
@@ -543,6 +542,116 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
   }
 }
 
+// ====================================================================
+// 7. INBOUND EMAIL & RELAY ORCHESTRATION
+// ====================================================================
+
+async function handleInboundEmail(config, emailPayload, getCachedContacts) {
+  try {
+    // 1. Extract and Clean Email Addresses (From, To, CC)
+    const extractEmails = (str) => {
+      const matches = String(str || '').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi);
+      return matches ? matches.map(e => e.toLowerCase().trim()) : [];
+    };
+
+    const senderEmails = extractEmails(emailPayload.from);
+    const toEmails = extractEmails(emailPayload.to);
+    const ccEmails = extractEmails(emailPayload.cc);
+    
+    // We want to message the original sender AND anyone CC'd on the introduction
+    const targetEmails = [...new Set([...senderEmails, ...ccEmails])];
+    
+    if (targetEmails.length === 0) {
+      console.warn('[Email Handler] No valid sender/CC emails extracted.');
+      return;
+    }
+
+    // 2. Resolve Phone Numbers via Contacts Cache
+    const contacts = await getCachedContacts();
+    const targetPhones = [];
+    const knownNames = [];
+
+    targetEmails.forEach(targetEmail => {
+      const contact = contacts.find(c => {
+        const contactEmail = String(c.fields['Email'] || '').toLowerCase().trim();
+        return contactEmail === targetEmail;
+      });
+
+      if (contact && contact.fields['Phone E164']) {
+        targetPhones.push(contact.fields['Phone E164']);
+        knownNames.push(contact.fields['Full Name'] || contact.fields['First Name'] || targetEmail);
+      }
+    });
+
+    if (targetPhones.length === 0) {
+       console.log(`[Email Handler] No WhatsApp-routable phone numbers found in Contacts for: ${targetEmails.join(', ')}`);
+       return;
+    }
+
+    const participants = knownNames.length > 0 ? knownNames.join(' and ') : 'colleagues';
+    console.log(`[Email Handler] Resolved WhatsApp targets for: ${participants} (${targetPhones.join(', ')})`);
+
+    // 3. Generate Reply via Gemini 2.5 (Title Removed)
+    const prompt = `You are the executive assistant for Bob Burk. 
+An email was just received from: ${emailPayload.from}.
+The subject is: "${emailPayload.subject}".
+
+Here is the body of the email:
+"""
+${emailPayload.text || emailPayload.html}
+"""
+
+Task: Draft a warm, professional, and concise reply from Bob Burk addressing the sender and any individuals introduced in the email. 
+If this is an introduction, explicitly welcome the new connection and offer to serve as a resource for anything related to padel courts. Mention that Bob is currently stateside but readily available via call, text, or WhatsApp at 437-928-7172.
+
+RULES:
+1. Do NOT include a subject line in the output.
+2. Sign off simply as "Best regards, Bob Burk". Do NOT include any titles like "Founder, Bounce Padel" or company names in the sign-off.
+3. Keep the tone conversational but highly professional.`;
+
+    const payload = {
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2 }
+    };
+
+    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+       console.error('[Email Handler] Gemini drafting failed:', await res.text());
+       return;
+    }
+
+    const data = await res.json();
+    const generatedReply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!generatedReply) {
+       console.error('[Email Handler] Gemini returned an empty response.');
+       return;
+    }
+
+    // 4. Format and Dispatch to All Resolved Targets
+    const formattedDispatch = `📧 *TITAN OS | INBOUND EMAIL RELAY*\n` +
+                              `━━━━━━━━━━━━━━━━━━━━\n` +
+                              `*From:* ${emailPayload.from}\n` +
+                              `*Subject:* ${emailPayload.subject}\n` +
+                              `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `${generatedReply.trim()}`;
+
+    for (const phone of targetPhones) {
+      await sendWhatsAppMessage(config, phone, formattedDispatch);
+    }
+    
+    console.log(`[Email Handler] Successfully dispatched email response to ${targetPhones.length} recipients.`);
+
+  } catch (err) {
+    console.error('[Email Handler Exception]:', err.message);
+  }
+}
+
 module.exports = {
   mediaDebounceQueues,
   lastDroppedCoordinates,
@@ -560,5 +669,6 @@ module.exports = {
   bindSiteContext,
   triageSpokenOrTextNLP,
   inspectBlindVisualGroundTruth,
-  evaluateCourtMediaBatch
+  evaluateCourtMediaBatch,
+  handleInboundEmail
 };
