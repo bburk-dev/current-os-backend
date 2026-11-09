@@ -59,7 +59,13 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
     }
   };
   
-  if (body) options.body = JSON.stringify(body);
+  // Prevent QBO HTTP 500 NullPointerException on empty POST requests
+  if (body) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  } else if (method === 'POST') {
+    options.headers['Content-Type'] = 'application/octet-stream';
+  }
 
   try {
     const res = await fetch(url, options);
@@ -160,6 +166,7 @@ async function resolveQboTaxCode(config, isTaxable = false) {
   }
 
   if (isTaxable) {
+    // Explicitly target the Canadian AST Tax Code ID for HST ON
     const hstCode = cachedTaxCodes.find(t => t.Name === 'H' || t.Name === 'HST ON')
                     || cachedTaxCodes.find(t => /HST|13%/i.test(t.Name) && t.Taxable === true)
                     || cachedTaxCodes.find(t => t.Taxable === true && t.Name === 'TAX')
@@ -167,6 +174,7 @@ async function resolveQboTaxCode(config, isTaxable = false) {
                     || cachedTaxCodes[0];
     return { value: String(hstCode.Id) };
   } else {
+    // Explicitly target standard Canadian Exempt codes
     const exemptCode = cachedTaxCodes.find(t => t.Name === 'E' || t.Name === 'Exempt')
                        || cachedTaxCodes.find(t => /exempt|zero|0%|non/i.test(t.Name))
                        || cachedTaxCodes.find(t => t.Taxable === false)
@@ -483,7 +491,7 @@ JSON SCHEMA:
     const totalFormatted = changeOrder.total_amount.toFixed(2);
     const finalTotal = qboRes?.Estimate?.TotalAmt || totalFormatted;
 
-    const breakdownText = changeOrder.line_items.map(i => `• ${i.description}\n`).join('\n');
+    const breakdownText = changeOrder.line_items.map(i => `• ${i.description.replace(/\n/g, ' ').slice(0, 32)}.. (x${i.quantity}): $${i.amount.toFixed(2)}`).join('\n');
 
     const card = `📝 *TITAN OS | CHANGE-ORDER DRAFTED*\n` +
                  `──────────────────────────────\n` +
@@ -699,7 +707,7 @@ OUTPUT STRICTLY JSON:
       },
       {
         category: "INSTALLATION",
-        description: "Turnkey physical court assembly and mechanical erection.",
+        description: "Turnkey professional installation services, including the complete mechanical erection and physical assembly of the padel court structure, glass panels, mesh, turf, and lighting systems by a certified in-house crew.",
         quantity: 1,
         unit_price: 0,
         amount: 0,
