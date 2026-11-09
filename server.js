@@ -480,7 +480,7 @@ app.post('/webhook', async (req, res) => {
   const entry = body.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
   
-  if (changes?.statuses) return; // Drop receipts
+  if (changes?.statuses) return; // Drop read/delivery receipts
 
   const message = changes?.messages?.[0];
   if (!message) return;
@@ -526,7 +526,7 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2 (Safe fields, prevents 422 rejections)
+    // Resilient write to Inbound Messages 2 (Strictly safe fields, avoids 422 rejections)
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Message Type': message.type || 'text',
@@ -701,7 +701,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ================================================================
-    // B. STANDALONE SPOKEN VOICE NOTE INTAKE
+    // B. STANDALONE SPOKEN VOICE NOTE INTAKE (BE THE WATER AUDIO ENGINE)
     // ================================================================
     if (message.type === 'audio' || message.type === 'voice') {
       const mediaObj = message[message.type];
@@ -847,7 +847,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ================================================================
-    // C. LOCATION DROPS
+    // C. LOCATION DROPS (Proof of Presence, Weather & Site Discovery)
     // ================================================================
     if (message.type === 'location') {
       if (whatsapp.sendWhatsAppReaction) {
@@ -1437,6 +1437,11 @@ if (cluster.isPrimary) {
         await inventory.refreshInventoryCache(CONFIG);
       }
       
+      // Ensures worker processes have the technical documents hot in RAM
+      if (oracle && oracle.syncOracleDocs) {
+        await oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+      }
+
       await hydrateQBOCache();
 
     } catch (err) {
