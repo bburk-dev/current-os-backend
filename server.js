@@ -1,7 +1,7 @@
 /**
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Native Meta Graph Webhooks, QBO Finance Copilot,
+ * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
  *          Message Deduplication Buffer, Conversational Voice Estimates,
  *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
  *          Conversational Clarification Engine, Ambient Multi-Turn Memory,
@@ -26,6 +26,7 @@ if (!globalThis.fetch) {
 try { require('dotenv').config(); } catch (e) {}
 
 const express = require('express');
+const cluster = require('cluster');
 const os = require('os');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -39,6 +40,7 @@ const whatsapp = require('./whatsapp');
 // 1. GLOBAL CONFIGURATION & SECRETS (NO WHAPI)
 // ====================================================================
 const PORT = process.env.PORT || 3000;
+const numCPUs = process.env.WEB_CONCURRENCY || os.cpus().length || 1;
 
 const CONFIG = {
   port: PORT,
@@ -80,6 +82,7 @@ const CONFIG = {
   }
 };
 
+// Universal WhatsApp message dispatcher adapter
 function dispatchOutboundWhatsApp(targetOrConfig, textOrTarget, possibleText) {
   if (possibleText !== undefined) {
     return whatsapp.sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText);
@@ -87,6 +90,7 @@ function dispatchOutboundWhatsApp(targetOrConfig, textOrTarget, possibleText) {
   return whatsapp.sendWhatsAppMessage(CONFIG, targetOrConfig, textOrTarget);
 }
 
+// Universal WhatsApp interactive button dispatcher adapter
 function dispatchOutboundButtons(targetOrConfig, textOrTarget, possibleButtonsOrText, possibleButtons) {
   if (possibleButtons !== undefined) {
     return whatsapp.sendWhatsAppButtons(targetOrConfig, textOrTarget, possibleButtonsOrText, possibleButtons);
@@ -103,9 +107,9 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
 
-// In-Memory Message Deduplication Store (Global Singleton)
+// In-Memory Message Deduplication Store (Guards against Meta burst-retries)
 const processedMessageIds = new Map();
-const DEDUP_TTL_MS = 60 * 1000;
+const DEDUP_TTL_MS = 300 * 1000; // Increased to 5 minutes
 
 const memoryCache = {
   sites: null,
@@ -296,6 +300,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
         const errorMsg = errorData?.error?.message || '';
         
         if (res.status === 422) {
+          // Robust regex catching colons and varied Airtable error formats
           const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) ||
                         errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
           if (match && match[1]) {
@@ -466,7 +471,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// Inbound Event Pipeline with 60-Second Message Deduplication
+// Inbound Event Pipeline with 5-Minute Message Deduplication
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
@@ -486,7 +491,7 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
 
-  // 1. Idempotency Check (Global Singleton via Single-Threaded Architecture)
+  // 1. Immutable Pre-Execution Deduplication Matrix
   const now = Date.now();
   if (processedMessageIds.has(messageId)) {
     console.log(`[Meta Ingress] 🛡️ Deduplicated messageId: ${messageId} (Already processed in active window)`);
@@ -522,7 +527,6 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Message Type': message.type || 'text',
