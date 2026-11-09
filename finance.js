@@ -127,11 +127,11 @@ async function resolveCategoryItemRef(config, categoryName, descriptionContext =
     matched = items.find(i => /court|padel|panoramic/i.test(i.Name || '') && !/pickleball|glass|turf|sand|mesh|lights/i.test(i.Name || '')) ||
               items.find(i => /court/i.test(i.Name || '') && !/pickleball|glass/i.test(i.Name || ''));
   } else if (cat.includes('install') || desc.includes('erect') || desc.includes('assembly')) {
-    matched = items.find(i => /install|assembly/i.test(i.Name || '') && !/delivery|logistics|freight/i.test(i.Name || '')) ||
-              items.find(i => /labor|labour/i.test(i.Name || ''));
+    matched = items.find(i => /install|assembly|labour|labor/i.test(i.Name || '') && !/delivery|logistics|freight/i.test(i.Name || '')) ||
+              items.find(i => /install/i.test(i.Description || ''));
   } else if (cat.includes('delivery') || cat.includes('freight') || desc.includes('forklift')) {
-    matched = items.find(i => /delivery|freight|shipping/i.test(i.Name || '') && !/install|logistics/i.test(i.Name || '')) ||
-              items.find(i => /delivery|freight/i.test(i.Description || ''));
+    matched = items.find(i => /delivery|freight|shipping|transport|logistics/i.test(i.Name || '')) ||
+              items.find(i => /delivery|freight|logistics/i.test(i.Description || ''));
   }
 
   if (!matched) {
@@ -160,7 +160,6 @@ async function resolveQboTaxCode(config, isTaxable = false) {
   }
 
   if (isTaxable) {
-    // Explicitly target standard Canadian HST codes
     const hstCode = cachedTaxCodes.find(t => t.Name === 'H' || t.Name === 'HST ON')
                     || cachedTaxCodes.find(t => /HST|13%/i.test(t.Name) && t.Taxable === true)
                     || cachedTaxCodes.find(t => t.Taxable === true && t.Name === 'TAX')
@@ -168,7 +167,6 @@ async function resolveQboTaxCode(config, isTaxable = false) {
                     || cachedTaxCodes[0];
     return { value: String(hstCode.Id) };
   } else {
-    // Explicitly target standard Canadian Exempt codes
     const exemptCode = cachedTaxCodes.find(t => t.Name === 'E' || t.Name === 'Exempt')
                        || cachedTaxCodes.find(t => /exempt|zero|0%|non/i.test(t.Name))
                        || cachedTaxCodes.find(t => t.Taxable === false)
@@ -501,8 +499,8 @@ JSON SCHEMA:
 
     if (typeof sendWhatsAppButtons === 'function') {
       const buttons = [
-        { id: `QBO_APPROVE_CO_${qboRes?.Estimate?.Id || '0'}`, title: "✅ Approve & Lock" },
-        { id: `QBO_EMAIL_EST_${qboRes?.Estimate?.Id || '0'}`, title: "✉️ Email to Client" }
+        { id: `QBO_APPROVE_CO_${qboRes?.Estimate?.Id || '0'}`, title: "Approve & Lock" },
+        { id: `QBO_EMAIL_EST_${qboRes?.Estimate?.Id || '0'}`, title: "Email to Client" }
       ];
       await sendWhatsAppButtons(config, dispatchTarget, card, buttons);
     } else {
@@ -813,7 +811,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     const taxAmt = (parseFloat(finalTotal) - computedSubtotal).toFixed(2);
 
     const lineBreakdown = compiled.line_items.map(li => 
-      `• *${li.category}:* $${li.amount.toFixed(2)} ${li.taxable ? '_(+HST)_' : '_(Exempt)_'}\n  ${li.description.replace(/\n/g, '\n  ')}`
+      `• *${li.category}:* $${li.amount.toFixed(2)} ${li.taxable ? '(+HST)' : '(Exempt)'}\n${li.description}`
     ).join('\n\n');
 
     const addressStr = customerAddress?.line1 ? `\n📍 *Site:* ${customerAddress.line1}, ${customerAddress.city || ''}` : '';
@@ -833,9 +831,9 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
 
     if (typeof sendWhatsAppButtons === 'function') {
       const buttons = [
-        { id: `QBO_EMAIL_EST_${est.Id}`, title: "✉️ Email to Client" },
-        { id: `QBO_CONVERT_${est.Id}_50`, title: "🧾 Bill 50% Draw" },
-        { id: `QBO_CONVERT_${est.Id}_100`, title: "📜 Bill 100% Full" }
+        { id: `QBO_EMAIL_EST_${est.Id}`, title: "Email to Client" },
+        { id: `QBO_CONVERT_${est.Id}_50`, title: "Bill 50% Draw" },
+        { id: `QBO_CONVERT_${est.Id}_100`, title: "Bill 100% Full" }
       ];
       await sendWhatsAppButtons(config, dispatchTarget, estCard, buttons);
     } else {
@@ -940,7 +938,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
 
     if (typeof sendWhatsAppButtons === 'function') {
       const buttons = [
-        { id: `QBO_EMAIL_INV_${inv.Id}`, title: "✉️ Email Invoice" }
+        { id: `QBO_EMAIL_INV_${inv.Id}`, title: "Email Invoice" }
       ];
       await sendWhatsAppButtons(config, dispatchTarget, invCard, buttons);
     } else {
@@ -985,7 +983,7 @@ async function handleInvoiceApproval(config, nlp, dispatchTarget, sendWhatsAppMe
                   `──────────────────────────────\n` +
                   `Tap below to execute and dispatch directly to client.`;
 
-  const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `✉️ Execute ${percentage}% Draw` }];
+  const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `Execute ${percentage}% Draw` }];
   await sendWhatsAppButtons(config, dispatchTarget, invCard, buttons);
 }
 
