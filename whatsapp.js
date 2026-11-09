@@ -9,7 +9,6 @@
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
-// Global fetch polyfill for clustered Node environments
 const fetch = globalThis.fetch || require('node-fetch');
 
 // ====================================================================
@@ -21,7 +20,6 @@ const lastDroppedCoordinates = new Map();
 const userActiveSiteMap = new Map();
 const dailyEasterEggTracker = new Map();
 
-// Ambient Multi-Turn Memory: Retains site and task context for 15 minutes
 const userSessionMemory = new Map();
 const SESSION_TTL_MS = 15 * 60 * 1000;
 
@@ -265,13 +263,6 @@ async function geocodeAddressWithGoogle(config, addressString) {
   }
 }
 
-function getGoogleMapsLinks(lat, lon) {
-  return {
-    directions: `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`,
-    satellite: `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=20&basemap=satellite`
-  };
-}
-
 function haversineDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -463,7 +454,6 @@ async function triageSpokenOrTextNLP(config, rawInput, activeSitesList = [], isA
 
   const intentPrompt = `You are the Titan OS Ambient Intelligence Scribe for Bounce Padel court operations and QuickBooks Online headless ERP.
 Your mission: Translate natural, informal, spoken voice memos and field text into structured operational and financial commands.
-Field operatives work on active construction sites—they speak quickly, use slang ("k" for thousand, "half", "draw", "plus HST"), speak polyglot (Spanish/English), and do not speak like accountants.
 
 ACTIVE REGISTERED SITES: [${siteListStr}]
 ACTIVE BOUND SITE CONTEXT: "${boundSiteName}"
@@ -471,11 +461,6 @@ ACTIVE BOUND SITE CONTEXT: "${boundSiteName}"
 RULES FOR INTENT RECOGNITION:
 1. CREATE_ESTIMATE:
    - Operative wants to quote, estimate, or price a build, court, or service.
-   - Examples:
-     * "build an estimate for RCOR for one panoramic paddle court for $70,000 plus HST"
-     * "I want to build an estimate, please build an estimate for one panoramic paddle court for $70,000 plus HST"
-     * "quote 65k for standard court for Miami Shores"
-     * "presupuesto para una pista panoramica por 70 mil mas HST"
    - EXTRACT:
      * qbo_customer_name: Look for a client, club, or site name. IF NO CLIENT IS MENTIONED, use ACTIVE BOUND SITE CONTEXT: "${boundSiteName}".
      * qbo_amount: Extract numeric value (e.g. 70000, 65000). Handle "70k" -> 70000, "setenta mil" -> 70000.
@@ -485,46 +470,27 @@ RULES FOR INTENT RECOGNITION:
 
 2. CONVERT_ESTIMATE:
    - Operative wants to convert an existing estimate into a partial or full progress draw / invoice.
-   - Examples:
-     * "convert estimate 1045 to a 50% invoice"
-     * "convert the RCOR estimate to 40% draw"
-     * "bill 50% on Burke site"
-     * "execute 30% progress draw for RCOR"
-     * "factura el 50 por ciento del presupuesto de RCOR"
-   - EXTRACT:
-     * qbo_customer_name: Customer/site name.
-     * qbo_estimate_number: Numeric string of estimate if mentioned (e.g. "1045", "1022"), else null.
-     * qbo_invoice_percentage: Numeric percentage (e.g. 50, 40, 30, 100). Default to 100 if "convert to invoice" without percentage.
 
 3. CREATE_INVOICE:
    - Operative wants to bill or invoice DIRECTLY without prior estimate.
-   - Examples:
-     * "invoice Miami Shores $4,500 for emergency net replacement and court realignment"
-     * "bill David $1,200 for silica sand infill"
-     * "create invoice for 3000 to RCOR"
-     * "factura directa a RCOR por 3500 por cambio de red"
-   - EXTRACT:
-     * qbo_customer_name: Customer name. IF NOT SPOKEN, inherit "${boundSiteName}".
-     * qbo_amount: Numeric billing value.
-     * qbo_line_items: Description of scope.
-     * apply_tax: true/false.
 
 4. CHANGE_ORDER:
    - Scope modification, client addition, or extra physical work requested in the field.
-   - Examples: "client wants 2 extra lights and 1 foot extra concrete on north beam", "change order on Court 2 for extra excavation".
 
 5. AR_LOOKUP:
    - Queries regarding accounts receivable, overdue invoices, 30+ aging, balances.
-   - Examples: "what is my 30+ ar", "ar report", "who owes money", "aging balance".
 
 6. ORACLE_QUERY:
    - Engineering specifications, foundation slab drawings, hurricane wind loads, glass gasket requirements.
 
 7. INVENTORY_QUERY:
-   - Material counts, depletion logs ("used 2 tubs turf glue", "check inventory", "stock on anchors").
+   - Material counts, depletion logs.
 
 8. CHECKIN / GENERAL_UPDATE:
    - Operational site notes, status reports.
+
+CRITICAL INSTRUCTION FOR TRANSCRIPT:
+You MUST output the EXACT, FULL, VERBATIM word-for-word transcript of the audio in the 'transcript_en' field. Do NOT summarize it. Every spelled-out word or email address must be preserved exactly as spoken.
 
 Return STRICTLY a JSON object with this schema:
 {
@@ -536,7 +502,7 @@ Return STRICTLY a JSON object with this schema:
   "qbo_line_items": "string or null",
   "apply_tax": boolean,
   "tax_code_name": "string or null",
-  "transcript_en": "string (clean English transcript or translated command)"
+  "transcript_en": "string (CRITICAL: Full verbatim word-for-word transcript. Never summarize.)"
 }`;
 
   const contentParts = [{ text: intentPrompt }];
@@ -638,8 +604,6 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
     const visualTruth = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
     
-    // "Be Water" Zero-Dead-End Clarification: If non-court hardware or a macro component is shown,
-    // log it without blocking or scolding the worker with rigid errors.
     if (visualTruth.is_padel_court === false) {
       console.log(`[Vision Ingress] Component/macro detail detected (${visualTruth.detected_scene}). Logging to site record.`);
       
@@ -704,11 +668,6 @@ async function uploadMediaToSupabase(config, buffer, mimeType) {
   }
 }
 
-/**
- * Master Asynchronous Multi-Gate Construction & Maintenance Batch Processor
- * Eliminates false linear dependencies: multiple trades working concurrently on different
- * gates (e.g. turf gluing while net posts and light masts are hung) are evaluated simultaneously.
- */
 async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracleFileURIs = []) {
   if (!batch || !batch.items || batch.items.length === 0) return;
 
@@ -721,7 +680,6 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
 
   console.log(`[Media Engine] Initiating Asynchronous Multi-Gate Sweep on ${batch.items.length} items for ${site?.fields?.['Site Name'] || 'Unbound Court'}`);
 
-  // 1. Blind Visual Screen on First Visual Frame
   const primaryVisualItem = batch.items.find(i => i.type === 'video' || i.type === 'image');
   if (primaryVisualItem) {
     const truth = await inspectBlindVisualGroundTruth(
@@ -738,22 +696,18 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
     }
   }
 
-  // 2. Concurrently Upload First Asset to Supabase Private Media Vault
   let signedMediaUrl = null;
   if (primaryVisualItem) {
     signedMediaUrl = await uploadMediaToSupabase(config, primaryVisualItem.buffer, primaryVisualItem.mimeType);
   }
 
-  // 3. Resolve Previous Cumulative Gate State
   const workflowMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
   const siteName = site?.fields?.['Site Name'] || 'Active Build';
   const currentGateRaw = site?.fields?.['Current Gate'] || '0';
 
-  // Extract all previously verified gate numbers into a resilient bitmask Set
   const prevNumbers = (String(currentGateRaw).match(/\b([1-9]|1[0-2])\b/g) || []).map(Number);
   const verifiedSet = new Set(prevNumbers);
 
-  // If stored historically as a single legacy integer like "Gate 4", backfill 1..4
   if (verifiedSet.size === 1) {
     const singleVal = Array.from(verifiedSet)[0];
     for (let i = 1; i <= singleVal; i++) verifiedSet.add(i);
@@ -761,42 +715,34 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
 
   const verifiedArrayStr = Array.from(verifiedSet).sort((a,b)=>a-b).join(', ') || 'None';
 
-  // 4. Construct Multi-Gate Parallel Evaluation Prompt
   const evaluationPrompt = `You are the Lead Forensic Civil Engineer and Master Commissioning Agent for Bounce Padel courts worldwide.
 Analyze the provided visual sweep and ambient audio of site: "${siteName}".
 Workflow Mode: ${workflowMode}
 Previously Verified Milestones: [${verifiedArrayStr}]
 
 THE 12 ASYNCHRONOUS PADEL GATES TAXONOMY:
-- Gate 1: Concrete Slab Foundation (Bare concrete slab, sub-base, ring-beam embed anchors)
-- Gate 2: Structural Steel Columns & Ring Beam Assembled
-- Gate 3: Electro-welded Mesh & Corner Pillars Bolted
-- Gate 4: Tempered Glass Panels Seating (10mm or 12mm glass secured with gaskets)
-- Gate 5: Light Masts & LED Fixtures Erected
-- Gate 6: Artificial Turf Carpet Layout & Alignment
-- Gate 7: Turf Seam Gluing & Play-Line Inlays Cut
-- Gate 8: Silica Sand Infill & Machine Brushing
-- Gate 9: Regulation Net & Tension Posts Calibrated
-- Gate 10: Player Access Doors & Hardware Functional
-- Gate 11: Electrical Wiring & Lighting Operational Test Verified
-- Gate 12: Site Cleanliness & Handover Commissioning (Pristine court, zero tools, zero construction debris)
-
-NON-BINARY / ASYNCHRONOUS FIELD REALITY:
-Trades work in parallel. A crew does NOT wait for turf seams (Gate 7) or sand (Gate 8) to dry before erecting net posts (Gate 9) or hanging doors (Gate 10).
-Evaluate each gate INDEPENDENTLY:
-1. "completed_gates": List EVERY gate that is clearly finished and structurally sound in the visual frames.
-2. "in_progress_gates": List EVERY gate that operatives are currently working on in parallel.
-3. Non-Monotonic Cleanliness Rule: If active tools, trash, or turf scraps are on the court slab, Gate 12 CANNOT be completed, and is_clean MUST be false.
+- Gate 1: Concrete Slab Foundation
+- Gate 2: Structural Steel Columns & Ring Beam
+- Gate 3: Electro-welded Mesh & Pillars
+- Gate 4: Tempered Glass Panels Seating
+- Gate 5: Light Masts & LED Fixtures
+- Gate 6: Artificial Turf Carpet Layout
+- Gate 7: Turf Seam Gluing & Play-Lines
+- Gate 8: Silica Sand Infill
+- Gate 9: Regulation Net & Tension Posts
+- Gate 10: Player Access Doors & Hardware
+- Gate 11: Electrical Wiring & Lighting
+- Gate 12: Site Cleanliness & Handover
 
 Return STRICTLY JSON:
 {
-  "completed_gates": array of integers (e.g. [1, 2, 3, 4, 5, 9]),
-  "in_progress_gates": array of integers (e.g. [6, 7]),
+  "completed_gates": array of integers,
+  "in_progress_gates": array of integers,
   "is_clean": boolean,
   "blockers_detected": array of strings,
-  "headline": string (concise punchy operational status, e.g. "Turf Seaming & Net Calibration Underway"),
-  "summary": string (2-3 sentences explaining visual evidence across all active trades),
-  "predictive_next_actions": string (predictive parallel instructions for field crews)
+  "headline": string,
+  "summary": string,
+  "predictive_next_actions": string
 }`;
 
   const geminiParts = [{ text: evaluationPrompt }];
@@ -831,13 +777,11 @@ Return STRICTLY JSON:
     const rawAiText = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
     const evalResult = JSON.parse(rawAiText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
 
-    // 5. Merge Asynchronous Verifications into Cumulative Memory
     const newlyCompleted = Array.isArray(evalResult.completed_gates) ? evalResult.completed_gates : [];
     newlyCompleted.forEach(g => {
       if (g >= 1 && g <= 12) verifiedSet.add(g);
     });
 
-    // Enforce Non-Monotonic Cleanliness Demotion on Gate 12
     if (!evalResult.is_clean) {
       verifiedSet.delete(12);
       if (!evalResult.blockers_detected.some(b => /clean|debris|trash|herramienta|basura/i.test(b))) {
@@ -850,7 +794,6 @@ Return STRICTLY JSON:
     const highestGate = verifiedList.length > 0 ? Math.max(...verifiedList) : 0;
     const inProgressList = (evalResult.in_progress_gates || []).filter(g => !verifiedSet.has(g));
 
-    // Autonomous Mode Handover: STRICTLY requires all 12 discrete gates to be verified
     const allTwelveVerified = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].every(g => verifiedSet.has(g));
     let newWorkflowMode = workflowMode;
     let newSiteStatus = site?.fields?.['Site Status'] || 'ACTIVE';
@@ -859,12 +802,10 @@ Return STRICTLY JSON:
       newSiteStatus = 'ACTIVE';
     }
 
-    // Format Current Gate string: Retains "Gate X" prefix for Airtable formulas while showing total verified
     const gateString = allTwelveVerified 
       ? 'Gate 12 - Commissioned' 
       : `Gate ${highestGate} (${totalVerifiedCount}/12 Verified)`;
 
-    // 6. Persist to Airtable Reports 2 (Primary Operational Hub)
     if (typeof airtableWriteWithAutoDrop === 'function') {
       const reportPayload = {
         'Workflow Mode': newWorkflowMode,
@@ -889,14 +830,12 @@ Return STRICTLY JSON:
       }
     }
 
-    // 7. Update In-Memory Session Context
     updateSessionContext(dispatchTarget, {
       lastSiteId: site?.id,
       verifiedGates: verifiedList,
       inProgressGates: inProgressList
     });
 
-    // 8. Dispatch Ergonomic WhatsApp Status Card (Parallel & Spanish-Aware)
     const isSpanish = String(workerLang).toLowerCase().includes('span');
     const blockersText = evalResult.blockers_detected?.length > 0
       ? `\n⚠️ *${isSpanish ? 'Obstáculos' : 'Blockers'}:*\n` + evalResult.blockers_detected.map(b => `• ${b}`).join('\n')
