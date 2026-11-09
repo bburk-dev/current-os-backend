@@ -420,6 +420,7 @@ JSON SCHEMA:
     const estPayload = {
       CustomerRef: customerRef,
       GlobalTaxCalculation: "TaxExcluded",
+      TxnTaxDetail: { TxnTaxCodeRef: defaultTaxRef },
       Line: qboLines,
       TxnStatus: "Pending",
       CustomField: [{
@@ -430,8 +431,9 @@ JSON SCHEMA:
     };
 
     const qboRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
-    const estimateDocNumber = qboRes?.Estimate?.DocNumber || `CO-${Date.now().toString().slice(-4)}`;
+    const estimateDocNumber = qboRes?.Estimate?.DocNumber || qboRes?.Estimate?.Id || `CO-${Date.now().toString().slice(-4)}`;
     const totalFormatted = changeOrder.total_amount.toFixed(2);
+    const finalTotal = qboRes?.Estimate?.TotalAmt || totalFormatted;
 
     const breakdownText = changeOrder.line_items.map(i => `• ${i.description} (x${i.quantity}): $${i.amount.toFixed(2)}`).join('\n');
 
@@ -443,7 +445,8 @@ JSON SCHEMA:
                  `──────────────────────────────\n` +
                  `${breakdownText}\n` +
                  `──────────────────────────────\n` +
-                 `💰 *Total Adjustment:* $${totalFormatted} USD\n` +
+                 `💰 *Subtotal Adjustment:* $${totalFormatted}\n` +
+                 `💵 *Total (Inc. Tax):* $${parseFloat(finalTotal).toFixed(2)}\n` +
                  `🧾 *Estimate Ref:* #${estimateDocNumber} (Pending HQ Approval)`;
 
     if (typeof sendWhatsAppButtons === 'function') {
@@ -531,7 +534,7 @@ Amount Provided: $${amount}
 
 RULES:
 1. If the user mentions a specific court type (e.g. "panoramic paddle court"), find the template description for it and use it.
-2. Determine if the user asked for taxes to be applied (e.g., "plus HST", "add tax").
+2. CRITICAL: If the user says "plus HST", "add tax", or mentions taxes, you MUST set "apply_tax": true.
 3. Do not include the price in the description text; it is mapped to a separate variable.
 4. Output STRICTLY in JSON format.
 
@@ -616,16 +619,25 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     Line: [lineItem]
   };
 
+  if (expandedContext.apply_tax) {
+    estPayload.TxnTaxDetail = { TxnTaxCodeRef: taxCodeRef };
+  }
+
   const createRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
   
   if (createRes && createRes.Estimate) {
     const cleanDesc = safeDesc.length > 150 ? safeDesc.slice(0, 150) + '...' : safeDesc;
     
+    // Fallback to Id if DocNumber is disabled in QBO company settings
+    const estDocNumber = createRes.Estimate.DocNumber || createRes.Estimate.Id || 'PENDING';
+    const finalTotal = createRes.Estimate.TotalAmt || amount;
+    
     const estCard = `🧾 *TITAN OS | ESTIMATE DRAFTED*\n` +
                     `──────────────────────────────\n` +
-                    `*Estimate:* #${createRes.Estimate.DocNumber}\n` +
+                    `*Estimate:* #${estDocNumber}\n` +
                     `*Client:* ${customerRef.name}\n` +
                     `*Subtotal:* $${parseFloat(amount).toFixed(2)}\n` +
+                    `*Total (Inc. Tax):* $${parseFloat(finalTotal).toFixed(2)}\n` +
                     `*Tax Applied:* ${expandedContext.apply_tax ? 'Yes 🇨🇦' : 'No'}\n` +
                     `──────────────────────────────\n` +
                     `📋 *Scope:*\n_${cleanDesc}_\n\n` +
@@ -677,14 +689,22 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
     Line: [lineItem]
   };
 
+  if (expandedContext.apply_tax) {
+    invoicePayload.TxnTaxDetail = { TxnTaxCodeRef: taxCodeRef };
+  }
+
   const createRes = await qboApiRequest(config, '/invoice', 'POST', invoicePayload);
   
   if (createRes && createRes.Invoice) {
+    const invDocNumber = createRes.Invoice.DocNumber || createRes.Invoice.Id || 'PENDING';
+    const finalTotal = createRes.Invoice.TotalAmt || amount;
+
     const invCard = `🧾 *TITAN OS | INVOICE CREATED*\n` +
                     `──────────────────────────────\n` +
-                    `*Invoice:* #${createRes.Invoice.DocNumber}\n` +
+                    `*Invoice:* #${invDocNumber}\n` +
                     `*Client:* ${customerRef.name}\n` +
-                    `*Amount:* $${parseFloat(amount).toFixed(2)}\n` +
+                    `*Subtotal:* $${parseFloat(amount).toFixed(2)}\n` +
+                    `*Total (Inc. Tax):* $${parseFloat(finalTotal).toFixed(2)}\n` +
                     `*Tax Applied:* ${expandedContext.apply_tax ? 'Yes' : 'No'}\n` +
                     `──────────────────────────────\n` +
                     `✅ Invoice generated successfully.`;
