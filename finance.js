@@ -160,9 +160,9 @@ async function resolveQboTaxCode(config, isTaxable = false) {
   }
 
   if (isTaxable) {
-    // Explicit matching for Canadian AST rules
-    const hstCode = cachedTaxCodes.find(t => /HST|13%|Ontario/i.test(t.Name || t.Description || ''))
-                    || cachedTaxCodes.find(t => t.Taxable === true && t.Name !== 'TAX')
+    // Explicitly target the Canadian AST Tax Code ID for HST ON
+    const hstCode = cachedTaxCodes.find(t => /HST ON|HST \(ON\)|HST/i.test(t.Name))
+                    || cachedTaxCodes.find(t => t.Taxable === true && t.Name !== 'TAX' && t.Name !== 'NON')
                     || cachedTaxCodes.find(t => t.Taxable === true)
                     || cachedTaxCodes[0];
     return { value: String(hstCode.Id) };
@@ -620,10 +620,10 @@ TASK:
 2. Deconstruct the order into individual, highly professional construction line items.
 3. For each line item:
    - Identify category: "COURT", "INSTALLATION", "DELIVERY", or "ACCESSORY".
-   - CRITICAL INSTRUCTION FOR DESCRIPTIONS: DO NOT hallucinate or generate generic architectural copy. You MUST extract the EXACT, VERBATIM line item descriptions below:
-     - For "COURT", output EXACTLY this string: "Panoramic Padel Court - BLACK Main steel structure around glass HSS 2\\\"x6\\\"x.01\\\" Main steel structure around mesh panels HSS 2\\\"x4\\\"x0125\\\" Mesh panels made of: 1.5\\\"x.100\\\" square tube 1/8\\\" formed plate 2\\\"x2\\\"x1/8\\\" Welded wire mesh Fasteners: All required stainless fasteners for assembly. Lights - 4 posts and 8 LED lights Glass: 1995mmx2995mmx12mmx18 pieces of tempered glass per court (All glass certified by US Safety Glazing Certification Council (SGCC), and in alignment with the American National Standards Institute (ANSI) accreditation.) SAND: 3300 pounds silica sand Mondo XN Super Turf - Green"
+   - CRITICAL INSTRUCTION FOR DESCRIPTIONS: DO NOT hallucinate or generate generic architectural copy. You MUST extract the EXACT, VERBATIM line item descriptions from the attached "Sample Estimate_2.pdf" for the corresponding category, preserving all newlines and bullet points.
+     - For "COURT", copy the full text starting from "Panoramic Padel Court - BLACK" down to "Mondo XN Super Turf - Green".
      - For "INSTALLATION", describe turnkey physical court assembly and mechanical erection.
-     - For "DELIVERY", output EXACTLY this string: "ALL INCLUSIVE - Delivery to final installation - Forklift 12K to unload - Unloading team and tools"
+     - For "DELIVERY", output EXACTLY this string with bullet points: "ALL INCLUSIVE\n• Delivery to final installation\n• Forklift 12K to unload\n• Unloading team and tools"
    - Extract unit price and line total.
    - Determine taxability: mark "taxable": true ONLY if "plus HST", "add tax", or standard taxable is implied. Mark "taxable": false if the operative explicitly says "tax exempt" or "zero cost".
 
@@ -690,7 +690,7 @@ OUTPUT STRICTLY JSON:
     line_items: [
       {
         category: "COURT",
-        description: "Panoramic Padel Court - BLACK Main steel structure around glass HSS 2\"x6\"x.01\" Main steel structure around mesh panels HSS 2\"x4\"x0125\" Mesh panels made of: 1.5\"x.100\" square tube 1/8\" formed plate 2\"x2\"x1/8\" Welded wire mesh Fasteners: All required stainless fasteners for assembly. Lights - 4 posts and 8 LED lights Glass: 1995mmx2995mmx12mmx18 pieces of tempered glass per court (All glass certified by US Safety Glazing Certification Council (SGCC), and in alignment with the American National Standards Institute (ANSI) accreditation.) SAND: 3300 pounds silica sand Mondo XN Super Turf - Green",
+        description: "Panoramic Padel Court - BLACK\nMain steel structure around glass HSS 2\"x6\"x.01\"\nMain steel structure around mesh panels HSS 2\"x4\"x0125\"\nMesh panels made of:\n1.5\"x.100\" square tube\n1/8\" formed plate\n2\"x2\"x1/8\" Welded wire mesh\nFasteners:\nAll required stainless fasteners for assembly.\nLights - 4 posts and 8 LED lights\nGlass: 1995mmx2995mmx12mmx18 pieces of tempered glass per court (All glass certified by US Safety Glazing Certification Council (SGCC), and in alignment with the American National Standards Institute (ANSI) accreditation.)\nSAND: 3300 pounds silica sand\nMondo XN Super Turf - Green",
         quantity: 1,
         unit_price: 70000,
         amount: 70000,
@@ -706,7 +706,7 @@ OUTPUT STRICTLY JSON:
       },
       {
         category: "DELIVERY",
-        description: "ALL INCLUSIVE - Delivery to final installation - Forklift 12K to unload - Unloading team and tools",
+        description: "ALL INCLUSIVE\n• Delivery to final installation\n• Forklift 12K to unload\n• Unloading team and tools",
         quantity: 1,
         unit_price: 2000,
         amount: 2000,
@@ -729,7 +729,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   const compiled = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
 
   const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'Wendy Burk';
-  const customerEmail = compiled.customer?.email || nlp.email || null;
+  const customerEmail = nlp.qbo_customer_email || compiled.customer?.email || nlp.email || null;
   const customerAddress = compiled.customer?.address || null;
 
   const customerRef = await findOrCreateQboCustomer(config, customerNameTarget, customerEmail, nlp.phone, customerAddress);
@@ -739,6 +739,8 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
 
   const hstTaxRef = await resolveQboTaxCode(config, true);
   const exemptTaxRef = await resolveQboTaxCode(config, false);
+  
+  console.log(`[QBO Tax] Resolved HST TaxRef: ${hstTaxRef.value}, Exempt TaxRef: ${exemptTaxRef.value}`);
 
   let computedSubtotal = 0;
   const qboLines = [];
@@ -772,14 +774,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     Line: qboLines
   };
 
-  // Enforce global Canadian Tax Detail requirement to trigger AST Engine
-  if (hstTaxRef && hstTaxRef.value) {
-    estPayload.TxnTaxDetail = {
-      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
-    };
-  }
-
-  // Force explicit Email population from the resolved customer entity or the raw NLP intent
+  // Enforce explicit Email population from the transcript extraction fallback
   if (customerRef.email) {
     estPayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
   } else if (customerEmail) {
@@ -808,8 +803,8 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     const taxAmt = (parseFloat(finalTotal) - computedSubtotal).toFixed(2);
 
     const lineBreakdown = compiled.line_items.map(li => 
-      `• *${li.description.replace(/\n/g, ' ').slice(0, 32)}..:* $${li.amount.toFixed(2)} ${li.taxable ? '_(+HST)_' : '_(Exempt)_'}`
-    ).join('\n');
+      `• *${li.category}:* $${li.amount.toFixed(2)} ${li.taxable ? '_(+HST)_' : '_(Exempt)_'}\n  _${li.description.replace(/\n/g, '\n  ')}_`
+    ).join('\n\n');
 
     const addressStr = customerAddress?.line1 ? `\n📍 *Site:* ${customerAddress.line1}, ${customerAddress.city || ''}` : '';
     const emailStr = (customerRef.email || customerEmail) ? `\n✉️ *Email:* ${customerRef.email || customerEmail}` : '';
@@ -851,7 +846,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   const compiled = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
 
   const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'Wendy Burk';
-  const customerEmail = compiled.customer?.email || nlp.email || null;
+  const customerEmail = nlp.qbo_customer_email || compiled.customer?.email || nlp.email || null;
   const customerAddress = compiled.customer?.address || null;
 
   const customerRef = await findOrCreateQboCustomer(config, customerNameTarget, customerEmail, nlp.phone, customerAddress);
@@ -890,12 +885,6 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
     GlobalTaxCalculation: "TaxExcluded",
     Line: qboLines
   };
-
-  if (hstTaxRef && hstTaxRef.value) {
-    invoicePayload.TxnTaxDetail = {
-      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
-    };
-  }
 
   if (customerRef.email) {
     invoicePayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
