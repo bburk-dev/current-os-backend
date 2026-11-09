@@ -4,7 +4,7 @@
  * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
  *          Message Deduplication Buffer, Conversational Voice Estimates,
  *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
- *          RBAC Bouncer, and Zero-UI Site Provisioning
+ *          Conversational Clarification Engine, RBAC Bouncer, and Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -716,6 +716,25 @@ app.post('/webhook', async (req, res) => {
               return;
             }
           }
+
+          // Fallback clarification
+          if (spokenTriage.intent === 'UNKNOWN' || spokenTriage.intent === 'GENERAL_UPDATE') {
+            const transcript = spokenTriage.transcript_en || '';
+            const isActionable = transcript.length > 10 && (transcript.includes('need') || transcript.includes('broken') || transcript.includes('missing') || transcript.includes('finished'));
+            if (isActionable) {
+               if (!boundSite) {
+                 whatsapp.updateSessionContext && whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
+                 await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at?`);
+                 return;
+               }
+               await airtableWriteWithAutoDrop('Sites', {
+                 'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
+                 'Last Intent': 'GENERAL_UPDATE'
+               }, boundSite.id);
+               await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
+               return;
+            }
+          }
         }
       }
       return;
@@ -972,7 +991,34 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      console.log(`[Text Engine] General triage fallthrough: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
+      // 9. Conversational Clarification & Zero-Dead-End Recovery
+      if (!triage || triage.intent === 'UNKNOWN' || triage.intent === 'GENERAL_UPDATE') {
+        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished'));
+        
+        if (isActionable) {
+           console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
+           
+           if (!boundSite) {
+             // Operative isn't checked into a site. Prompt them naturally.
+             whatsapp.updateSessionContext && whatsapp.updateSessionContext(fromPhone, { pendingText: txt });
+             await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at? (Reply with the court name).`);
+             return;
+           }
+
+           // If bound, log it as an ambient update
+           await airtableWriteWithAutoDrop('Sites', {
+             'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
+             'Last Intent': 'GENERAL_UPDATE'
+           }, boundSite.id);
+
+           await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
+           return;
+        }
+
+        console.log(`[Text Engine] General conversational fallthrough: ignored.`);
+        return;
+      }
+      
       return;
     }
 
@@ -1245,7 +1291,7 @@ if (cluster.isPrimary) {
   
   if (oracle && oracle.syncOracleDocs) {
     oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-    setInterval(() => { oracleFileURIs = uris; });
+    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
   }
 
   for (let i = 0; i < numCPUs; i++) cluster.fork();
