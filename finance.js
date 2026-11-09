@@ -54,11 +54,12 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
     method,
     headers: {
       'Authorization': `Bearer ${config.qbo.accessToken}`,
-      'Accept': 'application/json'
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
     }
   };
   
-  // FIX: Prevent QBO HTTP 500 NullPointerException on empty POST requests (like /send)
+  // Prevent QBO HTTP 500 NullPointerException on empty POST requests
   if (body) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
@@ -488,7 +489,7 @@ JSON SCHEMA:
     const totalFormatted = changeOrder.total_amount.toFixed(2);
     const finalTotal = qboRes?.Estimate?.TotalAmt || totalFormatted;
 
-    const breakdownText = changeOrder.line_items.map(i => `• ${i.description.replace(/\n/g, ' ').slice(0, 32)}.. (x${i.quantity}): $${i.amount.toFixed(2)}`).join('\n');
+    const breakdownText = changeOrder.line_items.map(i => `• ${i.description}\n`).join('\n');
 
     const card = `📝 *TITAN OS | CHANGE-ORDER DRAFTED*\n` +
                  `──────────────────────────────\n` +
