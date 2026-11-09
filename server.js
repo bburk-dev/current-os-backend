@@ -519,7 +519,6 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2 (Field name schema aligned to "Phone")
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Phone': fromPhone,
