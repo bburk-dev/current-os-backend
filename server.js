@@ -480,7 +480,7 @@ app.post('/webhook', async (req, res) => {
   const entry = body.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
   
-  if (changes?.statuses) return; // Drop read/delivery receipts
+  if (changes?.statuses) return; // Drop receipts
 
   const message = changes?.messages?.[0];
   if (!message) return;
@@ -490,7 +490,7 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
 
-  // 1. Idempotency Check: Prevent duplicate processing of Meta retry bursts
+  // 1. Idempotency Check
   const now = Date.now();
   if (processedMessageIds.has(messageId)) {
     console.log(`[Meta Ingress] 🛡️ Deduplicated messageId: ${messageId} (Already processed in active window)`);
@@ -498,7 +498,6 @@ app.post('/webhook', async (req, res) => {
   }
   processedMessageIds.set(messageId, now);
 
-  // Sweep memory cache of expired message IDs (>60s)
   for (const [id, timestamp] of processedMessageIds.entries()) {
     if (now - timestamp > DEDUP_TTL_MS) {
       processedMessageIds.delete(id);
@@ -527,7 +526,7 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2 (Strictly safe fields)
+    // Resilient write to Inbound Messages 2 (Safe fields, prevents 422 rejections)
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Message Type': message.type || 'text',
@@ -702,7 +701,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ================================================================
-    // B. STANDALONE SPOKEN VOICE NOTE INTAKE (BE THE WATER AUDIO ENGINE)
+    // B. STANDALONE SPOKEN VOICE NOTE INTAKE
     // ================================================================
     if (message.type === 'audio' || message.type === 'voice') {
       const mediaObj = message[message.type];
@@ -848,7 +847,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ================================================================
-    // C. LOCATION DROPS (Proof of Presence, Weather & Site Discovery)
+    // C. LOCATION DROPS
     // ================================================================
     if (message.type === 'location') {
       if (whatsapp.sendWhatsAppReaction) {
@@ -1057,7 +1056,7 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 4. Dynamic Progress Draw Conversion (Percentage-Based)
+      // 4. Dynamic Progress Draw Conversion
       if (triage?.intent === 'CONVERT_ESTIMATE' || lTxt.includes('convert to') || lTxt.includes('% invoice') || lTxt.includes('draw')) {
         if (finance && finance.handleInvoiceApproval) {
           await finance.handleInvoiceApproval(
@@ -1071,7 +1070,7 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 5. Direct Voice / Text Invoicing (Without Prior Estimate)
+      // 5. Direct Invoicing
       if (triage?.intent === 'CREATE_INVOICE' || lTxt.includes('create invoice') || lTxt.includes('direct invoice') || lTxt.startsWith('/invoice')) {
         if (finance && finance.handleInvoiceCreation) {
           await finance.handleInvoiceCreation(
@@ -1086,7 +1085,7 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 6. Conversational Subcontractor Change-Orders & Scope Variations
+      // 6. Subcontractor Change-Orders
       if (triage?.intent === 'CHANGE_ORDER' || lTxt.includes('change order') || lTxt.includes('change-order') || lTxt.includes('variation') || lTxt.startsWith('/changeorder') || lTxt.startsWith('/co')) {
         if (finance && finance.handleConversationalChangeOrder) {
           await finance.handleConversationalChangeOrder(
@@ -1102,7 +1101,7 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 7. Oracle RAG Engine (Engineering, Foundations, Lighting Specs)
+      // 7. Oracle RAG Engine
       if (triage?.intent === 'ORACLE_QUERY' || lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
         if (oracle && oracle.handleOracleQuery) {
           await oracle.handleOracleQuery(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
@@ -1110,7 +1109,7 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 8. Inventory Tracking & Material Depletion
+      // 8. Inventory Tracking
       if (triage?.intent === 'INVENTORY_QUERY' || lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
         if (inventory && inventory.handleSpokenInventorySnapshot) {
           await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
@@ -1371,7 +1370,7 @@ app.post('/api/sync-oracle', async (req, res) => {
   }
 });
 
-// Helper: Resolve Caller Identity from Relational Workers Cache across multiple column variations
+// Helper: Resolve Caller Identity from Relational Workers Cache
 async function resolveIdentity(fromPhone) {
   const workers = await getCachedWorkers();
   const cleanDigits = String(fromPhone).replace(/\D/g, '');
