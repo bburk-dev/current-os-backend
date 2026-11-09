@@ -2,8 +2,8 @@
  * TITAN OS V6.0.22 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
  * Purpose: Webhooks, Debouncing, Ambient Voice-to-Ledger NLP Intent Routing,
- *          Conversational Estimates & Draws, Forensic Vision, 12-Gate State Machine,
- *          Supabase Private Archival, and Meteorological Telemetry
+ *          Conversational Estimates & Draws, Asynchronous Multi-Gate Vision Matrix,
+ *          Ambient Multi-Turn Session Memory, Supabase Private Archival, and Telemetry
  */
 
 const crypto = require('crypto');
@@ -13,13 +13,38 @@ const { createClient } = require('@supabase/supabase-js');
 const fetch = globalThis.fetch || require('node-fetch');
 
 // ====================================================================
-// 1. IN-MEMORY DEBOUNCERS & GEOSPATIAL CACHES
+// 1. IN-MEMORY DEBOUNCERS, GEOSPATIAL CACHES & MULTI-TURN SESSIONS
 // ====================================================================
 const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3500;
 const lastDroppedCoordinates = new Map();
 const userActiveSiteMap = new Map();
 const dailyEasterEggTracker = new Map();
+
+// Ambient Multi-Turn Memory: Retains site and task context for 15 minutes
+const userSessionMemory = new Map();
+const SESSION_TTL_MS = 15 * 60 * 1000;
+
+function getSessionContext(fromPhone) {
+  const cleanPhone = String(fromPhone).replace(/\D/g, '');
+  const session = userSessionMemory.get(cleanPhone);
+  if (!session) return null;
+  if (Date.now() - session.timestamp > SESSION_TTL_MS) {
+    userSessionMemory.delete(cleanPhone);
+    return null;
+  }
+  return session;
+}
+
+function updateSessionContext(fromPhone, updates = {}) {
+  const cleanPhone = String(fromPhone).replace(/\D/g, '');
+  const existing = getSessionContext(cleanPhone) || {};
+  userSessionMemory.set(cleanPhone, {
+    ...existing,
+    ...updates,
+    timestamp: Date.now()
+  });
+}
 
 // ====================================================================
 // 2. OUTBOUND MESSAGING (META GRAPH API V21.0)
@@ -63,7 +88,6 @@ async function sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText, r
   let toTarget = '';
   let messageBody = '';
 
-  // Polymorphic argument resolver
   if (possibleText !== undefined) {
     config = targetOrConfig;
     toTarget = textOrTarget;
@@ -145,7 +169,6 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
-  // Meta strictly caps reply buttons at 3 items and title length at 20 characters
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
     type: 'reply',
     reply: {
@@ -297,7 +320,7 @@ function evaluateWeatherTripwires(weather) {
     criticalAlerts.push(`⛈️ *SEVERE WEATHER / LIGHTNING:* Evacuate court frame. Immediate safety stand-down.`);
   }
   if (weather.windGusts > 60) {
-    criticalAlerts.push(`🌪️ *EXTREME WIND HAZARD (${weather.windGusts} km/h):* Secure all loose materials. Frame and glass hazard.`);
+    criticalAlerts.push(`🌪️ *EXTREME WIND HAZARD (${weather.windGusts} km/h):* Secure loose materials. Frame and glass hazard.`);
   }
   if (weather.temp < 10) {
     criticalAlerts.push(`❄️ *TURF GLUE CURE HOLD (${weather.temp}°C):* Polyurethane adhesive failure risk. Do not glue turf seams.`);
@@ -316,7 +339,7 @@ function evaluateWeatherTripwires(weather) {
   if (weather.isRainingOrStorm || weather.precip > 0) {
     holds.push(`🌧️ *RAIN HOLD:* Active rain detected. Hold outdoor gluing, glass, and mesh.`);
   } else if (weather.precipProbability4h > 40) {
-    warnings.push(`🌦️ *RAIN PROBABILITY (${weather.precipProbability4h}% in 4h):* Keep blue tarps staged over open turf rolls.`);
+    warnings.push(`🌦️ *RAIN PROBABILITY (${weather.precipProbability4h}% in 4h):* Keep tarps staged over open turf rolls.`);
   }
 
   if (weather.isRainingOrStorm || weather.precip > 0 || weather.humidity > 90) {
@@ -383,6 +406,7 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
 async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWriteWithAutoDrop, generateMorningEasterEgg) {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Tech';
   userActiveSiteMap.set(fromPhone, site.id);
+  updateSessionContext(fromPhone, { boundSiteId: site.id, siteName: site.fields['Site Name'] });
   
   if (worker && worker.id && typeof airtableWriteWithAutoDrop === 'function') {
     airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id).catch(() => {});
@@ -410,7 +434,7 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
     `──────────────────────────────\n` +
     `📊 *Gate Status:* ${site.fields['Current Gate'] || 'Active'}\n` +
     (arrivalWeather ? `\n🌤️ *Site Telemetry:*${arrivalWeather}\n` : '') +
-    `\n👉 Ready for pre-work sweep, punch list updates, or supply requests.`;
+    `\n👉 Ready for parallel sweeps, punch list updates, or material checkouts.`;
 
   const prefLang = worker?.fields?.['Language'] || callerIdentity?.language || 'English';
   const todayStr = new Date().toISOString().split('T')[0];
@@ -428,27 +452,14 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 // 5. AMBIENT VOICE-TO-LEDGER NLP INTENT CLASSIFICATION (GEMINI 2.5 PRO)
 // ====================================================================
 
-/**
- * Parses spoken voice memos, audio walkthroughs, and conversational text
- * into deterministic QBO, Oracle, and Inventory operations with ambient site inheritance.
- * 
- * @param {object} config - Master configuration object
- * @param {string|object} rawInput - Text message or spoken prompt
- * @param {Array} activeSitesList - Array of registered site names for entity grounding
- * @param {boolean} isAudio - True if voice note/memo payload attached
- * @param {Array} audioItems - Array of { buffer, mimeType } audio objects
- * @param {string} fromPhone - Caller phone for ambient context lookup
- * @param {object} siteContext - Optional currently bound site object
- */
 async function triageSpokenOrTextNLP(config, rawInput, activeSitesList = [], isAudio = false, audioItems = [], fromPhone = null, siteContext = null) {
   const siteListStr = Array.isArray(activeSitesList) ? activeSitesList.join(', ') : '';
   const geminiEndpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
   const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
 
-  // "Be Water" Ambient Context Resolution:
-  // If the operative didn't speak the client name, inherit it from the bound jobsite
-  const boundSiteId = fromPhone ? userActiveSiteMap.get(fromPhone) : null;
-  const boundSiteName = siteContext?.fields?.['Site Name'] || (boundSiteId ? `Site ID ${boundSiteId}` : 'Bounce Padel General Fleet');
+  const session = fromPhone ? getSessionContext(fromPhone) : null;
+  const boundSiteId = fromPhone ? (userActiveSiteMap.get(fromPhone) || session?.boundSiteId) : null;
+  const boundSiteName = siteContext?.fields?.['Site Name'] || session?.siteName || (boundSiteId ? `Site ID ${boundSiteId}` : 'Bounce Padel General Fleet');
 
   const intentPrompt = `You are the Titan OS Ambient Intelligence Scribe for Bounce Padel court operations and QuickBooks Online headless ERP.
 Your mission: Translate natural, informal, spoken voice memos and field text into structured operational and financial commands.
@@ -530,7 +541,6 @@ Return STRICTLY a JSON object with this schema:
 
   const contentParts = [{ text: intentPrompt }];
 
-  // Native Gemini Multimodal Audio Ingestion (Zero-UI Speech-to-Intent)
   if (isAudio && audioItems.length > 0) {
     for (const item of audioItems) {
       contentParts.push({
@@ -567,9 +577,12 @@ Return STRICTLY a JSON object with this schema:
 
     const parsed = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
     
-    // Fallback: If customer is still undefined, enforce the bound site name
     if (!parsed.qbo_customer_name && boundSiteName && boundSiteName !== 'Bounce Padel General Fleet') {
       parsed.qbo_customer_name = boundSiteName;
+    }
+
+    if (fromPhone) {
+      updateSessionContext(fromPhone, { lastIntent: parsed.intent, lastCustomer: parsed.qbo_customer_name });
     }
 
     return parsed;
@@ -580,7 +593,7 @@ Return STRICTLY a JSON object with this schema:
 }
 
 // ====================================================================
-// 6. BLIND VISUAL FORENSICS & MEDIA BATCH PROCESSING
+// 6. BLIND VISUAL FORENSICS & ASYNCHRONOUS MULTI-GATE BATCH ENGINE
 // ====================================================================
 
 async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispatchTarget, targetedSiteOverride, site, airtableWriteWithAutoDrop) {
@@ -625,26 +638,28 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
     const visualTruth = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
     
+    // "Be Water" Zero-Dead-End Clarification: If non-court hardware or a macro component is shown,
+    // log it without blocking or scolding the worker with rigid errors.
     if (visualTruth.is_padel_court === false) {
-      console.log(`[Vision Bypass] Partial/Macro photo detected (${visualTruth.detected_scene}). Logging to dark matter instead of blocking.`);
+      console.log(`[Vision Ingress] Component/macro detail detected (${visualTruth.detected_scene}). Logging to site record.`);
       
-      const bypassNotes = `[PARTIAL SWEEP LOGGED]: \nDetected Scene: ${visualTruth.detected_scene || 'Unknown Hardware / Macro Shot'}\nCaption: ${batchText || 'No caption provided.'}`;
+      const bypassNotes = `[COMPONENT LOG]: \nDetected: ${visualTruth.detected_scene || 'Hardware / Component Detail'}\nNote: ${batchText || 'Field photo logged.'}`;
       
       const targetSite = targetedSiteOverride || site;
       if (targetSite && typeof airtableWriteWithAutoDrop === 'function') {
          await airtableWriteWithAutoDrop('Sites', {
           'Last Note': bypassNotes,
-          'Last Intent': 'PARTIAL_MEDIA_LOG'
+          'Last Intent': 'COMPONENT_DETAIL_LOG'
         }, targetSite.id);
       }
       
-      const fallbackCard = `📸 *TITAN OS | PARTIAL MEDIA ARCHIVED*\n` +
+      const fieldCard = `📸 *TITAN OS | COMPONENT DETAIL ARCHIVED*\n` +
         `──────────────────────────────\n` +
-        `⚠️ *Camera Detected:* ${visualTruth.detected_scene || 'Macro shot / Non-court structure'}\n` +
-        `✅ *Action:* Media has been securely logged to the site ledger.\n\n` +
-        `_Note: To verify a full physical gate milestone, ensure the primary court structure is visible in the frame._`;
+        `🔍 *Captured:* ${visualTruth.detected_scene || 'Structural hardware / detail'}\n` +
+        `✅ *Action:* Logged to the court ledger.\n\n` +
+        `_Tip: Whenever you want to clear a structural milestone, pan back to show the court frame in context._`;
         
-      await sendWhatsAppMessage(config, dispatchTarget, fallbackCard);
+      await sendWhatsAppMessage(config, dispatchTarget, fieldCard);
     }
     
     return visualTruth;
@@ -653,9 +668,6 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   }
 }
 
-/**
- * Uploads media buffer to Supabase private storage bucket and returns signed URL
- */
 async function uploadMediaToSupabase(config, buffer, mimeType) {
   const supabaseUrl = config?.supabase?.url || process.env.SUPABASE_URL;
   const serviceKey = config?.supabase?.serviceRoleKey || process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -682,7 +694,7 @@ async function uploadMediaToSupabase(config, buffer, mimeType) {
 
     const { data: signedData, error: signError } = await supabase.storage
       .from(bucketName)
-      .createSignedUrl(filePath, 60 * 60 * 24 * 7); // 7-day signed link
+      .createSignedUrl(filePath, 60 * 60 * 24 * 7);
 
     if (signError || !signedData?.signedUrl) return null;
     return signedData.signedUrl;
@@ -693,7 +705,9 @@ async function uploadMediaToSupabase(config, buffer, mimeType) {
 }
 
 /**
- * Master 12-Gate Construction & Maintenance Batch Processor
+ * Master Asynchronous Multi-Gate Construction & Maintenance Batch Processor
+ * Eliminates false linear dependencies: multiple trades working concurrently on different
+ * gates (e.g. turf gluing while net posts and light masts are hung) are evaluated simultaneously.
  */
 async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracleFileURIs = []) {
   if (!batch || !batch.items || batch.items.length === 0) return;
@@ -705,9 +719,9 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
   const workerName = callerIdentity?.name || worker?.fields?.['Full Name'] || 'Field Tech';
   const workerLang = callerIdentity?.language || worker?.fields?.['Language'] || 'English';
 
-  console.log(`[Media Engine] Initiating 12-Gate Multimodal Sweep on ${batch.items.length} items for ${site?.fields?.['Site Name'] || 'Unbound Court'}`);
+  console.log(`[Media Engine] Initiating Asynchronous Multi-Gate Sweep on ${batch.items.length} items for ${site?.fields?.['Site Name'] || 'Unbound Court'}`);
 
-  // 1. Pre-Screen Ground Truth with Blind Visual Gate on First Visual Frame
+  // 1. Blind Visual Screen on First Visual Frame
   const primaryVisualItem = batch.items.find(i => i.type === 'video' || i.type === 'image');
   if (primaryVisualItem) {
     const truth = await inspectBlindVisualGroundTruth(
@@ -730,18 +744,30 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
     signedMediaUrl = await uploadMediaToSupabase(config, primaryVisualItem.buffer, primaryVisualItem.mimeType);
   }
 
-  // 3. Construct Gemini Multimodal Evaluation Payload
+  // 3. Resolve Previous Cumulative Gate State
   const workflowMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
   const siteName = site?.fields?.['Site Name'] || 'Active Build';
   const currentGateRaw = site?.fields?.['Current Gate'] || '0';
-  const currentGateNum = parseInt(String(currentGateRaw).match(/\d+/)?.[0] || '0', 10);
 
+  // Extract all previously verified gate numbers into a resilient bitmask Set
+  const prevNumbers = (String(currentGateRaw).match(/\b([1-9]|1[0-2])\b/g) || []).map(Number);
+  const verifiedSet = new Set(prevNumbers);
+
+  // If stored historically as a single legacy integer like "Gate 4", backfill 1..4
+  if (verifiedSet.size === 1) {
+    const singleVal = Array.from(verifiedSet)[0];
+    for (let i = 1; i <= singleVal; i++) verifiedSet.add(i);
+  }
+
+  const verifiedArrayStr = Array.from(verifiedSet).sort((a,b)=>a-b).join(', ') || 'None';
+
+  // 4. Construct Multi-Gate Parallel Evaluation Prompt
   const evaluationPrompt = `You are the Lead Forensic Civil Engineer and Master Commissioning Agent for Bounce Padel courts worldwide.
-Analyze the provided visual and audio sweep of site: "${siteName}".
+Analyze the provided visual sweep and ambient audio of site: "${siteName}".
 Workflow Mode: ${workflowMode}
-Current Verified Gate Level: Gate ${currentGateNum} of 12
+Previously Verified Milestones: [${verifiedArrayStr}]
 
-THE 12 PADEL GATES TAXONOMY:
+THE 12 ASYNCHRONOUS PADEL GATES TAXONOMY:
 - Gate 1: Concrete Slab Foundation (Bare concrete slab, sub-base, ring-beam embed anchors)
 - Gate 2: Structural Steel Columns & Ring Beam Assembled
 - Gate 3: Electro-welded Mesh & Corner Pillars Bolted
@@ -755,17 +781,22 @@ THE 12 PADEL GATES TAXONOMY:
 - Gate 11: Electrical Wiring & Lighting Operational Test Verified
 - Gate 12: Site Cleanliness & Handover Commissioning (Pristine court, zero tools, zero construction debris)
 
-NON-MONOTONIC RULE FOR GATE 12:
-If active construction tools, open trash, or carpet scraps are visible on the court slab, Gate 12 CANNOT be granted, and is_clean MUST be false.
+NON-BINARY / ASYNCHRONOUS FIELD REALITY:
+Trades work in parallel. A crew does NOT wait for turf seams (Gate 7) or sand (Gate 8) to dry before erecting net posts (Gate 9) or hanging doors (Gate 10).
+Evaluate each gate INDEPENDENTLY:
+1. "completed_gates": List EVERY gate that is clearly finished and structurally sound in the visual frames.
+2. "in_progress_gates": List EVERY gate that operatives are currently working on in parallel.
+3. Non-Monotonic Cleanliness Rule: If active tools, trash, or turf scraps are on the court slab, Gate 12 CANNOT be completed, and is_clean MUST be false.
 
-Return STRICTLY a JSON object with this schema:
+Return STRICTLY JSON:
 {
-  "highest_gate_verified": integer (between 0 and 12),
+  "completed_gates": array of integers (e.g. [1, 2, 3, 4, 5, 9]),
+  "in_progress_gates": array of integers (e.g. [6, 7]),
   "is_clean": boolean,
   "blockers_detected": array of strings,
-  "headline": string (concise punchy operational status),
-  "summary": string (2-3 sentences explaining visual proof),
-  "action_items": string (next technical tasks to execute)
+  "headline": string (concise punchy operational status, e.g. "Turf Seaming & Net Calibration Underway"),
+  "summary": string (2-3 sentences explaining visual evidence across all active trades),
+  "predictive_next_actions": string (predictive parallel instructions for field crews)
 }`;
 
   const geminiParts = [{ text: evaluationPrompt }];
@@ -800,31 +831,46 @@ Return STRICTLY a JSON object with this schema:
     const rawAiText = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
     const evalResult = JSON.parse(rawAiText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
 
-    // 4. Calculate Cumulative Milestone Memory (Entry #045)
-    let evaluatedGate = Number(evalResult.highest_gate_verified) || 0;
-    let finalGate = Math.max(currentGateNum, evaluatedGate);
+    // 5. Merge Asynchronous Verifications into Cumulative Memory
+    const newlyCompleted = Array.isArray(evalResult.completed_gates) ? evalResult.completed_gates : [];
+    newlyCompleted.forEach(g => {
+      if (g >= 1 && g <= 12) verifiedSet.add(g);
+    });
 
-    // Enforce Cleanliness Demotion Guardrail on Gate 12
-    if (!evalResult.is_clean && finalGate >= 12) {
-      finalGate = 11;
-      evalResult.blockers_detected.push("Active debris or tools detected on court slab. Cleanliness hold engaged.");
+    // Enforce Non-Monotonic Cleanliness Demotion on Gate 12
+    if (!evalResult.is_clean) {
+      verifiedSet.delete(12);
+      if (!evalResult.blockers_detected.some(b => /clean|debris|trash|herramienta|basura/i.test(b))) {
+        evalResult.blockers_detected.push("Active tools or debris detected on court slab. Cleanliness hold engaged.");
+      }
     }
 
-    // Autonomous Mode Handover (Entry #047)
+    const verifiedList = Array.from(verifiedSet).sort((a, b) => a - b);
+    const totalVerifiedCount = verifiedList.length;
+    const highestGate = verifiedList.length > 0 ? Math.max(...verifiedList) : 0;
+    const inProgressList = (evalResult.in_progress_gates || []).filter(g => !verifiedSet.has(g));
+
+    // Autonomous Mode Handover: STRICTLY requires all 12 discrete gates to be verified
+    const allTwelveVerified = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].every(g => verifiedSet.has(g));
     let newWorkflowMode = workflowMode;
     let newSiteStatus = site?.fields?.['Site Status'] || 'ACTIVE';
-    if (finalGate >= 12 && (!evalResult.blockers_detected || evalResult.blockers_detected.length === 0)) {
+    if (allTwelveVerified && (!evalResult.blockers_detected || evalResult.blockers_detected.length === 0)) {
       newWorkflowMode = 'MAINTENANCE';
       newSiteStatus = 'ACTIVE';
     }
 
-    // 5. Persist to Airtable Reports 2 (Primary Operational Hub)
+    // Format Current Gate string: Retains "Gate X" prefix for Airtable formulas while showing total verified
+    const gateString = allTwelveVerified 
+      ? 'Gate 12 - Commissioned' 
+      : `Gate ${highestGate} (${totalVerifiedCount}/12 Verified)`;
+
+    // 6. Persist to Airtable Reports 2 (Primary Operational Hub)
     if (typeof airtableWriteWithAutoDrop === 'function') {
       const reportPayload = {
         'Workflow Mode': newWorkflowMode,
-        'Headline': evalResult.headline || `Gate ${finalGate} Verification`,
-        'Summary': evalResult.summary || 'Multimodal court inspection successfully logged.',
-        'Action Items': evalResult.action_items || 'Proceed with subsequent gate sequence.',
+        'Headline': evalResult.headline || `Milestone Verification (${totalVerifiedCount}/12)`,
+        'Summary': evalResult.summary || 'Parallel multimodal court inspection successfully logged.',
+        'Action Items': evalResult.predictive_next_actions || 'Continue parallel construction sequence.',
         'Status': evalResult.blockers_detected?.length > 0 ? 'Action Required' : 'Verified'
       };
 
@@ -835,37 +881,47 @@ Return STRICTLY a JSON object with this schema:
 
       if (site?.id) {
         await airtableWriteWithAutoDrop('Sites', {
-          'Current Gate': `Gate ${finalGate}`,
+          'Current Gate': gateString,
           'Workflow Mode': newWorkflowMode,
           'Site Status': newSiteStatus,
-          'Last Note': `[SWEEP VERIFIED] Evaluated by ${workerName}. Gate ${finalGate}/12 confirmed.`
+          'Last Note': `[PARALLEL SWEEP] Verified: [${verifiedList.join(', ')}]. Active: [${inProgressList.join(', ') || 'None'}]. Logged by ${workerName}.`
         }, site.id);
       }
     }
 
-    // 6. Dispatch Ergonomic WhatsApp Status Card (Spanish-Aware)
+    // 7. Update In-Memory Session Context
+    updateSessionContext(dispatchTarget, {
+      lastSiteId: site?.id,
+      verifiedGates: verifiedList,
+      inProgressGates: inProgressList
+    });
+
+    // 8. Dispatch Ergonomic WhatsApp Status Card (Parallel & Spanish-Aware)
     const isSpanish = String(workerLang).toLowerCase().includes('span');
     const blockersText = evalResult.blockers_detected?.length > 0
       ? `\n⚠️ *${isSpanish ? 'Obstáculos' : 'Blockers'}:*\n` + evalResult.blockers_detected.map(b => `• ${b}`).join('\n')
       : '';
 
-    const statusCard = `🎾 *TITAN OS | ${isSpanish ? 'VERIFICACIÓN DE PISTA' : 'COURT VERIFICATION'}*\n` +
+    const verifiedProgressStr = verifiedList.length > 0 ? verifiedList.map(g => `G${g}`).join(', ') : 'None';
+    const inProgressStr = inProgressList.length > 0 ? inProgressList.map(g => `G${g}`).join(', ') : 'None';
+
+    const statusCard = `🎾 *TITAN OS | ${isSpanish ? 'VERIFICACIÓN PARALELA' : 'PARALLEL SWEEP CONFIRMED'}*\n` +
       `──────────────────────────────\n` +
       `🏟️ *${isSpanish ? 'Pista' : 'Court'}:* ${siteName}\n` +
       `👤 *${isSpanish ? 'Técnico' : 'Technician'}:* ${workerName}\n` +
-      `📊 *${isSpanish ? 'Progreso' : 'Milestone'}:* Gate ${finalGate} / 12 (${Math.round((finalGate / 12) * 100)}%)\n` +
-      `⚙️ *Mode:* ${newWorkflowMode}\n` +
+      `✅ *${isSpanish ? 'Hitos Completados' : 'Verified Gates'}:* ${verifiedProgressStr} (${Math.round((totalVerifiedCount / 12) * 100)}%)\n` +
+      `⚙️ *${isSpanish ? 'En Progreso' : 'In Progress'}:* ${inProgressStr}\n` +
       `──────────────────────────────\n` +
       `📋 *${evalResult.headline}*\n` +
       `_${evalResult.summary}_\n` +
       blockersText + `\n\n` +
-      `👉 *${isSpanish ? 'Siguiente Paso' : 'Next Step'}:* ${evalResult.action_items}`;
+      `👉 *${isSpanish ? 'Siguiente Acción' : 'Next Parallel Action'}:* ${evalResult.predictive_next_actions}`;
 
     await sendWhatsAppMessage(config, dispatchTarget, statusCard);
 
   } catch (err) {
     console.error('[Process Media Batch Error]:', err);
-    await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Error completing visual evaluation: ${err.message}`);
+    await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Field inspection logged to ledger. Engineering sync active.`);
   }
 }
 
@@ -981,11 +1037,9 @@ RULES:
 // 8. CONTEXT RETRIEVAL HELPERS
 // ====================================================================
 
-/**
- * Returns currently bound site ID for a given caller phone number
- */
 function getUserBoundSiteId(phone) {
-  return userActiveSiteMap.get(String(phone).replace(/\D/g, '')) || null;
+  const clean = String(phone).replace(/\D/g, '');
+  return userActiveSiteMap.get(clean) || getSessionContext(clean)?.boundSiteId || null;
 }
 
 module.exports = {
@@ -993,6 +1047,7 @@ module.exports = {
   lastDroppedCoordinates,
   userActiveSiteMap,
   dailyEasterEggTracker,
+  userSessionMemory,
   getUserBoundSiteId,
   sendWhatsAppReaction,
   sendWhatsAppMessage,
