@@ -124,8 +124,9 @@ async function resolveCategoryItemRef(config, categoryName) {
   let matched = null;
 
   if (cat.includes('court') || cat.includes('padel')) {
-    matched = items.find(i => /court|padel|kit|standard|panoramic/i.test(i.Name || '')) ||
-              items.find(i => /court|padel/i.test(i.Description || ''));
+    matched = items.find(i => /padel|panoramic/i.test(i.Name || '') && !/pickleball/i.test(i.Name || '')) ||
+              items.find(i => /padel|panoramic/i.test(i.Description || '') && !/pickleball/i.test(i.Description || '')) ||
+              items.find(i => /court|kit/i.test(i.Name || '') && !/pickleball/i.test(i.Name || ''));
   } else if (cat.includes('install')) {
     matched = items.find(i => /install|assembly|labour|labor/i.test(i.Name || '')) ||
               items.find(i => /install|assembly/i.test(i.Description || ''));
@@ -135,7 +136,7 @@ async function resolveCategoryItemRef(config, categoryName) {
   }
 
   if (!matched) {
-    matched = items.find(i => i.Type === 'Service') ||
+    matched = items.find(i => i.Type === 'Service' && !/pickleball/i.test(i.Name || '')) ||
               items.find(i => i.Type === 'NonInventory') ||
               items.find(i => /service|sales|general/i.test(i.Name || '')) ||
               items[0];
@@ -615,9 +616,10 @@ TASK:
 2. Deconstruct the order into individual, highly professional construction line items.
 3. For each line item:
    - Identify category: "COURT", "INSTALLATION", "DELIVERY", or "ACCESSORY".
-   - If a court is mentioned (e.g., "Panoramic padel court"), consult the attached technical blueprints (Sample Estimate, Engineering Plans) to generate formal architectural copy detailing structural steel, 12mm tempered safety glass panels, electro-welded wire mesh, LED lighting fixtures, and texturized synthetic turf carpet with silica sand infill.
-   - For installation: describe turnkey physical court assembly and mechanical erection.
-   - For delivery: describe flatbed freight logistics and specialized offloading.
+   - CRITICAL INSTRUCTION FOR DESCRIPTIONS: DO NOT hallucinate or generate generic architectural copy. You MUST extract the EXACT, VERBATIM line item descriptions from the attached "Sample Estimate.pdf" for the corresponding category. 
+     - For "COURT", extract the exact multi-line text block from the sample estimate that describes the "Panoramic Padel Court - BLACK" including the steel structure, mesh, fasteners, lights, glass, sand, and turf.
+     - For "INSTALLATION", describe turnkey physical court assembly and mechanical erection.
+     - For "DELIVERY", extract the exact text block starting with "ALL INCLUSIVE" (Delivery, Forklift, Unloading team).
    - Extract unit price and line total.
    - Determine taxability: mark "taxable": true ONLY if "plus HST", "add tax", or standard taxable is implied. Mark "taxable": false if the operative explicitly says "tax exempt" or "zero cost".
 
@@ -684,7 +686,7 @@ OUTPUT STRICTLY JSON:
     line_items: [
       {
         category: "COURT",
-        description: "Super Panoramic Padel Court (20m x 10m) - Structure, 12mm Tempered Safety Glass, LED Lighting, and Synthetic Turf Carpet",
+        description: "Panoramic Padel Court - BLACK\nMain steel structure around glass HSS 2\"x6\"x.01\"\nMain steel structure around mesh panels HSS 2\"x4\"x0125\"\nMesh panels made of:\n1.5\"x.100\" square tube\n1/8\" formed plate\n2\"x2\"x1/8\" Welded wire mesh\nFasteners:\nAll required stainless fasteners for assembly.\nLights - 4 posts and 8 LED lights\nGlass: 1995mmx2995mmx12mmx18 pieces of tempered glass per court (All glass certified by US Safety Glazing Certification Council (SGCC), and in alignment with the American National Standards Institute (ANSI) accreditation.)\nSAND: 3300 pounds silica sand\nMondo XN Super Turf - Green",
         quantity: 1,
         unit_price: 70000,
         amount: 70000,
@@ -692,7 +694,7 @@ OUTPUT STRICTLY JSON:
       },
       {
         category: "INSTALLATION",
-        description: "Turnkey Court Mechanical Erection, Structural Anchoring, and Turf Seaming Installation",
+        description: "Turnkey professional installation services, including the complete mechanical erection and physical assembly of the padel court structure, glass panels, mesh, turf, and lighting systems by a certified in-house crew.",
         quantity: 1,
         unit_price: 0,
         amount: 0,
@@ -700,7 +702,7 @@ OUTPUT STRICTLY JSON:
       },
       {
         category: "DELIVERY",
-        description: "Specialized Flatbed Freight Transport, Delivery Logistics, and Forklift Offloading",
+        description: "ALL INCLUSIVE\n• Delivery to final installation\n• Forklift 12K to unload\n• Unloading team and tools",
         quantity: 1,
         unit_price: 2000,
         amount: 2000,
