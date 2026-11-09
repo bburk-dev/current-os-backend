@@ -2,8 +2,9 @@
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
- *          Conversational Change-Orders, Headless IoT Sensor Telemetry,
- *          RBAC Bouncer, and Zero-UI Site Provisioning
+ *          Conversational Voice Estimates, Progress Draws, Direct Invoicing,
+ *          Zero-UI Change-Orders, Headless IoT Sensor Telemetry, RBAC Bouncer,
+ *          and Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -466,7 +467,7 @@ app.post('/webhook', async (req, res) => {
   const entry = body.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
   
-  if (changes?.statuses) return;
+  if (changes?.statuses) return; // Drop read/delivery receipts
 
   const message = changes?.messages?.[0];
   if (!message) return;
@@ -480,7 +481,7 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const callerIdentity = await resolveIdentity(fromPhone);
-    const sessionSiteId = whatsapp.userActiveSiteMap?.get(fromPhone);
+    const sessionSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
     let site = null;
     
     if (sessionSiteId) {
@@ -502,12 +503,213 @@ app.post('/webhook', async (req, res) => {
       'Message ID': messageId,
       'From Phone': fromPhone,
       'Message Type': message.type || 'text',
-      'Body': message.text?.body || message.caption || `[${message.type || 'media'}]`,
+      'Body': message.text?.body || message.caption || message.interactive?.button_reply?.title || `[${message.type || 'media'}]`,
       'Worker': worker?.id ? [worker.id] : []
     }).catch(() => {});
 
     // ================================================================
-    // A. LOCATION DROPS (Proof of Presence, Weather & Site Discovery)
+    // A. INTERACTIVE BUTTON & LIST REPLIES (ONE-TAP ACTIONS)
+    // ================================================================
+    const interactiveButtonId = message.interactive?.button_reply?.id || '';
+    if (interactiveButtonId) {
+      console.log(`[Button Action] Intercepted button tap: ${interactiveButtonId} from ${dispatchTarget}`);
+
+      // 1. One-Tap Progress Draw Conversion Execution (Estimate -> Invoice)
+      if (interactiveButtonId.startsWith('QBO_CONVERT_')) {
+        const parts = interactiveButtonId.split('_');
+        const estimateId = parts[2];
+        const percentage = parseFloat(parts[3]) || 100;
+
+        await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Converting estimate into active QuickBooks invoice...");
+
+        try {
+          const estData = await finance.qboApiRequest(CONFIG, `/estimate/${estimateId}`);
+          const estimate = estData?.Estimate;
+
+          if (!estimate) {
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Could not locate estimate #${estimateId} in QuickBooks.`);
+            return;
+          }
+
+          const totalAmt = parseFloat(estimate.TotalAmt) || 0;
+          const drawAmt = parseFloat((totalAmt * (percentage / 100)).toFixed(2));
+          const primaryDesc = estimate.Line?.[0]?.Description || 'Bounce Padel Court Construction';
+
+          const invPayload = {
+            CustomerRef: estimate.CustomerRef,
+            Line: [
+              {
+                Amount: drawAmt,
+                DetailType: "SalesItemLineDetail",
+                Description: `Progress Draw (${percentage}%) against Estimate #${estimate.DocNumber} - ${primaryDesc}`,
+                SalesItemLineDetail: {
+                  Qty: 1,
+                  UnitPrice: drawAmt,
+                  ItemRef: { value: "1" }
+                }
+              }
+            ],
+            LinkedTxn: [
+              {
+                TxnId: estimate.Id,
+                TxnType: "Estimate"
+              }
+            ]
+          };
+
+          const invRes = await finance.qboApiRequest(CONFIG, '/invoice', 'POST', invPayload);
+          const invoiceNum = invRes?.Invoice?.DocNumber || 'Issued';
+
+          const successCard = `🧾 *TITAN OS | PROGRESS DRAW INVOICE ISSUED*\n` +
+                              `──────────────────────────────\n` +
+                              `*Invoice:* #${invoiceNum}\n` +
+                              `*Client:* ${estimate.CustomerRef.name}\n` +
+                              `*Estimate Ref:* #${estimate.DocNumber}\n` +
+                              `*Draw Split:* ${percentage}%\n` +
+                              `*Invoice Amount:* $${drawAmt.toFixed(2)} USD\n` +
+                              `──────────────────────────────\n` +
+                              `✅ Invoice created in QuickBooks Online and linked to Estimate #${estimate.DocNumber}.`;
+
+          await dispatchOutboundWhatsApp(dispatchTarget, successCard);
+        } catch (convErr) {
+          console.error('[Button Convert Draw Error]:', convErr.message);
+          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to execute draw invoice: ${convErr.message}`);
+        }
+        return;
+      }
+
+      // 2. One-Tap Change-Order Approval
+      if (interactiveButtonId.startsWith('QBO_APPROVE_CO_')) {
+        const coEstimateId = interactiveButtonId.replace('QBO_APPROVE_CO_', '');
+        await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Locking Change-Order into QuickBooks ledger...");
+
+        try {
+          await finance.qboApiRequest(CONFIG, '/estimate?operation=update', 'POST', {
+            Id: coEstimateId,
+            SyncToken: "0",
+            TxnStatus: "Accepted"
+          });
+
+          await dispatchOutboundWhatsApp(
+            dispatchTarget, 
+            `✅ *TITAN OS | CHANGE-ORDER SEALED*\n──────────────────────────────\nScope modification approved and cryptographically bound to QBO Estimate #${coEstimateId}. Field crew authorized to proceed.`
+          );
+        } catch (coApproveErr) {
+          console.error('[Button Approve CO Error]:', coApproveErr.message);
+          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to update change order status: ${coApproveErr.message}`);
+        }
+        return;
+      }
+    }
+
+    // ================================================================
+    // B. STANDALONE SPOKEN VOICE NOTE INTAKE (BE THE WATER AUDIO ENGINE)
+    // ================================================================
+    if (message.type === 'audio' || message.type === 'voice') {
+      const mediaObj = message[message.type];
+      const mediaId = mediaObj?.id;
+      const mimeType = mediaObj?.mime_type || 'audio/ogg';
+
+      if (whatsapp.sendWhatsAppReaction) {
+        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '🎙️').catch(() => {});
+      }
+
+      let audioBuffer = null;
+      if (CONFIG.meta.accessToken && mediaId) {
+        const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+        const metaMediaData = await metaMediaRes.json().catch(() => ({}));
+        if (metaMediaRes.ok && metaMediaData?.url) {
+          const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+          if (mediaBufferRes.ok) audioBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+        }
+      }
+
+      if (audioBuffer) {
+        const allSites = await getCachedSites();
+        const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
+        const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
+        const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
+
+        console.log(`[Audio Ingress] Parsing spoken voice memo via Gemini 2.5 Pro from ${dispatchTarget}...`);
+
+        const spokenTriage = whatsapp.triageSpokenOrTextNLP 
+          ? await whatsapp.triageSpokenOrTextNLP(CONFIG, '', registeredSiteNames, true, [{ buffer: audioBuffer, mimeType }], fromPhone, boundSite)
+          : null;
+
+        console.log(`[Audio Ingress] Spoken Intent: ${spokenTriage?.intent || 'UNKNOWN'} | Client: ${spokenTriage?.qbo_customer_name || 'None'}`);
+
+        if (spokenTriage) {
+          // 1. Spoken Estimate Creation
+          if (spokenTriage.intent === 'CREATE_ESTIMATE') {
+            if (finance && finance.handleEstimateCreation) {
+              await finance.handleEstimateCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+              return;
+            }
+          }
+
+          // 2. Spoken Percentage Draw Conversion
+          if (spokenTriage.intent === 'CONVERT_ESTIMATE') {
+            if (finance && finance.handleInvoiceApproval) {
+              await finance.handleInvoiceApproval(CONFIG, spokenTriage, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+              return;
+            }
+          }
+
+          // 3. Spoken Direct Invoice (Without Estimate)
+          if (spokenTriage.intent === 'CREATE_INVOICE') {
+            if (finance && finance.handleInvoiceCreation) {
+              await finance.handleInvoiceCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+              return;
+            }
+          }
+
+          // 4. Spoken Change Order
+          if (spokenTriage.intent === 'CHANGE_ORDER') {
+            if (finance && finance.handleConversationalChangeOrder) {
+              await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b), callerIdentity);
+              return;
+            }
+          }
+
+          // 5. Spoken AR Lookup (RBAC Gated)
+          if (spokenTriage.intent === 'AR_LOOKUP') {
+            const userRole = String(callerIdentity.role || '').trim().toLowerCase();
+            if (userRole !== 'admin') {
+              console.warn(`[Security Alert] Unauthorized spoken AR lookup blocked for ${dispatchTarget}`);
+              await dispatchOutboundWhatsApp(
+                dispatchTarget, 
+                `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`
+              );
+              return;
+            }
+            if (finance && finance.handleARLookup) {
+              await finance.handleARLookup(CONFIG, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity);
+              return;
+            }
+          }
+
+          // 6. Spoken Technical Oracle Engineering Query
+          if (spokenTriage.intent === 'ORACLE_QUERY') {
+            if (oracle && oracle.handleOracleQuery) {
+              await oracle.handleOracleQuery(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+              return;
+            }
+          }
+
+          // 7. Spoken Material / Stock Depletion Log
+          if (spokenTriage.intent === 'INVENTORY_QUERY') {
+            if (inventory && inventory.handleSpokenInventorySnapshot) {
+              await inventory.handleSpokenInventorySnapshot(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+              return;
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    // ================================================================
+    // C. LOCATION DROPS (Proof of Presence, Weather & Site Discovery)
     // ================================================================
     if (message.type === 'location') {
       if (whatsapp.sendWhatsAppReaction) {
@@ -566,10 +768,10 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ================================================================
-    // B. TEXT NLP COMMANDS, SITE PROVISIONING & FINANCE ROUTING
+    // D. TEXT NLP COMMANDS, SITE PROVISIONING & FINANCE ROUTING
     // ================================================================
-    const rawText = message.text?.body || '';
-    if (message.type === 'text' || rawText) {
+    const rawText = message.text?.body || message.interactive?.button_reply?.title || '';
+    if (message.type === 'text' || message.type === 'interactive' || rawText) {
       const txt = rawText.trim();
       const lTxt = txt.toLowerCase();
 
@@ -644,8 +846,29 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 1. Headless Accounts Receivable (QBO) Ingress with Strict RBAC Bouncer
-      const isARQuery = lTxt === 'ar' || 
+      // 1. Evaluate Ambient Intent with Site Inheritance
+      const allSites = await getCachedSites();
+      const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
+      const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
+      const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
+
+      const triage = whatsapp.triageSpokenOrTextNLP
+        ? await whatsapp.triageSpokenOrTextNLP(
+            CONFIG, 
+            txt, 
+            registeredSiteNames, 
+            false, 
+            [], 
+            fromPhone, 
+            boundSite
+          )
+        : null;
+
+      console.log(`[Text Engine] Evaluated Intent: ${triage?.intent || 'UNKNOWN'} | Client: ${triage?.qbo_customer_name || 'None'}`);
+
+      // 2. Headless Accounts Receivable (QBO) Ingress with Strict RBAC Bouncer
+      const isARQuery = triage?.intent === 'AR_LOOKUP' ||
+                        lTxt === 'ar' || 
                         lTxt.startsWith('ar ') || 
                         lTxt.endsWith(' ar') || 
                         lTxt.includes('ar +') || 
@@ -680,77 +903,71 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 2. Conversational Change-Orders & Scope Variations
-      const isChangeOrderQuery = lTxt.includes('change order') || 
-                                 lTxt.includes('change-order') || 
-                                 lTxt.includes('variation') || 
-                                 lTxt.startsWith('/changeorder') || 
-                                 lTxt.startsWith('/co');
+      // 3. Dynamic Spoken / Text Estimate Generation
+      if (triage?.intent === 'CREATE_ESTIMATE' || lTxt.includes('build an estimate') || lTxt.includes('create estimate') || lTxt.startsWith('/estimate')) {
+        if (finance && finance.handleEstimateCreation) {
+          await finance.handleEstimateCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+          return;
+        }
+      }
 
-      if (isChangeOrderQuery) {
+      // 4. Dynamic Progress Draw Conversion (Percentage-Based)
+      if (triage?.intent === 'CONVERT_ESTIMATE' || lTxt.includes('convert to') || lTxt.includes('% invoice') || lTxt.includes('draw')) {
+        if (finance && finance.handleInvoiceApproval) {
+          await finance.handleInvoiceApproval(CONFIG, triage || { transcript_en: txt }, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+          return;
+        }
+      }
+
+      // 5. Direct Voice / Text Invoicing (Without Prior Estimate)
+      if (triage?.intent === 'CREATE_INVOICE' || lTxt.includes('create invoice') || lTxt.includes('direct invoice') || lTxt.startsWith('/invoice')) {
+        if (finance && finance.handleInvoiceCreation) {
+          await finance.handleInvoiceCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+          return;
+        }
+      }
+
+      // 6. Conversational Subcontractor Change-Orders & Scope Variations
+      if (triage?.intent === 'CHANGE_ORDER' || lTxt.includes('change order') || lTxt.includes('change-order') || lTxt.includes('variation') || lTxt.startsWith('/changeorder') || lTxt.startsWith('/co')) {
         if (finance && finance.handleConversationalChangeOrder) {
           await finance.handleConversationalChangeOrder(
             CONFIG, 
-            txt, 
+            triage || txt, 
             dispatchTarget, 
             oracleFileURIs, 
             dispatchOutboundWhatsApp, 
             (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b), 
             callerIdentity
           );
+          return;
         }
-        return;
       }
 
-      // 3. Structured Invoicing & Estimates
-      if (lTxt.startsWith('/estimate') || lTxt.startsWith('/invoice')) {
-        if (whatsapp.triageSpokenOrTextNLP) {
-          const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-          if (triage) {
-            if (triage.intent === 'CREATE_ESTIMATE' && finance.handleEstimateCreation) {
-              await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-            } else if (triage.intent === 'CREATE_INVOICE' && finance.handleInvoiceCreation) {
-              await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-            } else if (finance && finance.handleInvoiceApproval) {
-              await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
-            }
-          }
-        }
-        return;
-      }
-      
-      // 4. Oracle RAG Engine
-      if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
-        if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
-          const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
+      // 7. Oracle RAG Engine (Engineering, Foundations, Lighting Specs)
+      if (triage?.intent === 'ORACLE_QUERY' || lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
+        if (oracle && oracle.handleOracleQuery) {
           await oracle.handleOracleQuery(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-        } else if (oracle && oracle.handleOracleQuery) {
-          await oracle.handleOracleQuery(CONFIG, txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+          return;
         }
-        return;
       }
 
-      // 5. Inventory Tracking & Material Depletion
-      if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
+      // 8. Inventory Tracking & Material Depletion
+      if (triage?.intent === 'INVENTORY_QUERY' || lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
         if (inventory && inventory.handleSpokenInventorySnapshot) {
           await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+          return;
         }
-        return;
       }
 
-      // 6. Fallback Conversational Intent Routing
-      if (whatsapp.triageSpokenOrTextNLP) {
-        const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-        console.log(`[Text Engine] General triage: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
-      }
-      
+      // 9. Fallback Conversational Intent Routing
+      console.log(`[Text Engine] General triage fallthrough: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
       return;
     }
 
     // ================================================================
-    // C. MULTIMEDIA INTAKE (Sliding Window Debouncer & Batch Execution)
+    // E. MULTIMEDIA INTAKE (Sliding Window Debouncer & Batch Execution)
     // ================================================================
-    if (message.type === 'video' || message.type === 'image' || message.type === 'audio' || message.type === 'voice') {
+    if (message.type === 'video' || message.type === 'image') {
       const mediaObj = message[message.type];
       const mediaId = mediaObj.id;
       const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
@@ -863,7 +1080,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ====================================================================
-// D. HEADLESS IN-SITU IOT TELEMETRY INGRESS (SLAB MOISTURE & CURE SENSORS)
+// F. HEADLESS IN-SITU IOT TELEMETRY INGRESS (SLAB MOISTURE & CURE SENSORS)
 // ====================================================================
 app.post('/api/telemetry/iot', async (req, res) => {
   res.status(202).json({ status: 'Accepted', message: 'In-situ sensor telemetry ingested.' });
@@ -920,7 +1137,7 @@ app.post('/api/telemetry/iot', async (req, res) => {
 });
 
 // ====================================================================
-// E. INBOUND EMAIL WEBHOOK 
+// G. INBOUND EMAIL WEBHOOK 
 // ====================================================================
 app.post('/api/inbound-email', async (req, res) => {
   res.sendStatus(200);
@@ -951,7 +1168,7 @@ app.post('/api/inbound-email', async (req, res) => {
 });
 
 // ====================================================================
-// F. ON-DEMAND HEADLESS WEBHOOK FOR ORACLE SYNC
+// H. ON-DEMAND HEADLESS WEBHOOK FOR ORACLE SYNC
 // ====================================================================
 app.post('/api/sync-oracle', async (req, res) => {
   try {
