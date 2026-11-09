@@ -156,13 +156,15 @@ async function resolveQboTaxCode(config, isTaxable = false) {
 
 async function getNextEstimateNumber(config) {
   try {
-    const query = `select DocNumber, Metadata.CreateTime from Estimate order by Metadata.CreateTime desc MAXRESULTS 10`;
-    const res = await qboApiRequest(config, query);
+    const res = await qboApiRequest(config, `select DocNumber, Id from Estimate MAXRESULTS 100`);
     const estimates = res?.QueryResponse?.Estimate || [];
     
-    for (const est of estimates) {
-      if (est.DocNumber && !isNaN(parseInt(est.DocNumber))) {
-        return String(parseInt(est.DocNumber) + 1);
+    if (estimates.length > 0) {
+      const numbers = estimates
+        .map(e => parseInt(e.DocNumber || e.Id, 10))
+        .filter(n => !isNaN(n));
+      if (numbers.length > 0) {
+        return String(Math.max(...numbers) + 1);
       }
     }
   } catch (e) {
@@ -428,8 +430,8 @@ JSON SCHEMA:
         SalesItemLineDetail: {
           Qty: item.quantity,
           UnitPrice: item.unit_price,
-          ItemRef: itemRef,
-          TaxCodeRef: item.taxable ? hstTaxRef : exemptTaxRef
+          ItemRef: { value: String(itemRef.value) },
+          TaxCodeRef: { value: String(item.taxable ? hstTaxRef.value : exemptTaxRef.value) }
         }
       });
     }
@@ -438,7 +440,10 @@ JSON SCHEMA:
 
     const estPayload = {
       DocNumber: estDocNum,
-      CustomerRef: customerRef,
+      CustomerRef: {
+        value: String(customerRef.value),
+        name: customerRef.name
+      },
       GlobalTaxCalculation: "TaxExcluded",
       Line: qboLines,
       TxnStatus: "Pending",
@@ -492,7 +497,6 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
   if (!clientName) return null;
   const cleanName = clientName.trim().replace(/'/g, "\\'");
   
-  // Query both active and inactive customers to avoid duplicate name crashes
   const query = `select * from Customer where DisplayName LIKE '%${cleanName}%' and Active in (true, false) MAXRESULTS 1`;
   const qboData = await qboApiRequest(config, query);
   
@@ -700,7 +704,6 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   const rawInput = nlp.transcript_en || nlp.qbo_line_items || '';
   const fallbackAmount = nlp.qbo_amount || 70000;
 
-  // Run the Multimodal Oracle RAG expansion
   const compiled = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
 
   const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'Wendy Burk';
@@ -729,20 +732,41 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
       SalesItemLineDetail: { 
         Qty: item.quantity || 1, 
         UnitPrice: item.unit_price !== undefined ? item.unit_price : item.amount, 
-        ItemRef: itemRef,
-        TaxCodeRef: item.taxable ? hstTaxRef : exemptTaxRef
+        ItemRef: { value: String(itemRef.value) },
+        TaxCodeRef: { value: String(item.taxable ? hstTaxRef.value : exemptTaxRef.value) }
       }
     });
   }
 
   const nextEstimateNum = await getNextEstimateNumber(config);
 
+  // Clean, strictly schema-compliant QBO Estimate Payload
   const estPayload = {
     DocNumber: nextEstimateNum,
-    CustomerRef: customerRef,
+    CustomerRef: {
+      value: String(customerRef.value),
+      name: customerRef.name
+    },
     GlobalTaxCalculation: "TaxExcluded",
     Line: qboLines
   };
+
+  if (customerEmail) {
+    estPayload.BillEmail = { Address: customerEmail.trim().toLowerCase() };
+  }
+
+  if (customerAddress) {
+    const addrLine1 = typeof customerAddress === 'string' ? customerAddress : (customerAddress.line1 || customerAddress.street || '');
+    if (addrLine1) {
+      estPayload.BillAddr = {
+        Line1: addrLine1,
+        City: typeof customerAddress === 'object' ? (customerAddress.city || 'Aurora') : 'Aurora',
+        CountrySubDivisionCode: typeof customerAddress === 'object' ? (customerAddress.province || 'ON') : 'ON',
+        PostalCode: typeof customerAddress === 'object' ? (customerAddress.postal_code || '') : '',
+        Country: 'Canada'
+      };
+    }
+  }
 
   const createRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
   
@@ -821,17 +845,37 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
       SalesItemLineDetail: { 
         Qty: item.quantity || 1, 
         UnitPrice: item.unit_price !== undefined ? item.unit_price : item.amount, 
-        ItemRef: itemRef,
-        TaxCodeRef: item.taxable ? hstTaxRef : exemptTaxRef
+        ItemRef: { value: String(itemRef.value) },
+        TaxCodeRef: { value: String(item.taxable ? hstTaxRef.value : exemptTaxRef.value) }
       }
     });
   }
 
   const invoicePayload = {
-    CustomerRef: customerRef,
+    CustomerRef: {
+      value: String(customerRef.value),
+      name: customerRef.name
+    },
     GlobalTaxCalculation: "TaxExcluded",
     Line: qboLines
   };
+
+  if (customerEmail) {
+    invoicePayload.BillEmail = { Address: customerEmail.trim().toLowerCase() };
+  }
+
+  if (customerAddress) {
+    const addrLine1 = typeof customerAddress === 'string' ? customerAddress : (customerAddress.line1 || customerAddress.street || '');
+    if (addrLine1) {
+      invoicePayload.BillAddr = {
+        Line1: addrLine1,
+        City: typeof customerAddress === 'object' ? (customerAddress.city || 'Aurora') : 'Aurora',
+        CountrySubDivisionCode: typeof customerAddress === 'object' ? (customerAddress.province || 'ON') : 'ON',
+        PostalCode: typeof customerAddress === 'object' ? (customerAddress.postal_code || '') : '',
+        Country: 'Canada'
+      };
+    }
+  }
 
   const createRes = await qboApiRequest(config, '/invoice', 'POST', invoicePayload);
   
