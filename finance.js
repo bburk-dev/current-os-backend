@@ -90,13 +90,26 @@ let cachedTaxCodes = null;
 async function getCachedCatalogItems(config) {
   if (cachedItems && cachedItems.length > 0) return cachedItems;
   try {
-    const qboData = await qboApiRequest(config, `select * from Item where Active=true MAXRESULTS 100`);
-    cachedItems = qboData?.QueryResponse?.Item || [];
+    const qboData = await qboApiRequest(config, `select * from Item where Active=true MAXRESULTS 500`);
+    const rawItems = qboData?.QueryResponse?.Item || [];
+    
+    // Strict filter: Exclude QBO Categories to prevent QBO Error 2500
+    cachedItems = rawItems.filter(i => i.Type && i.Type.toLowerCase() !== 'category');
+    console.log(`[QBO Catalog] Filtered ${cachedItems.length} sellable items (excluded ${rawItems.length - cachedItems.length} categories)`);
     return cachedItems;
   } catch (err) {
     console.warn('[QBO Catalog Discovery Error]:', err.message);
     return [];
   }
+}
+
+async function getDefaultQboItemRef(config) {
+  const items = await getCachedCatalogItems(config);
+  if (items && items.length > 0) {
+    const preferred = items.find(i => i.Type === 'Service') || items[0];
+    return { value: String(preferred.Id), name: preferred.Name };
+  }
+  return { value: "1", name: "Services" };
 }
 
 async function resolveCategoryItemRef(config, categoryName) {
@@ -119,6 +132,7 @@ async function resolveCategoryItemRef(config, categoryName) {
 
   if (!matched) {
     matched = items.find(i => i.Type === 'Service') ||
+              items.find(i => i.Type === 'NonInventory') ||
               items.find(i => /service|sales|general/i.test(i.Name || '')) ||
               items[0];
   }
@@ -558,7 +572,6 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
     };
   }
 
-  // Graceful fallback suffix if display name collided
   const fallbackName = `${clientName.trim()} (${new Date().toLocaleDateString('en-CA')})`;
   payload.DisplayName = fallbackName;
   const fallbackRes = await qboApiRequest(config, '/customer', 'POST', payload);
@@ -654,7 +667,6 @@ OUTPUT STRICTLY JSON:
     console.error('[Finance RAG Multi-Line Error]:', err.message);
   }
 
-  // Fast deterministic fallback if LLM misses spelled fields
   const cleanEmailMatch = rawInput.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
   const spelledEmailMatch = rawInput.match(/b[\s-]*o[\s-]*b[\s-]*b[\s-]*u[\s-]*r[\s-]*k\s*@\s*gmail\.com/i);
   const resolvedEmail = cleanEmailMatch ? cleanEmailMatch[1] : (spelledEmailMatch ? "bobburk@gmail.com" : null);
@@ -740,7 +752,6 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
 
   const nextEstimateNum = await getNextEstimateNumber(config);
 
-  // Clean, strictly schema-compliant QBO Estimate Payload
   const estPayload = {
     DocNumber: nextEstimateNum,
     CustomerRef: {
@@ -965,6 +976,7 @@ module.exports = {
   getAgingReport,
   handleARLookup,
   handleReceiptUpload,
+  getDefaultQboItemRef,
   resolveCategoryItemRef,
   resolveQboTaxCode,
   sendQboTransactionEmail
