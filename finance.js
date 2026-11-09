@@ -121,7 +121,6 @@ async function resolveQboTaxCode(config, applyTax) {
   }
 
   if (cachedTaxCodes.length === 0) {
-    // Absolute fallback for Canada if API fetch fails
     return applyTax ? { value: '20' } : { value: 'Exempt' }; 
   }
 
@@ -596,10 +595,13 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   const defaultItemRef = await getDefaultQboItemRef(config);
   const taxCodeRef = await resolveQboTaxCode(config, expandedContext.apply_tax);
   
+  // Defensive extraction to prevent slice crashes if AI drops the formal_description key
+  const safeDesc = expandedContext?.formal_description || rawInput || 'Professional Services';
+  
   const lineItem = {
     Amount: amount,
     DetailType: "SalesItemLineDetail",
-    Description: expandedContext.formal_description || rawInput || 'Professional Services',
+    Description: safeDesc,
     SalesItemLineDetail: { 
       Qty: 1, 
       UnitPrice: amount, 
@@ -617,8 +619,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   const createRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
   
   if (createRes && createRes.Estimate) {
-    const rawDesc = lineItem.Description || 'Professional Services';
-    const cleanDesc = rawDesc.length > 150 ? rawDesc.slice(0, 150) + '...' : rawDesc;
+    const cleanDesc = safeDesc.length > 150 ? safeDesc.slice(0, 150) + '...' : safeDesc;
     
     const estCard = `🧾 *TITAN OS | ESTIMATE DRAFTED*\n` +
                     `──────────────────────────────\n` +
@@ -655,10 +656,13 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   const defaultItemRef = await getDefaultQboItemRef(config);
   const taxCodeRef = await resolveQboTaxCode(config, expandedContext.apply_tax);
 
+  // Defensive extraction to prevent slice crashes
+  const safeDesc = expandedContext?.formal_description || rawInput || 'Professional Services';
+
   const lineItem = {
     Amount: amount,
     DetailType: "SalesItemLineDetail",
-    Description: expandedContext.formal_description || rawInput || 'Professional Services',
+    Description: safeDesc,
     SalesItemLineDetail: { 
       Qty: 1, 
       UnitPrice: amount, 
