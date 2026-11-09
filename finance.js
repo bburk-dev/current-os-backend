@@ -93,7 +93,7 @@ async function getCachedCatalogItems(config) {
     const qboData = await qboApiRequest(config, `select * from Item where Active=true MAXRESULTS 500`);
     const rawItems = qboData?.QueryResponse?.Item || [];
     
-    // Strict filter: Exclude QBO Categories and Bundles to prevent QBO Error 8331 (Invalid bundle entry)
+    // Strict filter: Exclude QBO Categories and Bundles to prevent QBO Error 8331
     cachedItems = rawItems.filter(i => {
       const type = (i.Type || '').toLowerCase();
       return type !== 'category' && type !== 'bundle' && type !== 'group';
@@ -116,29 +116,29 @@ async function getDefaultQboItemRef(config) {
   return { value: "1", name: "Services" };
 }
 
-async function resolveCategoryItemRef(config, categoryName) {
+async function resolveCategoryItemRef(config, categoryName, descriptionContext = '') {
   const items = await getCachedCatalogItems(config);
   if (!items || items.length === 0) return { value: "1", name: "Services" };
 
   const cat = String(categoryName || '').toLowerCase();
+  const desc = String(descriptionContext || '').toLowerCase();
   let matched = null;
 
-  if (cat.includes('court') || cat.includes('padel')) {
+  if (cat.includes('court') || cat.includes('padel') || desc.includes('panoramic')) {
     matched = items.find(i => /padel|panoramic/i.test(i.Name || '') && !/pickleball/i.test(i.Name || '')) ||
-              items.find(i => /padel|panoramic/i.test(i.Description || '') && !/pickleball/i.test(i.Description || '')) ||
               items.find(i => /court|kit/i.test(i.Name || '') && !/pickleball/i.test(i.Name || ''));
-  } else if (cat.includes('install')) {
-    matched = items.find(i => /install|assembly|labour|labor/i.test(i.Name || '')) ||
-              items.find(i => /install|assembly/i.test(i.Description || ''));
-  } else if (cat.includes('delivery') || cat.includes('freight')) {
-    matched = items.find(i => /delivery|freight|shipping|transport/i.test(i.Name || '')) ||
+  } else if (cat.includes('install') || desc.includes('erect') || desc.includes('assembly')) {
+    matched = items.find(i => /install|assembly|labour|labor/i.test(i.Name || '') && !/delivery/i.test(i.Name || '')) ||
+              items.find(i => /install/i.test(i.Description || ''));
+  } else if (cat.includes('delivery') || cat.includes('freight') || desc.includes('forklift')) {
+    matched = items.find(i => /delivery|freight|shipping/i.test(i.Name || '')) ||
               items.find(i => /delivery|freight/i.test(i.Description || ''));
   }
 
   if (!matched) {
     matched = items.find(i => i.Type === 'Service' && !/pickleball/i.test(i.Name || '')) ||
               items.find(i => i.Type === 'NonInventory') ||
-              items.find(i => /service|sales|general/i.test(i.Name || '')) ||
+              items.find(i => /service|sales/i.test(i.Name || '')) ||
               items[0];
   }
 
@@ -441,7 +441,7 @@ JSON SCHEMA:
 
     const qboLines = [];
     for (const item of changeOrder.line_items) {
-      const itemRef = await resolveCategoryItemRef(config, item.category);
+      const itemRef = await resolveCategoryItemRef(config, item.category, item.description);
       qboLines.push({
         Amount: item.amount,
         DetailType: "SalesItemLineDetail",
@@ -464,6 +464,9 @@ JSON SCHEMA:
         name: customerRef.name
       },
       GlobalTaxCalculation: "TaxExcluded",
+      TxnTaxDetail: {
+        TxnTaxCodeRef: { value: String(hstTaxRef.value) }
+      },
       Line: qboLines,
       TxnStatus: "Pending",
       CustomField: [{
@@ -478,7 +481,7 @@ JSON SCHEMA:
     const totalFormatted = changeOrder.total_amount.toFixed(2);
     const finalTotal = qboRes?.Estimate?.TotalAmt || totalFormatted;
 
-    const breakdownText = changeOrder.line_items.map(i => `• ${i.description} (x${i.quantity}): $${i.amount.toFixed(2)}`).join('\n');
+    const breakdownText = changeOrder.line_items.map(i => `• ${i.description.replace(/\n/g, ' ').slice(0, 32)}.. (x${i.quantity}): $${i.amount.toFixed(2)}`).join('\n');
 
     const card = `📝 *TITAN OS | CHANGE-ORDER DRAFTED*\n` +
                  `──────────────────────────────\n` +
@@ -617,9 +620,9 @@ TASK:
 3. For each line item:
    - Identify category: "COURT", "INSTALLATION", "DELIVERY", or "ACCESSORY".
    - CRITICAL INSTRUCTION FOR DESCRIPTIONS: DO NOT hallucinate or generate generic architectural copy. You MUST extract the EXACT, VERBATIM line item descriptions from the attached "Sample Estimate.pdf" for the corresponding category. 
-     - For "COURT", extract the exact multi-line text block from the sample estimate that describes the "Panoramic Padel Court - BLACK" including the steel structure, mesh, fasteners, lights, glass, sand, and turf.
+     - For "COURT", extract the exact multi-line text block from the sample estimate that describes the "Panoramic Padel Court - BLACK" including the steel structure, mesh, fasteners, lights, glass, sand, and turf. Do NOT use bullet points in the extracted string; use exact text with newlines.
      - For "INSTALLATION", describe turnkey physical court assembly and mechanical erection.
-     - For "DELIVERY", extract the exact text block starting with "ALL INCLUSIVE" (Delivery, Forklift, Unloading team).
+     - For "DELIVERY", extract the exact text block starting with "ALL INCLUSIVE" (Delivery, Forklift, Unloading team). Do NOT use bullet points in the extracted string; use exact text with newlines.
    - Extract unit price and line total.
    - Determine taxability: mark "taxable": true ONLY if "plus HST", "add tax", or standard taxable is implied. Mark "taxable": false if the operative explicitly says "tax exempt" or "zero cost".
 
@@ -702,7 +705,7 @@ OUTPUT STRICTLY JSON:
       },
       {
         category: "DELIVERY",
-        description: "ALL INCLUSIVE\n• Delivery to final installation\n• Forklift 12K to unload\n• Unloading team and tools",
+        description: "ALL INCLUSIVE\nDelivery to final installation\nForklift 12K to unload\nUnloading team and tools",
         quantity: 1,
         unit_price: 2000,
         amount: 2000,
@@ -741,7 +744,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
 
   for (const item of compiled.line_items) {
     computedSubtotal += item.amount;
-    const itemRef = await resolveCategoryItemRef(config, item.category);
+    const itemRef = await resolveCategoryItemRef(config, item.category, item.description);
 
     qboLines.push({
       Amount: item.amount,
@@ -765,11 +768,15 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
       name: customerRef.name
     },
     GlobalTaxCalculation: "TaxExcluded",
+    TxnTaxDetail: {
+      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
+    },
     Line: qboLines
   };
 
-  if (customerEmail) {
-    estPayload.BillEmail = { Address: customerEmail.trim().toLowerCase() };
+  // Force explicit Email population from the resolved customer entity
+  if (customerRef.email) {
+    estPayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
   }
 
   if (customerAddress) {
@@ -794,7 +801,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     const taxAmt = (parseFloat(finalTotal) - computedSubtotal).toFixed(2);
 
     const lineBreakdown = compiled.line_items.map(li => 
-      `• *${li.description.slice(0, 32)}..:* $${li.amount.toFixed(2)} ${li.taxable ? '_(+HST)_' : '_(Exempt)_'}`
+      `• *${li.description.replace(/\n/g, ' ').slice(0, 32)}..:* $${li.amount.toFixed(2)} ${li.taxable ? '_(+HST)_' : '_(Exempt)_'}`
     ).join('\n');
 
     const addressStr = customerAddress?.line1 ? `\n📍 *Site:* ${customerAddress.line1}, ${customerAddress.city || ''}` : '';
@@ -853,7 +860,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
 
   for (const item of compiled.line_items) {
     computedSubtotal += item.amount;
-    const itemRef = await resolveCategoryItemRef(config, item.category);
+    const itemRef = await resolveCategoryItemRef(config, item.category, item.description);
 
     qboLines.push({
       Amount: item.amount,
@@ -874,11 +881,14 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
       name: customerRef.name
     },
     GlobalTaxCalculation: "TaxExcluded",
+    TxnTaxDetail: {
+      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
+    },
     Line: qboLines
   };
 
-  if (customerEmail) {
-    invoicePayload.BillEmail = { Address: customerEmail.trim().toLowerCase() };
+  if (customerRef.email) {
+    invoicePayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
   }
 
   if (customerAddress) {
