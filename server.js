@@ -109,7 +109,7 @@ const pendingNewSiteRequests = new Map();
 
 // In-Memory Message Deduplication Store (Guards against Meta burst-retries)
 const processedMessageIds = new Map();
-const DEDUP_TTL_MS = 60 * 1000; // 60-second idempotency window
+const DEDUP_TTL_MS = 60 * 1000;
 
 const memoryCache = {
   sites: null,
@@ -205,7 +205,6 @@ async function getCachedOpenAssignments(forceRefresh = false) {
   }
 }
 
-// Autonomous QBO Token Hydration & Auto-Refresh Daemon
 async function hydrateQBOCache() {
   if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) {
     console.warn('[Cache Engine] Supabase credentials missing. Bypassing QBO state hydration.');
@@ -480,7 +479,7 @@ app.post('/webhook', async (req, res) => {
   const entry = body.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
   
-  if (changes?.statuses) return; // Drop read/delivery receipts
+  if (changes?.statuses) return;
 
   const message = changes?.messages?.[0];
   if (!message) return;
@@ -526,7 +525,7 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2 (Strictly safe fields, avoids 422 rejections)
+    // Resilient write to Inbound Messages 2 (Field name schema safe, avoids 422 errors)
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Message Type': message.type || 'text',
@@ -535,7 +534,7 @@ app.post('/webhook', async (req, res) => {
     }).catch(() => {});
 
     // ================================================================
-    // A. INTERACTIVE BUTTON & LIST REPLIES (ONE-TAP ZERO-UI ACTIONS)
+    // A. INTERACTIVE BUTTON & LIST REPLIES (ONE-TAP ACTIONS)
     // ================================================================
     const interactiveButtonId = message.interactive?.button_reply?.id || '';
     if (interactiveButtonId) {
@@ -551,7 +550,7 @@ app.post('/webhook', async (req, res) => {
           if (emailRes) {
             await dispatchOutboundWhatsApp(dispatchTarget, `✅ *Estimate Dispatched:*\nOfficial QuickBooks PDF delivered directly to client's email inbox.`);
           } else {
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send email. Verify that a valid client email is registered.`);
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send email. Verify client email address.`);
           }
         } catch (emailErr) {
           console.error('[QBO Send Estimate Error]:', emailErr.message);
