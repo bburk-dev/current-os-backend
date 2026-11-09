@@ -519,6 +519,7 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
+    // Resilient write to Inbound Messages 2 (Field name schema aligned to "Phone")
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Phone': fromPhone,
@@ -555,6 +556,11 @@ app.post('/webhook', async (req, res) => {
           const drawAmt = parseFloat((totalAmt * (percentage / 100)).toFixed(2));
           const primaryDesc = estimate.Line?.[0]?.Description || 'Bounce Padel Court Construction';
 
+          // Call the newly implemented dynamic item resolver from finance.js
+          const defaultItemRef = finance.getDefaultQboItemRef 
+            ? await finance.getDefaultQboItemRef(CONFIG) 
+            : { value: "1" };
+
           const invPayload = {
             CustomerRef: estimate.CustomerRef,
             Line: [
@@ -565,7 +571,7 @@ app.post('/webhook', async (req, res) => {
                 SalesItemLineDetail: {
                   Qty: 1,
                   UnitPrice: drawAmt,
-                  ItemRef: { value: "1" }
+                  ItemRef: defaultItemRef
                 }
               }
             ],
