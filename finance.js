@@ -2,7 +2,8 @@
  * TITAN OS V6.0.22 — FINANCE & QBO ORCHESTRATOR
  * Module: finance.js
  * Purpose: Intuit OAuth2, Dunning, Progressive Draws, Receipt OCR, 
- *          Macro Ghost-Ledger Extraction, and Traffic-Light AR Aging
+ *          Macro Ghost-Ledger Extraction, Traffic-Light AR Aging,
+ *          and Conversational Subcontractor Change-Order Negotiation
  */
 
 const fetch = globalThis.fetch || require('node-fetch');
@@ -115,10 +116,8 @@ async function getAgingReport(config, minDaysPastDue = 0) {
     totalOutstanding += inv.balance;
   });
 
-  // Sort descending by highest days overdue
   parsedInvoices.sort((a, b) => b.daysLate - a.daysLate);
 
-  // Status indicator matrix: 🟢 Current, 🟡 1-30 Days Late, 🔴 >30 Days Late
   for (const inv of parsedInvoices) {
     let statusText = '';
     let emoji = '';
@@ -163,7 +162,6 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
   const submitterName = callerIdentity?.name || 'Bob';
   const workerRecord = callerIdentity?.workerRecord;
 
-  // Clamped prompt: Vendor, total, category, tax, date (Zero line items)
   const prompt = `You are the Titan OS Financial Copilot. Extract ONLY the merchant/vendor name, total amount, general category (e.g. Restaurant, Hardware, Fuel, Supplies), tax amount, and date from this receipt. Do NOT extract individual purchased line items. Return strictly JSON.`;
 
   const parts = [{ text: prompt }];
@@ -213,7 +211,6 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
     const totalAmount = parseFloat(extracted.total_amount) || 0.00;
     const categoryName = extracted.category || 'Supplies';
 
-    // 1. Write Macro Entry to Airtable Ghost Ledger (Reports 2)
     let expenseRef = Math.floor(100 + Math.random() * 900);
     if (airtableWriteWithAutoDrop) {
       const airtablePayload = {
@@ -236,7 +233,6 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
       }
     }
 
-    // 2. Dispatch to QuickBooks Online as Purchase
     let qboStatusText = "Dispatched to QuickBooks";
     if (config.qbo.companyId && config.qbo.accessToken) {
       try {
@@ -263,7 +259,6 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
       qboStatusText = "Dispatched to QuickBooks";
     }
 
-    // 3. Ergonomic WhatsApp Status Card (Line Items Excluded)
     const card = `🧾 *TITAN OS | EXPENSE RECEIPT LOGGED*\n` +
                  `──────────────────────────────\n` +
                  `👤 *Submitted By:* ${submitterName}\n` +
@@ -283,7 +278,128 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
 }
 
 // ====================================================================
-// 4. CUSTOMER PROVISIONING
+// 4. CONVERSATIONAL SUBCONTRACTOR CHANGE-ORDER ENGINE
+// ====================================================================
+
+async function handleConversationalChangeOrder(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage, sendWhatsAppButtons, callerIdentity = null) {
+  const submitterName = callerIdentity?.name || 'Field Operative';
+  const rawInput = typeof nlp === 'string' ? nlp : (nlp.transcript_en || nlp.raw_text || '');
+  const siteNameTarget = nlp.referenced_site_name || nlp.qbo_customer_name || 'Active Site';
+
+  await sendWhatsAppMessage(dispatchTarget, "⏳ Pricing change-order against technical blueprints & standard rate sheets...");
+
+  const parts = [];
+  if (oracleFileURIs && oracleFileURIs.length > 0) {
+    oracleFileURIs.forEach(item => {
+      parts.push({ file_data: { mime_type: 'application/pdf', file_uri: item.uri } });
+    });
+  }
+
+  const prompt = `You are the Lead Estimator for Titan OS / Bounce Padel.
+A field operative has verbally requested a project scope modification / change-order:
+"${rawInput}"
+
+Task:
+1. Break down the scope changes into discrete, professional construction line items.
+2. Estimate realistic industrial market pricing for padel court modifications (e.g., extra excavation per linear foot, additional LED fixtures, tempered glass 12mm upgrades, custom turf logos).
+3. If specific amounts were mentioned by the operative, honor those values.
+4. Output STRICTLY JSON conforming to the schema.
+
+JSON SCHEMA:
+{
+  "client_name": "string (site or client name, e.g. '${siteNameTarget}')",
+  "scope_summary": "string (concise summary of modification)",
+  "total_amount": number,
+  "line_items": [
+    {
+      "description": "string",
+      "quantity": number,
+      "unit_price": number,
+      "amount": number
+    }
+  ]
+}`;
+
+  parts.push({ text: prompt });
+
+  try {
+    const aiRes = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        generationConfig: { temperature: 0.1, responseMimeType: 'application/json' }
+      })
+    });
+
+    if (!aiRes.ok) throw new Error(`Gemini Estimation rejected: ${aiRes.status}`);
+    const data = await aiRes.json();
+    const rawJSON = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const changeOrder = JSON.parse(rawJSON.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+
+    const customerRef = await findOrCreateQboCustomer(config, changeOrder.client_name || siteNameTarget);
+    if (!customerRef) {
+      await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to bind change-order: Customer "${changeOrder.client_name}" not found in QuickBooks.`);
+      return;
+    }
+
+    const qboLines = changeOrder.line_items.map(item => ({
+      Amount: item.amount,
+      DetailType: "SalesItemLineDetail",
+      Description: item.description,
+      SalesItemLineDetail: {
+        Qty: item.quantity,
+        UnitPrice: item.unit_price,
+        ItemRef: { value: "1" }
+      }
+    }));
+
+    const estPayload = {
+      CustomerRef: customerRef,
+      Line: qboLines,
+      TxnStatus: "Pending",
+      CustomField: [{
+        DefinitionId: "1",
+        StringValue: "CHANGE_ORDER",
+        Type: "StringTypeBasic"
+      }]
+    };
+
+    const qboRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
+    const estimateDocNumber = qboRes?.Estimate?.DocNumber || `CO-${Date.now().toString().slice(-4)}`;
+    const totalFormatted = changeOrder.total_amount.toFixed(2);
+
+    const breakdownText = changeOrder.line_items.map(i => `• ${i.description} (x${i.quantity}): $${i.amount.toFixed(2)}`).join('\n');
+
+    const card = `📝 *TITAN OS | CHANGE-ORDER DRAFTED*\n` +
+                 `──────────────────────────────\n` +
+                 `🏟️ *Project:* ${customerRef.name}\n` +
+                 `👤 *Requested By:* ${submitterName}\n` +
+                 `📋 *Scope:* ${changeOrder.scope_summary}\n` +
+                 `──────────────────────────────\n` +
+                 `${breakdownText}\n` +
+                 `──────────────────────────────\n` +
+                 `💰 *Total Adjustment:* $${totalFormatted} USD\n` +
+                 `🧾 *Estimate Ref:* #${estimateDocNumber} (Pending HQ Approval)`;
+
+    if (typeof sendWhatsAppButtons === 'function') {
+      const buttons = [
+        { id: `QBO_APPROVE_CO_${qboRes?.Estimate?.Id || '0'}`, title: "✅ Approve & Issue" },
+        { id: `QBO_REVISE_CO_${qboRes?.Estimate?.Id || '0'}`, title: "✏️ Revise Scope" }
+      ];
+      await sendWhatsAppButtons(dispatchTarget, card, buttons);
+    } else {
+      await sendWhatsAppMessage(dispatchTarget, card);
+    }
+
+  } catch (err) {
+    console.error('[Change-Order Engine Error]:', err.message);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to compute change-order scope: ${err.message}`);
+  }
+}
+
+// ====================================================================
+// 5. CUSTOMER PROVISIONING
 // ====================================================================
 
 async function findOrCreateQboCustomer(config, clientName, email = null, phone = null) {
@@ -313,7 +429,7 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
       };
     }
   } catch (err) {
-    console.warn('[QBO Customer] Exact name collision detected, appending suffix...');
+    console.warn('[QBO Customer] Collided, generating fallback suffix...');
     const fallbackName = `${clientName.trim()} (New)`;
     payload.DisplayName = fallbackName;
     const fallbackRes = await qboApiRequest(config, '/customer', 'POST', payload).catch(() => null);
@@ -329,7 +445,7 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
 }
 
 // ====================================================================
-// 5. RAG ORACLE EXPANSION (LINE ITEMS & TAX)
+// 6. RAG ORACLE EXPANSION (LINE ITEMS & TAX)
 // ====================================================================
 
 async function expandLineItemsWithOracle(config, rawInput, amount, oracleFileURIs) {
@@ -392,7 +508,7 @@ JSON SCHEMA:
 }
 
 // ====================================================================
-// 6. INVOICE & ESTIMATE ORCHESTRATION
+// 7. INVOICE & ESTIMATE ORCHESTRATION
 // ====================================================================
 
 async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage) {
@@ -437,12 +553,12 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   
   if (createRes && createRes.Estimate) {
     const estCard = `🧾 *TITAN OS | ESTIMATE DRAFTED*\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `──────────────────────────────\n` +
                     `*Estimate:* #${createRes.Estimate.DocNumber}\n` +
                     `*Client:* ${customerRef.name}\n` +
                     `*Subtotal:* $${parseFloat(amount).toFixed(2)}\n` +
                     `*Tax Applied:* ${expandedContext.apply_tax ? 'Yes 🇨🇦' : 'No'}\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `──────────────────────────────\n` +
                     `📋 *Scope:*\n_${expandedContext.formal_description.slice(0, 150)}..._\n\n` +
                     `✅ Estimate securely generated in QuickBooks Online.`;
     await sendWhatsAppMessage(dispatchTarget, estCard);
@@ -493,12 +609,12 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   
   if (createRes && createRes.Invoice) {
     const invCard = `🧾 *TITAN OS | INVOICE CREATED*\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `──────────────────────────────\n` +
                     `*Invoice:* #${createRes.Invoice.DocNumber}\n` +
                     `*Client:* ${customerRef.name}\n` +
                     `*Amount:* $${parseFloat(amount).toFixed(2)}\n` +
                     `*Tax Applied:* ${expandedContext.apply_tax ? 'Yes' : 'No'}\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `──────────────────────────────\n` +
                     `✅ Invoice generated successfully.`;
     await sendWhatsAppMessage(dispatchTarget, invCard);
   } else {
@@ -530,13 +646,13 @@ async function handleInvoiceApproval(config, nlp, dispatchTarget, sendWhatsAppMe
   const drawAmount = (totalAmount * (percentage / 100)).toFixed(2);
 
   const invCard = `🧾 *TITAN OS | PROGRESS DRAW APPROVAL*\n` +
-                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `──────────────────────────────\n` +
                   `*Estimate:* #${estimate.DocNumber}\n` +
                   `*Client:* ${estimate.CustomerRef.name}\n` +
                   `*Draw Split:* ${percentage}%\n` +
                   `*Est Total:* $${totalAmount.toFixed(2)}\n` +
                   `*Draw Amount:* $${drawAmount}\n` +
-                  `━━━━━━━━━━━━━━━━━━━━\n` +
+                  `──────────────────────────────\n` +
                   `Tap below to cryptographically bind this ${percentage}% draw to the estimate ledger.`;
 
   const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `✉️ Execute ${percentage}% Draw` }];
@@ -551,6 +667,7 @@ module.exports = {
   handleEstimateCreation,
   handleInvoiceCreation,
   handleInvoiceApproval,
+  handleConversationalChangeOrder,
   getAgingReport,
   handleARLookup,
   handleReceiptUpload
