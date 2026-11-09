@@ -170,11 +170,11 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   let safeBodyText = textBody;
   
   // DEFENSIVE INTERCEPTOR: Meta Graph API hard-limits interactive body text to 1024 characters.
-  // If the payload exceeds 1000 chars, decouple the dispatch: send the heavy text as a standard 
+  // If the payload exceeds 950 chars, decouple the dispatch: send the heavy text as a standard 
   // message first, then immediately follow up with a short interactive menu.
-  if (safeBodyText.length > 1000) {
+  if (safeBodyText.length > 950) {
     await sendWhatsAppMessage(config, cleanDestination, safeBodyText);
-    safeBodyText = "⚡ *Action Required:*\nDocument drafted. Please select an operational command below to execute:";
+    safeBodyText = "⚡ *Action Required:*\nDocument drafted successfully. Please select an operational command below to execute:";
   }
 
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
