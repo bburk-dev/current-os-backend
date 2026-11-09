@@ -1,8 +1,8 @@
 /**
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
- *          IPC Message Deduplication Buffer, Conversational Voice Estimates,
+ * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, QBO Finance Copilot,
+ *          Atomic Message Deduplication, Conversational Voice Estimates,
  *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
  *          Conversational Clarification Engine, Ambient Multi-Turn Memory,
  *          RBAC Bouncer, and Zero-UI Site Provisioning
@@ -26,8 +26,6 @@ if (!globalThis.fetch) {
 try { require('dotenv').config(); } catch (e) {}
 
 const express = require('express');
-const cluster = require('cluster');
-const os = require('os');
 const { createClient } = require('@supabase/supabase-js');
 
 // Import Decoupled Titan OS Modules
@@ -40,7 +38,6 @@ const whatsapp = require('./whatsapp');
 // 1. GLOBAL CONFIGURATION & SECRETS
 // ====================================================================
 const PORT = process.env.PORT || 3000;
-const numCPUs = process.env.WEB_CONCURRENCY || os.cpus().length || 1;
 
 const CONFIG = {
   port: PORT,
@@ -104,6 +101,10 @@ let oracleFileURIs = [];
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
+
+// In-Memory Message Deduplication Store (Guaranteed Singleton)
+const processedMessageIds = new Map();
+const DEDUP_TTL_MS = 300 * 1000;
 
 const memoryCache = {
   sites: null,
@@ -317,26 +318,8 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 }
 
 // ====================================================================
-// 3. IPC DEDUPLICATION & CLUSTER HELPERS
+// 3. EXECUTIVE PROJECT MANAGEMENT & METEOROLOGICAL TELEMETRY
 // ====================================================================
-
-// Worker Process Helper to request Dedup check from Master Node
-async function isMessageDuplicate(messageId) {
-  if (!cluster.isWorker) return false;
-  
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(false), 1500); // Fail open if master unresponsive
-    const handler = (msg) => {
-      if (msg.type === 'DEDUP_RESULT' && msg.messageId === messageId) {
-        clearTimeout(timeout);
-        process.removeListener('message', handler);
-        resolve(msg.isDuplicate);
-      }
-    };
-    process.on('message', handler);
-    process.send({ type: 'CHECK_DEDUP', messageId });
-  });
-}
 
 async function evaluateWeatherTripwires(lat, lon) {
   const controller = new AbortController();
@@ -481,6 +464,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+// Single-Threaded Atomic Deduplication Flow
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
@@ -500,11 +484,17 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
 
-  // 1. IPC Deduplication Matrix Check
-  const isDuplicate = await isMessageDuplicate(messageId);
-  if (isDuplicate) {
-    console.log(`[Meta Ingress] 🛡️ IPC Deduplicated messageId: ${messageId} (Already processed in active window)`);
+  // Atomic Single-Threaded Deduplication Lock
+  const now = Date.now();
+  if (processedMessageIds.has(messageId)) {
+    console.log(`[Meta Ingress] 🛡️ Deduplicated messageId: ${messageId} (Already processed)`);
     return;
+  }
+  processedMessageIds.set(messageId, now);
+
+  // GC expired message hashes
+  for (const [id, timestamp] of processedMessageIds.entries()) {
+    if (now - timestamp > DEDUP_TTL_MS) processedMessageIds.delete(id);
   }
 
   console.log(`[Meta Ingress] Processing message ${messageId} from ${dispatchTarget} (Type: ${message.type || 'text'})`);
@@ -529,11 +519,19 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    airtableWriteWithAutoDrop('Inbound Messages 2', {
-      'Message ID': messageId,
-      'Message Type': message.type || 'text',
-      'Worker': worker?.id ? [worker.id] : []
-    }).catch(() => {});
+    // Fail-safe wrapper to prevent 422 Select Field rejections from crashing ingress
+    try {
+      let safeMessageType = message.type || 'text';
+      if (safeMessageType === 'interactive') safeMessageType = 'text'; // Bypass Airtable Single Select schema mismatch
+      
+      await airtableWriteWithAutoDrop('Inbound Messages 2', {
+        'Message ID': messageId,
+        'Message Type': safeMessageType,
+        'Worker': worker?.id ? [worker.id] : []
+      });
+    } catch (e) {
+      console.warn('[Airtable Inbound Log Warning]:', e.message);
+    }
 
     const interactiveButtonId = message.interactive?.button_reply?.id || '';
     if (interactiveButtonId) {
@@ -1296,82 +1294,38 @@ app.get('/health', (req, res) => {
 });
 
 // ====================================================================
-// 5. CLUSTER ORCHESTRATION & BOOTSTRAP
+// 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
 // ====================================================================
 
 process.on('uncaughtException', (err) => console.error('[CRITICAL] Uncaught Exception:', err));
 process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
-if (cluster.isPrimary) {
-  console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.22 PRIMARY ORCHESTRATOR RUNNING`);
-  console.log(`====================================================================`);
-  console.log(`[Cluster Engine] Forking ${numCPUs} concurrent worker threads...`);
+console.log(`====================================================================`);
+console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+console.log(`====================================================================`);
 
-  // Master Global Deduplication Memory
-  const primaryProcessedMessageIds = new Map();
-  const PRIMARY_DEDUP_TTL_MS = 300 * 1000;
+startFridayNewsletterCron();
 
-  for (let i = 0; i < numCPUs; i++) cluster.fork();
-
-  for (const id in cluster.workers) {
-    cluster.workers[id].on('message', (msg) => {
-      if (msg.type === 'CHECK_DEDUP') {
-        const now = Date.now();
-        const isDuplicate = primaryProcessedMessageIds.has(msg.messageId);
-        if (!isDuplicate) {
-          primaryProcessedMessageIds.set(msg.messageId, now);
-        }
-        
-        for (const [key, timestamp] of primaryProcessedMessageIds.entries()) {
-          if (now - timestamp > PRIMARY_DEDUP_TTL_MS) primaryProcessedMessageIds.delete(key);
-        }
-        
-        cluster.workers[id].send({ type: 'DEDUP_RESULT', messageId: msg.messageId, isDuplicate });
-      }
-    });
-  }
-
-  cluster.on('exit', (worker, code, signal) => {
-    console.error(`[CRITICAL] Worker ${worker.process.pid} died (${signal || code}). Orchestrator spinning up a replacement...`);
-    const newWorker = cluster.fork();
-    newWorker.on('message', (msg) => {
-      if (msg.type === 'CHECK_DEDUP') {
-        const now = Date.now();
-        const isDuplicate = primaryProcessedMessageIds.has(msg.messageId);
-        if (!isDuplicate) primaryProcessedMessageIds.set(msg.messageId, now);
-        newWorker.send({ type: 'DEDUP_RESULT', messageId: msg.messageId, isDuplicate });
-      }
-    });
-  });
-
-  startFridayNewsletterCron();
-  
-  if (oracle && oracle.syncOracleDocs) {
-    oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
-  }
-} else {
-  app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`[Cluster Engine] Worker ${process.pid} online and listening on PORT ${PORT}`);
-    try {
-      await getCachedSites();
-      await getCachedWorkers();
-      await getCachedContacts();
-      await getCachedOpenAssignments();
-      
-      if (inventory && inventory.refreshInventoryCache) {
-        await inventory.refreshInventoryCache(CONFIG);
-      }
-      
-      if (oracle && oracle.syncOracleDocs) {
-        await oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-      }
-
-      await hydrateQBOCache();
-
-    } catch (err) {
-      console.error(`[Worker ${process.pid} Cache Hydration Error]:`, err.message);
-    }
-  });
+if (oracle && oracle.syncOracleDocs) {
+  oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+  setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
 }
+
+app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
+  try {
+    await getCachedSites();
+    await getCachedWorkers();
+    await getCachedContacts();
+    await getCachedOpenAssignments();
+    
+    if (inventory && inventory.refreshInventoryCache) {
+      await inventory.refreshInventoryCache(CONFIG);
+    }
+    
+    await hydrateQBOCache();
+
+  } catch (err) {
+    console.error(`[Cache Hydration Error]:`, err.message);
+  }
+});
