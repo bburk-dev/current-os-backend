@@ -462,7 +462,8 @@ RULES FOR INTENT RECOGNITION:
 1. CREATE_ESTIMATE:
    - Operative wants to quote, estimate, or price a build, court, or service.
    - EXTRACT:
-     * qbo_customer_name: Look for a client, club, or site name. IF NO CLIENT IS MENTIONED, use ACTIVE BOUND SITE CONTEXT: "${boundSiteName}".
+     * qbo_customer_name: Look for a client, club, or site name. IF NO CLIENT IS MENTIONED, use ACTIVE BOUND SITE CONTEXT: "${boundSiteName}". IF THE SPEAKER SPELLS A NAME OUT (e.g. "B-U-R-K"), OUTPUT THE EXACT SPELLED WORD.
+     * qbo_customer_email: Extract the exact email address if spoken (e.g. "bobburk@gmail.com").
      * qbo_amount: Extract numeric value (e.g. 70000, 65000). Handle "70k" -> 70000, "setenta mil" -> 70000.
      * qbo_line_items: Extract formal description of the item (e.g. "one panoramic padel court", "standard court kit").
      * apply_tax: true if "plus HST", "add tax", "plus tax", "mas tax" is mentioned; otherwise false.
@@ -490,12 +491,13 @@ RULES FOR INTENT RECOGNITION:
    - Operational site notes, status reports.
 
 CRITICAL INSTRUCTION FOR TRANSCRIPT:
-You MUST output the EXACT, FULL, VERBATIM word-for-word transcript of the audio in the 'transcript_en' field. Do NOT summarize it. Every spelled-out word or email address must be preserved exactly as spoken.
+You MUST output the EXACT, FULL, VERBATIM word-for-word transcript of the audio in the 'transcript_en' field. Do NOT summarize it. If a word is spelled out letter-by-letter (e.g. "Burke, B-U-R-K"), you MUST correct the spelling in the transcript to match the spoken letters exactly ("Wendy Burk").
 
 Return STRICTLY a JSON object with this schema:
 {
   "intent": "CREATE_ESTIMATE" | "CONVERT_ESTIMATE" | "CREATE_INVOICE" | "CHANGE_ORDER" | "AR_LOOKUP" | "ORACLE_QUERY" | "INVENTORY_QUERY" | "CHECKIN" | "GENERAL_UPDATE",
-  "qbo_customer_name": "string (resolved client/site name, never null if bound site exists)",
+  "qbo_customer_name": "string (resolved client/site name, correct spelling if spelled out)",
+  "qbo_customer_email": "string (extract email address if spoken, else null)",
   "qbo_amount": number or null,
   "qbo_estimate_number": "string or null",
   "qbo_invoice_percentage": number or null,
