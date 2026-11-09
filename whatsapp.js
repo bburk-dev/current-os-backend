@@ -1,10 +1,15 @@
 /**
  * TITAN OS V6.0.22 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
- * Purpose: Webhooks, Debouncing, NLP Intent Routing, Forensic Vision, and Telemetry
+ * Purpose: Webhooks, Debouncing, NLP Intent Routing, Forensic Vision,
+ *          12-Gate State Machine, Supabase Private Archival, and Telemetry
  */
 
 const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
+
+// Global fetch polyfill for clustered Node environments
+const fetch = globalThis.fetch || require('node-fetch');
 
 // ====================================================================
 // 1. IN-MEMORY DEBOUNCERS & GEOSPATIAL CACHES
@@ -16,11 +21,16 @@ const userActiveSiteMap = new Map();
 const dailyEasterEggTracker = new Map();
 
 // ====================================================================
-// 2. OUTBOUND MESSAGING (GRAPH API)
+// 2. OUTBOUND MESSAGING (META GRAPH API V21.0)
 // ====================================================================
 
 async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') {
-  if (!toTarget || !messageId || !config.meta.phoneNumberId) return false;
+  const phoneNumberId = config?.meta?.phoneNumberId || process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const accessToken = config?.meta?.accessToken || process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
+  const graphApiUrl = config?.meta?.graphApiUrl || 'https://graph.facebook.com/v21.0';
+
+  if (!toTarget || !messageId || !phoneNumberId || !accessToken) return false;
+
   let cleanDestination = String(toTarget).replace(/\D/g, ''); 
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
@@ -33,21 +43,52 @@ async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') 
   };
 
   try {
-    await fetch(`${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`, {
+    await fetch(`${graphApiUrl}/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${config.meta.accessToken}`,
+        'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     });
     return true;
-  } catch (err) { return false; }
+  } catch (err) { 
+    return false; 
+  }
 }
 
-async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
-  if (!toTarget || !config.meta.phoneNumberId) {
-    console.warn(`[Meta Outbound] Aborted: Target missing.`);
+async function sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText, retries = 2) {
+  let config = null;
+  let toTarget = '';
+  let messageBody = '';
+
+  // Polymorphic argument resolver to prevent caller mismatch
+  if (possibleText !== undefined) {
+    config = targetOrConfig;
+    toTarget = textOrTarget;
+    messageBody = possibleText;
+  } else if (typeof targetOrConfig === 'object' && targetOrConfig !== null && targetOrConfig.meta) {
+    config = targetOrConfig;
+    toTarget = textOrTarget;
+    messageBody = possibleText || '';
+  } else {
+    toTarget = targetOrConfig;
+    messageBody = textOrTarget;
+    config = {
+      meta: {
+        phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID,
+        accessToken: process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN,
+        graphApiUrl: 'https://graph.facebook.com/v21.0'
+      }
+    };
+  }
+
+  const phoneNumberId = config?.meta?.phoneNumberId || process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const accessToken = config?.meta?.accessToken || process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
+  const graphApiUrl = config?.meta?.graphApiUrl || 'https://graph.facebook.com/v21.0';
+
+  if (!toTarget || !phoneNumberId || !accessToken) {
+    console.warn(`[Meta Outbound] Aborted: Missing destination target or phone credentials.`);
     return false;
   }
   
@@ -62,14 +103,14 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
     text: { body: messageBody }
   };
 
-  const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
+  const url = `${graphApiUrl}/${phoneNumberId}/messages`;
 
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${config.meta.accessToken}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
@@ -85,6 +126,7 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
       if (attempt <= retries) {
         await new Promise(r => setTimeout(r, 1000 * attempt));
       } else {
+        console.error(`[Meta Outbound Exception] Attempt ${attempt} failed:`, err.message);
         return false;
       }
     }
@@ -93,7 +135,11 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
 }
 
 async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
-  if (!toTarget || !buttons || buttons.length === 0 || !config.meta.phoneNumberId) return false;
+  const phoneNumberId = config?.meta?.phoneNumberId || process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const accessToken = config?.meta?.accessToken || process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
+  const graphApiUrl = config?.meta?.graphApiUrl || 'https://graph.facebook.com/v21.0';
+
+  if (!toTarget || !buttons || buttons.length === 0 || !phoneNumberId || !accessToken) return false;
   
   let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
@@ -118,12 +164,12 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
     }
   };
 
-  const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
+  const url = `${graphApiUrl}/${phoneNumberId}/messages`;
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${config.meta.accessToken}`,
+        'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
@@ -175,10 +221,11 @@ function isIndoorSite(site) {
 }
 
 async function geocodeAddressWithGoogle(config, addressString) {
-  if (!config.google.apiKey || !addressString) return null;
+  const apiKey = config?.google?.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY;
+  if (!apiKey || !addressString) return null;
   try {
     const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${config.google.apiKey}`;
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${apiKey}`;
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
@@ -295,17 +342,15 @@ function evaluateWeatherTripwires(weather) {
 
 async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtableWriteWithAutoDrop, autoPersistSiteId = null) {
   let rawLocation = rawLocationOrSite;
-  let cache = null;
   let siteId = autoPersistSiteId;
 
   if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
     const fields = rawLocationOrSite.fields || rawLocationOrSite;
     rawLocation = fields['Site location'];
-    cache = fields['Map Cache'];
     siteId = rawLocationOrSite.id || autoPersistSiteId;
   }
 
-  if (typeof rawLocation === 'string' && memoryCache.coordinates.has(rawLocation)) {
+  if (typeof rawLocation === 'string' && memoryCache?.coordinates?.has(rawLocation)) {
     return memoryCache.coordinates.get(rawLocation);
   }
 
@@ -313,7 +358,7 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
     const directMatch = rawLocation.trim().match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
     if (directMatch) {
       const coords = { lat: parseFloat(directMatch[1]), lon: parseFloat(directMatch[2]) };
-      memoryCache.coordinates.set(rawLocation, coords);
+      if (memoryCache?.coordinates) memoryCache.coordinates.set(rawLocation, coords);
       return coords;
     }
   }
@@ -322,8 +367,8 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
     const googleResult = await geocodeAddressWithGoogle(config, rawLocation);
     if (googleResult) {
       const coords = { lat: googleResult.lat, lon: googleResult.lon };
-      memoryCache.coordinates.set(rawLocation, coords);
-      if (siteId && !rawLocation.includes(',')) {
+      if (memoryCache?.coordinates) memoryCache.coordinates.set(rawLocation, coords);
+      if (siteId && !rawLocation.includes(',') && typeof airtableWriteWithAutoDrop === 'function') {
         const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
         airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
       }
@@ -334,21 +379,19 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
 }
 
 async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWriteWithAutoDrop, generateMorningEasterEgg) {
-  const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Tech';
   userActiveSiteMap.set(fromPhone, site.id);
   
-  if (worker && worker.id) {
-    try {
-        await airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id);
-    } catch (e) {
-        console.warn(`[Airtable Auto-Healer] Ignored missing 'Current Site Bound' field for worker ${worker.id}`);
-    }
+  if (worker && worker.id && typeof airtableWriteWithAutoDrop === 'function') {
+    airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id).catch(() => {});
   }
 
-  airtableWriteWithAutoDrop('Sites', {
-    'Last Note': `[SITE BOUND] ${workerName} checked in (${Math.round(distanceMeters)}m from court).`,
-    'Last Intent': 'PRESENCE_VERIFIED'
-  }, site.id).catch(() => {});
+  if (typeof airtableWriteWithAutoDrop === 'function') {
+    airtableWriteWithAutoDrop('Sites', {
+      'Last Note': `[SITE BOUND] ${workerName} checked in (${Math.round(distanceMeters)}m from court pin).`,
+      'Last Intent': 'PRESENCE_VERIFIED'
+    }, site.id).catch(() => {});
+  }
 
   const indoor = isIndoorSite(site);
   let arrivalWeather = '';
@@ -358,19 +401,19 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
   }
 
   let checkinCard = `📍 *TITAN OS | SITE CONTEXT BOUND*\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `──────────────────────────────\n` +
     `🏟️ *Court:* ${site.fields['Site Name']}\n` +
     `👤 *Technician:* ${workerName}\n` +
     `📏 *Distance:* ${Math.round(distanceMeters)}m from court pin\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `──────────────────────────────\n` +
     `📊 *Gate Status:* ${site.fields['Current Gate'] || 'Active'}\n` +
     (arrivalWeather ? `\n🌤️ *Site Telemetry:*${arrivalWeather}\n` : '') +
     `\n👉 Ready for pre-work sweep, punch list updates, or supply requests.`;
 
-  const prefLang = worker?.fields?.['Language'] || 'English';
+  const prefLang = worker?.fields?.['Language'] || callerIdentity?.language || 'English';
   const todayStr = new Date().toISOString().split('T')[0];
   
-  if (dailyEasterEggTracker.get(fromPhone) !== todayStr) {
+  if (dailyEasterEggTracker.get(fromPhone) !== todayStr && typeof generateMorningEasterEgg === 'function') {
     const egg = await generateMorningEasterEgg(config, prefLang);
     checkinCard += egg;
     dailyEasterEggTracker.set(fromPhone, todayStr);
@@ -383,12 +426,23 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 // 5. NLP INTENT CLASSIFICATION (GEMINI 2.5)
 // ====================================================================
 
-async function triageSpokenOrTextNLP(config, rawInput, activeSitesList, isAudio = false, audioItems = []) {
-  const siteListStr = activeSitesList.join(', ');
-  
-  // Note: INTENT_CLASSIFICATION_PROMPT would normally be imported from a constants file. 
-  // We assume it's passed or defined here to keep the module atomic.
-  const intentPrompt = `You are the Titan OS Ambient Intelligence Scribe. Classify the intent of the message. Active Registry: [${siteListStr}]\nInput: "${typeof rawInput === 'string' ? rawInput : 'Spoken Voice Memo'}"`;
+async function triageSpokenOrTextNLP(config, rawInput, activeSitesList = [], isAudio = false, audioItems = []) {
+  const siteListStr = Array.isArray(activeSitesList) ? activeSitesList.join(', ') : '';
+  const geminiEndpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
+  const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
+
+  const intentPrompt = `You are the Titan OS Ambient Intelligence Scribe. Classify the intent of the message. 
+Active Registry: [${siteListStr}]
+Input: "${typeof rawInput === 'string' ? rawInput : 'Spoken Voice Memo'}"
+
+Respond STRICTLY in JSON conforming to:
+{
+  "intent": "AR_LOOKUP" | "CREATE_ESTIMATE" | "CREATE_INVOICE" | "ORACLE_QUERY" | "INVENTORY_QUERY" | "CHECKIN" | "GENERAL_UPDATE",
+  "referenced_site_name": string or null,
+  "qbo_customer_name": string or null,
+  "qbo_amount": number or null,
+  "transcript_en": string
+}`;
 
   const contentParts = [{ text: intentPrompt }];
 
@@ -411,19 +465,24 @@ async function triageSpokenOrTextNLP(config, rawInput, activeSitesList, isAudio 
     }
   };
 
-  const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  try {
+    const res = await fetch(`${geminiEndpoint}?key=${geminiApiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
 
-  if (!res.ok) throw new Error(`Gemini NLP failed (${res.status}): ${await res.text()}`);
+    if (!res.ok) throw new Error(`Gemini NLP failed (${res.status}): ${await res.text()}`);
 
-  const data = await res.json();
-  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) return null;
+    const data = await res.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) return null;
 
-  return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+  } catch (err) {
+    console.error('[NLP Triage Exception]:', err.message);
+    return null;
+  }
 }
 
 // ====================================================================
@@ -431,9 +490,15 @@ async function triageSpokenOrTextNLP(config, rawInput, activeSitesList, isAudio 
 // ====================================================================
 
 async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispatchTarget, targetedSiteOverride, site, airtableWriteWithAutoDrop) {
-  // Uses the INDUSTRIAL_SYSTEM_PROMPT logic to pre-screen images for padel-specific markers.
+  const geminiEndpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
+  const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
+
   const payload = {
-    system_instruction: { parts: [{ text: `Classify the physical environment. Is this a padel court? (CRITICAL: A bare concrete foundation slab, earthworks, or pre-existing tennis court being prepped for construction MUST be classified as a valid padel court environment for Gate 1). Output JSON {"is_padel_court": boolean, "detected_scene": string}` }] },
+    system_instruction: { 
+      parts: [{ 
+        text: `Classify the physical environment. Is this a padel court? (CRITICAL: A bare concrete foundation slab, earthworks, or pre-existing tennis court being prepped for construction MUST be classified as a valid padel court environment for Gate 1). Output JSON {"is_padel_court": boolean, "detected_scene": string}` 
+      }] 
+    },
     contents: [
       {
         parts: [
@@ -454,7 +519,7 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   };
 
   try {
-    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+    const res = await fetch(`${geminiEndpoint}?key=${geminiApiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -471,15 +536,16 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
       
       const bypassNotes = `[PARTIAL SWEEP LOGGED]: \nDetected Scene: ${visualTruth.detected_scene || 'Unknown Hardware / Macro Shot'}\nCaption: ${batchText || 'No caption provided.'}`;
       
-      if (targetedSiteOverride || site) {
+      const targetSite = targetedSiteOverride || site;
+      if (targetSite && typeof airtableWriteWithAutoDrop === 'function') {
          await airtableWriteWithAutoDrop('Sites', {
           'Last Note': bypassNotes,
           'Last Intent': 'PARTIAL_MEDIA_LOG'
-        }, (targetedSiteOverride || site).id);
+        }, targetSite.id);
       }
       
       const fallbackCard = `📸 *TITAN OS | PARTIAL MEDIA ARCHIVED*\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `──────────────────────────────\n` +
         `⚠️ *Camera Detected:* ${visualTruth.detected_scene || 'Macro shot / Non-court structure'}\n` +
         `✅ *Action:* Media has been securely logged to the site ledger.\n\n` +
         `_Note: To verify a full physical gate milestone, ensure the primary court structure is visible in the frame._`;
@@ -493,52 +559,220 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   }
 }
 
-async function evaluateCourtMediaBatch(config, items, cumulativeContext, maintenanceTriagePrompt, industrialSystemPrompt) {
-  const contentParts = [
-    { text: `Context: You are evaluating a Padel court at site: ${cumulativeContext.siteName}. The workflow mode is ${cumulativeContext.workflowMode}. The site is currently at Status: ${cumulativeContext.siteStatus}. The target language for the output receipt card is ${cumulativeContext.workerLanguage}.` }
-  ];
+/**
+ * Uploads media buffer to Supabase private storage bucket and returns signed URL
+ */
+async function uploadMediaToSupabase(config, buffer, mimeType) {
+  const supabaseUrl = config?.supabase?.url || process.env.SUPABASE_URL;
+  const serviceKey = config?.supabase?.serviceRoleKey || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const bucketName = config?.supabase?.bucket || process.env.STORAGE_BUCKET || 'titan-private-media';
 
-  for (const item of items) {
-    if (item.type === 'video' || item.type === 'image') {
-      contentParts.push({
-        inline_data: {
-          mime_type: item.mimeType,
-          data: item.buffer.toString('base64')
-        }
-      });
+  if (!supabaseUrl || !serviceKey) return null;
+
+  try {
+    const supabase = createClient(supabaseUrl, serviceKey);
+    const ext = mimeType.split('/')[1] || (mimeType.includes('video') ? 'mp4' : 'jpg');
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+    const filePath = `${year}/${month}/${crypto.randomUUID()}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, buffer, { contentType: mimeType, upsert: true });
+
+    if (uploadError) {
+      console.warn('[Supabase Storage Upload Error]:', uploadError.message);
+      return null;
+    }
+
+    const { data: signedData, error: signError } = await supabase.storage
+      .from(bucketName)
+      .createSignedUrl(filePath, 60 * 60 * 24 * 7); // 7-day signed link
+
+    if (signError || !signedData?.signedUrl) return null;
+    return signedData.signedUrl;
+  } catch (e) {
+    console.error('[Supabase Storage Exception]:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Master 12-Gate Construction & Maintenance Batch Processor
+ */
+async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracleFileURIs = []) {
+  if (!batch || !batch.items || batch.items.length === 0) return;
+
+  const dispatchTarget = batch.dispatchTarget;
+  const site = batch.site;
+  const worker = batch.worker;
+  const callerIdentity = batch.callerIdentity;
+  const workerName = callerIdentity?.name || worker?.fields?.['Full Name'] || 'Field Tech';
+  const workerLang = callerIdentity?.language || worker?.fields?.['Language'] || 'English';
+
+  console.log(`[Media Engine] Initiating 12-Gate Multimodal Sweep on ${batch.items.length} items for ${site?.fields?.['Site Name'] || 'Unbound Court'}`);
+
+  // 1. Pre-Screen Ground Truth with Blind Visual Gate on First Visual Frame
+  const primaryVisualItem = batch.items.find(i => i.type === 'video' || i.type === 'image');
+  if (primaryVisualItem) {
+    const truth = await inspectBlindVisualGroundTruth(
+      config,
+      primaryVisualItem,
+      primaryVisualItem.caption || '',
+      dispatchTarget,
+      site,
+      site,
+      airtableWriteWithAutoDrop
+    );
+    if (truth.is_padel_court === false) {
+      return; // Handled and archived as partial media
     }
   }
 
-  const payload = {
-    system_instruction: { parts: [{ text: cumulativeContext.workflowMode === 'MAINTENANCE' ? maintenanceTriagePrompt : industrialSystemPrompt }] },
-    contents: [{ parts: contentParts }],
-    generationConfig: {
-      temperature: 0.1,
-      responseMimeType: 'application/json'
-    }
-  };
+  // 2. Concurrently Upload First Asset to Supabase Private Media Vault
+  let signedMediaUrl = null;
+  if (primaryVisualItem) {
+    signedMediaUrl = await uploadMediaToSupabase(config, primaryVisualItem.buffer, primaryVisualItem.mimeType);
+  }
+
+  // 3. Construct Gemini Multimodal Evaluation Payload
+  const workflowMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
+  const siteName = site?.fields?.['Site Name'] || 'Active Build';
+  const currentGateRaw = site?.fields?.['Current Gate'] || '0';
+  const currentGateNum = parseInt(String(currentGateRaw).match(/\d+/)?.[0] || '0', 10);
+
+  const evaluationPrompt = `You are the Lead Forensic Civil Engineer and Master Commissioning Agent for Bounce Padel courts worldwide.
+Analyze the provided visual and audio sweep of site: "${siteName}".
+Workflow Mode: ${workflowMode}
+Current Verified Gate Level: Gate ${currentGateNum} of 12
+
+THE 12 PADEL GATES TAXONOMY:
+- Gate 1: Concrete Slab Foundation (Bare concrete slab, sub-base, ring-beam embed anchors)
+- Gate 2: Structural Steel Columns & Ring Beam Assembled
+- Gate 3: Electro-welded Mesh & Corner Pillars Bolted
+- Gate 4: Tempered Glass Panels Seating (10mm or 12mm glass secured with gaskets)
+- Gate 5: Light Masts & LED Fixtures Erected
+- Gate 6: Artificial Turf Carpet Layout & Alignment
+- Gate 7: Turf Seam Gluing & Play-Line Inlays Cut
+- Gate 8: Silica Sand Infill & Machine Brushing
+- Gate 9: Regulation Net & Tension Posts Calibrated
+- Gate 10: Player Access Doors & Hardware Functional
+- Gate 11: Electrical Wiring & Lighting Operational Test Verified
+- Gate 12: Site Cleanliness & Handover Commissioning (Pristine court, zero tools, zero construction debris)
+
+NON-MONOTONIC RULE FOR GATE 12:
+If active construction tools, open trash, or carpet scraps are visible on the court slab, Gate 12 CANNOT be granted, and is_clean MUST be false.
+
+Return STRICTLY a JSON object with this schema:
+{
+  "highest_gate_verified": integer (between 0 and 12),
+  "is_clean": boolean,
+  "blockers_detected": array of strings,
+  "headline": string (concise punchy operational status),
+  "summary": string (2-3 sentences explaining visual proof),
+  "action_items": string (next technical tasks to execute)
+}`;
+
+  const geminiParts = [{ text: evaluationPrompt }];
+  batch.items.forEach(item => {
+    geminiParts.push({
+      inline_data: {
+        mime_type: item.mimeType,
+        data: item.buffer.toString('base64')
+      }
+    });
+  });
+
+  const geminiEndpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
+  const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
 
   try {
-    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+    const aiRes = await fetch(`${geminiEndpoint}?key=${geminiApiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: geminiParts }],
+        generationConfig: {
+          temperature: 0.0,
+          responseMimeType: 'application/json'
+        }
+      })
     });
 
-    if (!res.ok) {
-      console.error('[Gemini Evaluation API Error]:', await res.text());
-      return { highest_gate: 0, blockers_detected: [], summary: "API evaluation failed." };
+    if (!aiRes.ok) throw new Error(`Gemini Gate Evaluation failed (${aiRes.status}): ${await aiRes.text()}`);
+
+    const aiData = await aiRes.json();
+    const rawAiText = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
+    const evalResult = JSON.parse(rawAiText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+
+    // 4. Calculate Cumulative Milestone Memory (Entry #045)
+    let evaluatedGate = Number(evalResult.highest_gate_verified) || 0;
+    let finalGate = Math.max(currentGateNum, evaluatedGate);
+
+    // Enforce Cleanliness Demotion Guardrail on Gate 12
+    if (!evalResult.is_clean && finalGate >= 12) {
+      finalGate = 11;
+      evalResult.blockers_detected.push("Active debris or tools detected on court slab. Cleanliness hold engaged.");
     }
 
-    const result = await res.json();
-    const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!rawText) return { highest_gate: 0, blockers_detected: [], summary: "Failed to generate evaluation." };
+    // Autonomous Mode Handover (Entry #047)
+    let newWorkflowMode = workflowMode;
+    let newSiteStatus = site?.fields?.['Site Status'] || 'ACTIVE';
+    if (finalGate >= 12 && (!evalResult.blockers_detected || evalResult.blockers_detected.length === 0)) {
+      newWorkflowMode = 'MAINTENANCE';
+      newSiteStatus = 'ACTIVE';
+    }
 
-    return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    // 5. Persist to Airtable Reports 2 (Primary Operational Hub)
+    if (typeof airtableWriteWithAutoDrop === 'function') {
+      const reportPayload = {
+        'Workflow Mode': newWorkflowMode,
+        'Headline': evalResult.headline || `Gate ${finalGate} Verification`,
+        'Summary': evalResult.summary || 'Multimodal court inspection successfully logged.',
+        'Action Items': evalResult.action_items || 'Proceed with subsequent gate sequence.',
+        'Status': evalResult.blockers_detected?.length > 0 ? 'Action Required' : 'Verified'
+      };
+
+      if (site?.id) reportPayload['Site'] = [site.id];
+      if (worker?.id) reportPayload['Worker'] = [worker.id];
+
+      await airtableWriteWithAutoDrop('Reports 2', reportPayload);
+
+      // Update Parent Site Record
+      if (site?.id) {
+        await airtableWriteWithAutoDrop('Sites', {
+          'Current Gate': `Gate ${finalGate}`,
+          'Workflow Mode': newWorkflowMode,
+          'Site Status': newSiteStatus,
+          'Last Note': `[SWEEP VERIFIED] Evaluated by ${workerName}. Gate ${finalGate}/12 confirmed.`
+        }, site.id);
+      }
+    }
+
+    // 6. Dispatch Ergonomic WhatsApp Status Card (Spanish-Aware)
+    const isSpanish = String(workerLang).toLowerCase().includes('span');
+    const blockersText = evalResult.blockers_detected?.length > 0
+      ? `\n⚠️ *${isSpanish ? 'Obstáculos' : 'Blockers'}:*\n` + evalResult.blockers_detected.map(b => `• ${b}`).join('\n')
+      : '';
+
+    const statusCard = `🎾 *TITAN OS | ${isSpanish ? 'VERIFICACIÓN DE PISTA' : 'COURT VERIFICATION'}*\n` +
+      `──────────────────────────────\n` +
+      `🏟️ *${isSpanish ? 'Pista' : 'Court'}:* ${siteName}\n` +
+      `👤 *${isSpanish ? 'Técnico' : 'Technician'}:* ${workerName}\n` +
+      `📊 *${isSpanish ? 'Progreso' : 'Milestone'}:* Gate ${finalGate} / 12 (${Math.round((finalGate / 12) * 100)}%)\n` +
+      `⚙️ *Mode:* ${newWorkflowMode}\n` +
+      `──────────────────────────────\n` +
+      `📋 *${evalResult.headline}*\n` +
+      `_${evalResult.summary}_\n` +
+      blockersText + `\n\n` +
+      `👉 *${isSpanish ? 'Siguiente Paso' : 'Next Step'}:* ${evalResult.action_items}`;
+
+    await sendWhatsAppMessage(config, dispatchTarget, statusCard);
+
   } catch (err) {
-    console.error('[Gemini Evaluation Exception]:', err.message);
-    return { highest_gate: 0, blockers_detected: [], summary: "Exception during evaluation." };
+    console.error('[Process Media Batch Error]:', err);
+    await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Error completing visual evaluation: ${err.message}`);
   }
 }
 
@@ -548,7 +782,6 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
 
 async function handleInboundEmail(config, emailPayload, getCachedContacts) {
   try {
-    // 1. Extract and Clean Email Addresses (From, To, CC)
     const extractEmails = (str) => {
       const matches = String(str || '').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi);
       return matches ? matches.map(e => e.toLowerCase().trim()) : [];
@@ -558,7 +791,6 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
     const toEmails = extractEmails(emailPayload.to);
     const ccEmails = extractEmails(emailPayload.cc);
     
-    // We want to message the original sender AND anyone CC'd on the introduction
     const targetEmails = [...new Set([...senderEmails, ...ccEmails])];
     
     if (targetEmails.length === 0) {
@@ -566,8 +798,7 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
       return;
     }
 
-    // 2. Resolve Phone Numbers via Contacts Cache
-    const contacts = await getCachedContacts();
+    const contacts = typeof getCachedContacts === 'function' ? await getCachedContacts() : [];
     const targetPhones = [];
     const knownNames = [];
 
@@ -591,7 +822,6 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
     const participants = knownNames.length > 0 ? knownNames.join(' and ') : 'colleagues';
     console.log(`[Email Handler] Resolved WhatsApp targets for: ${participants} (${targetPhones.join(', ')})`);
 
-    // 3. Generate Reply via Gemini 2.5 (Title Removed)
     const prompt = `You are the executive assistant for Bob Burk. 
 An email was just received from: ${emailPayload.from}.
 The subject is: "${emailPayload.subject}".
@@ -609,12 +839,15 @@ RULES:
 2. Sign off simply as "Best regards, Bob Burk". Do NOT include any titles like "Founder, Bounce Padel" or company names in the sign-off.
 3. Keep the tone conversational but highly professional.`;
 
+    const geminiEndpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
+    const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
+
     const payload = {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.2 }
     };
 
-    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+    const res = await fetch(`${geminiEndpoint}?key=${geminiApiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -633,12 +866,11 @@ RULES:
        return;
     }
 
-    // 4. Format and Dispatch to All Resolved Targets
     const formattedDispatch = `📧 *TITAN OS | INBOUND EMAIL RELAY*\n` +
-                              `━━━━━━━━━━━━━━━━━━━━\n` +
+                              `──────────────────────────────\n` +
                               `*From:* ${emailPayload.from}\n` +
                               `*Subject:* ${emailPayload.subject}\n` +
-                              `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `──────────────────────────────\n\n` +
                               `${generatedReply.trim()}`;
 
     for (const phone of targetPhones) {
@@ -662,6 +894,7 @@ module.exports = {
   sendWhatsAppButtons,
   fanOutToSubscribers,
   isIndoorSite,
+  geocodeAddressWithGoogle,
   resolveCoordinates,
   haversineDistanceKm,
   getHyperlocalWeather,
@@ -669,6 +902,7 @@ module.exports = {
   bindSiteContext,
   triageSpokenOrTextNLP,
   inspectBlindVisualGroundTruth,
-  evaluateCourtMediaBatch,
+  uploadMediaToSupabase,
+  processMediaBatch,
   handleInboundEmail
 };
