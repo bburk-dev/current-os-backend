@@ -167,6 +167,16 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
+  let safeBodyText = textBody;
+  
+  // DEFENSIVE INTERCEPTOR: Meta Graph API hard-limits interactive body text to 1024 characters.
+  // If the payload exceeds 1000 chars, decouple the dispatch: send the heavy text as a standard 
+  // message first, then immediately follow up with a short interactive menu.
+  if (safeBodyText.length > 1000) {
+    await sendWhatsAppMessage(config, cleanDestination, safeBodyText);
+    safeBodyText = "⚡ *Action Required:*\nDocument drafted. Please select an operational command below to execute:";
+  }
+
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
     type: 'reply',
     reply: {
@@ -182,7 +192,7 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      body: { text: textBody },
+      body: { text: safeBodyText },
       action: { buttons: actionButtons }
     }
   };
@@ -199,12 +209,13 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
     });
 
     if (!res.ok) {
-      const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 *${b.title}*`).join('\n');
+      // Final Fallback if Meta still rejects the payload for any API drift reason
+      const fallbackText = `${safeBodyText}\n\n` + buttons.map(b => `👉 *${b.title}*`).join('\n');
       return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
     }
     return true;
   } catch (err) {
-    const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 *${b.title}*`).join('\n');
+    const fallbackText = `${safeBodyText}\n\n` + buttons.map(b => `👉 *${b.title}*`).join('\n');
     return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
   }
 }
