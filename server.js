@@ -521,7 +521,7 @@ app.post('/webhook', async (req, res) => {
 
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
-      'Phone Number': fromPhone,
+      'Phone': fromPhone,
       'Message Type': message.type || 'text',
       'Body': message.text?.body || message.caption || message.interactive?.button_reply?.title || `[${message.type || 'media'}]`,
       'Worker': worker?.id ? [worker.id] : []
@@ -555,12 +555,10 @@ app.post('/webhook', async (req, res) => {
           const drawAmt = parseFloat((totalAmt * (percentage / 100)).toFixed(2));
           const primaryDesc = estimate.Line?.[0]?.Description || 'Bounce Padel Court Construction';
 
-          // Call the newly implemented dynamic item resolver from finance.js
           const defaultItemRef = finance.getDefaultQboItemRef 
             ? await finance.getDefaultQboItemRef(CONFIG) 
             : { value: "1" };
 
-          // Default fallback if a drawn invoice doesn't pull tax mappings automatically
           const defaultTaxRef = finance.resolveQboTaxCode 
             ? await finance.resolveQboTaxCode(CONFIG, true)
             : { value: "TAX" };
