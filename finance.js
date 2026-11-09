@@ -113,25 +113,27 @@ async function resolveQboTaxCode(config, applyTax) {
   if (!cachedTaxCodes) {
     try {
       const res = await qboApiRequest(config, `select * from TaxCode where Active=true MAXRESULTS 100`);
-      if (res?.QueryResponse?.TaxCode) {
-        cachedTaxCodes = res.QueryResponse.TaxCode;
-      }
+      cachedTaxCodes = res?.QueryResponse?.TaxCode || [];
     } catch (e) {
       console.warn('[QBO Tax] Failed to fetch tax codes:', e.message);
+      cachedTaxCodes = [];
     }
   }
 
-  if (!cachedTaxCodes || cachedTaxCodes.length === 0) {
-    return applyTax ? { value: 'TAX' } : { value: 'NON' };
+  if (cachedTaxCodes.length === 0) {
+    // Absolute fallback for Canada if API fetch fails
+    return applyTax ? { value: '20' } : { value: 'Exempt' }; 
   }
 
   if (applyTax) {
-    const taxCode = cachedTaxCodes.find(t => /HST|GST|Standard|Taxable/i.test(t.Name || t.Description)) || cachedTaxCodes[0];
+    const taxCode = cachedTaxCodes.find(t => /HST|GST|Standard|Taxable/i.test(t.Name || t.Description)) 
+                    || cachedTaxCodes.find(t => t.Taxable) 
+                    || cachedTaxCodes[0];
     return { value: String(taxCode.Id) };
   } else {
-    const exemptCode = cachedTaxCodes.find(t => /Exempt|Zero|Non|Free/i.test(t.Name || t.Description)) 
-                       || cachedTaxCodes.find(t => t.Id === 'NON') 
-                       || cachedTaxCodes[cachedTaxCodes.length - 1];
+    const exemptCode = cachedTaxCodes.find(t => /Exempt|Zero|Non|Free|Out of scope/i.test(t.Name || t.Description)) 
+                       || cachedTaxCodes.find(t => !t.Taxable) 
+                       || cachedTaxCodes[0];
     return { value: String(exemptCode.Id) };
   }
 }
@@ -597,7 +599,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   const lineItem = {
     Amount: amount,
     DetailType: "SalesItemLineDetail",
-    Description: expandedContext.formal_description,
+    Description: expandedContext.formal_description || rawInput || 'Professional Services',
     SalesItemLineDetail: { 
       Qty: 1, 
       UnitPrice: amount, 
@@ -615,6 +617,9 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   const createRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
   
   if (createRes && createRes.Estimate) {
+    const rawDesc = lineItem.Description || 'Professional Services';
+    const cleanDesc = rawDesc.length > 150 ? rawDesc.slice(0, 150) + '...' : rawDesc;
+    
     const estCard = `🧾 *TITAN OS | ESTIMATE DRAFTED*\n` +
                     `──────────────────────────────\n` +
                     `*Estimate:* #${createRes.Estimate.DocNumber}\n` +
@@ -622,7 +627,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
                     `*Subtotal:* $${parseFloat(amount).toFixed(2)}\n` +
                     `*Tax Applied:* ${expandedContext.apply_tax ? 'Yes 🇨🇦' : 'No'}\n` +
                     `──────────────────────────────\n` +
-                    `📋 *Scope:*\n_${expandedContext.formal_description.slice(0, 150)}..._\n\n` +
+                    `📋 *Scope:*\n_${cleanDesc}_\n\n` +
                     `✅ Estimate securely generated in QuickBooks Online.`;
     await sendWhatsAppMessage(dispatchTarget, estCard);
   } else {
@@ -653,7 +658,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   const lineItem = {
     Amount: amount,
     DetailType: "SalesItemLineDetail",
-    Description: expandedContext.formal_description,
+    Description: expandedContext.formal_description || rawInput || 'Professional Services',
     SalesItemLineDetail: { 
       Qty: 1, 
       UnitPrice: amount, 
