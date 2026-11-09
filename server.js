@@ -688,15 +688,17 @@ app.post('/webhook', async (req, res) => {
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
         if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
           const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-          await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+          await oracle.handleOracleQuery(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+        } else if (oracle && oracle.handleOracleQuery) {
+          await oracle.handleOracleQuery(CONFIG, txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
         }
         return;
       }
 
-      // 4. Inventory Tracking
+      // 4. Inventory Tracking & Material Depletion (Polymorphic Rich Invocation)
       if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
         if (inventory && inventory.handleSpokenInventorySnapshot) {
-          await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => dispatchOutboundWhatsApp(t, m));
+          await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
         }
         return;
       }
@@ -765,7 +767,7 @@ app.post('/webhook', async (req, res) => {
           try {
             // Check for explicit receipt/expense context or image-only uploads without active video
             const hasVideo = currentBatch.items.some(i => i.type === 'video');
-            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice/i.test(i.caption || ''));
+            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware/i.test(i.caption || ''));
             
             if (!hasVideo && (hasReceiptKeyword || currentBatch.items.every(i => i.type === 'image'))) {
               if (finance && finance.handleReceiptUpload) {
@@ -855,7 +857,7 @@ async function resolveIdentity(fromPhone) {
   const cleanDigits = String(fromPhone).replace(/\D/g, '');
   
   const worker = workers.find(w => {
-    const rawNumber = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || '').replace(/\D/g, '');
+    const rawNumber = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
     return rawNumber && (rawNumber === cleanDigits || cleanDigits.endsWith(rawNumber) || rawNumber.endsWith(cleanDigits));
   });
   
