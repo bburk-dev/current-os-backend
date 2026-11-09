@@ -1,7 +1,7 @@
 /**
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
+ * Purpose: Native Meta Graph Webhooks, QBO Finance Copilot,
  *          Message Deduplication Buffer, Conversational Voice Estimates,
  *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
  *          Conversational Clarification Engine, Ambient Multi-Turn Memory,
@@ -26,7 +26,6 @@ if (!globalThis.fetch) {
 try { require('dotenv').config(); } catch (e) {}
 
 const express = require('express');
-const cluster = require('cluster');
 const os = require('os');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -40,7 +39,6 @@ const whatsapp = require('./whatsapp');
 // 1. GLOBAL CONFIGURATION & SECRETS (NO WHAPI)
 // ====================================================================
 const PORT = process.env.PORT || 3000;
-const numCPUs = process.env.WEB_CONCURRENCY || os.cpus().length || 1;
 
 const CONFIG = {
   port: PORT,
@@ -82,7 +80,6 @@ const CONFIG = {
   }
 };
 
-// Universal WhatsApp message dispatcher adapter
 function dispatchOutboundWhatsApp(targetOrConfig, textOrTarget, possibleText) {
   if (possibleText !== undefined) {
     return whatsapp.sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText);
@@ -90,7 +87,6 @@ function dispatchOutboundWhatsApp(targetOrConfig, textOrTarget, possibleText) {
   return whatsapp.sendWhatsAppMessage(CONFIG, targetOrConfig, textOrTarget);
 }
 
-// Universal WhatsApp interactive button dispatcher adapter
 function dispatchOutboundButtons(targetOrConfig, textOrTarget, possibleButtonsOrText, possibleButtons) {
   if (possibleButtons !== undefined) {
     return whatsapp.sendWhatsAppButtons(targetOrConfig, textOrTarget, possibleButtonsOrText, possibleButtons);
@@ -107,7 +103,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
 
-// In-Memory Message Deduplication Store (Guards against Meta burst-retries)
+// In-Memory Message Deduplication Store (Global Singleton)
 const processedMessageIds = new Map();
 const DEDUP_TTL_MS = 60 * 1000;
 
@@ -300,7 +296,6 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
         const errorMsg = errorData?.error?.message || '';
         
         if (res.status === 422) {
-          // Robust regex catching colons and varied Airtable error formats
           const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) ||
                         errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
           if (match && match[1]) {
@@ -491,7 +486,7 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
 
-  // 1. Idempotency Check
+  // 1. Idempotency Check (Global Singleton via Single-Threaded Architecture)
   const now = Date.now();
   if (processedMessageIds.has(messageId)) {
     console.log(`[Meta Ingress] 🛡️ Deduplicated messageId: ${messageId} (Already processed in active window)`);
@@ -527,7 +522,7 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2 (Auto-healer strips unmapped columns)
+    // Resilient write to Inbound Messages 2
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Message Type': message.type || 'text',
@@ -541,7 +536,6 @@ app.post('/webhook', async (req, res) => {
     if (interactiveButtonId) {
       console.log(`[Button Action] Intercepted button tap: ${interactiveButtonId} from ${dispatchTarget}`);
 
-      // 1. One-Tap Estimate Email Dispatch via QBO REST API
       if (interactiveButtonId.startsWith('QBO_EMAIL_EST_')) {
         const estId = interactiveButtonId.replace('QBO_EMAIL_EST_', '');
         await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Dispatching official Estimate PDF to client email via QuickBooks...");
@@ -560,7 +554,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 2. One-Tap Invoice Email Dispatch via QBO REST API
       if (interactiveButtonId.startsWith('QBO_EMAIL_INV_')) {
         const invId = interactiveButtonId.replace('QBO_EMAIL_INV_', '');
         await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Dispatching Invoice PDF to client email via QuickBooks...");
@@ -579,7 +572,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 3. One-Tap Progress Draw Conversion Execution (Estimate -> Invoice)
       if (interactiveButtonId.startsWith('QBO_CONVERT_')) {
         const parts = interactiveButtonId.split('_');
         const estimateId = parts[2];
@@ -682,7 +674,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 4. One-Tap Change-Order Approval
       if (interactiveButtonId.startsWith('QBO_APPROVE_CO_')) {
         const coEstimateId = interactiveButtonId.replace('QBO_APPROVE_CO_', '');
         await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Locking Change-Order into QuickBooks ledger...");
@@ -829,7 +820,6 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // Conversational Clarification & Zero-Dead-End Recovery
           if (spokenTriage.intent === 'UNKNOWN' || spokenTriage.intent === 'GENERAL_UPDATE') {
             const transcript = spokenTriage.transcript_en || '';
             const isActionable = transcript.length > 10 && (transcript.includes('need') || transcript.includes('broken') || transcript.includes('missing') || transcript.includes('finished'));
@@ -921,22 +911,8 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
 
-      // 0. Zero-UI Site Provisioning Handler
-      const isCreateSiteQuery = lTxt.startsWith('create site') || 
-                                lTxt.startsWith('new site') || 
-                                lTxt.startsWith('/createsite') || 
-                                lTxt.startsWith('/newsite') || 
-                                (pendingNewSiteRequests.has(fromPhone) && (lTxt.startsWith('yes') || lTxt.startsWith('site:')));
-
-      if (isCreateSiteQuery) {
-        let siteName = txt
-          .replace(/^create\s+site:?/i, '')
-          .replace(/^new\s+site:?/i, '')
-          .replace(/^\/createsite:?/i, '')
-          .replace(/^\/newsite:?/i, '')
-          .replace(/^yes,?:?/i, '')
-          .replace(/^site:?/i, '')
-          .trim();
+      if (lTxt.startsWith('create site') || lTxt.startsWith('new site') || lTxt.startsWith('/createsite') || lTxt.startsWith('/newsite') || (pendingNewSiteRequests.has(fromPhone) && (lTxt.startsWith('yes') || lTxt.startsWith('site:')))) {
+        let siteName = txt.replace(/^create\s+site:?/i, '').replace(/^new\s+site:?/i, '').replace(/^\/createsite:?/i, '').replace(/^\/newsite:?/i, '').replace(/^yes,?:?/i, '').replace(/^site:?/i, '').trim();
 
         if (!siteName) {
           await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
@@ -963,11 +939,9 @@ app.post('/webhook', async (req, res) => {
         if (newRecord && newRecord.id) {
           pendingNewSiteRequests.delete(fromPhone);
           await getCachedSites(true);
-
           if (whatsapp.userActiveSiteMap) {
             whatsapp.userActiveSiteMap.set(fromPhone, newRecord.id);
           }
-
           const weather = await evaluateWeatherTripwires(pendingGeo.lat, pendingGeo.lon);
           let weatherNote = '';
           if (!weather.safe) {
@@ -990,51 +964,25 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 1. Evaluate Ambient Intent with Site Inheritance
       const allSites = await getCachedSites();
       const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
       const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
       const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
 
       const triage = whatsapp.triageSpokenOrTextNLP 
-        ? await whatsapp.triageSpokenOrTextNLP(
-            CONFIG, 
-            txt, 
-            registeredSiteNames, 
-            false, 
-            [], 
-            fromPhone, 
-            boundSite
-          )
+        ? await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, registeredSiteNames, false, [], fromPhone, boundSite)
         : null;
 
       console.log(`[Text Engine] Evaluated Intent: ${triage?.intent || 'UNKNOWN'} | Client: ${triage?.qbo_customer_name || 'None'}`);
 
-      // 2. Headless Accounts Receivable (QBO) Ingress with Strict RBAC Bouncer
-      const isARQuery = triage?.intent === 'AR_LOOKUP' ||
-                        lTxt === 'ar' || 
-                        lTxt.startsWith('ar ') || 
-                        lTxt.endsWith(' ar') || 
-                        lTxt.includes('ar +') || 
-                        lTxt.includes('ar+') || 
-                        lTxt.includes('+ 30') || 
-                        lTxt.includes('+30') || 
-                        lTxt.includes('30+') || 
-                        lTxt.includes('aging') || 
-                        lTxt.includes('balance') || 
-                        lTxt.includes('open invoice') || 
-                        lTxt.startsWith('/ar');
+      const isARQuery = triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar');
 
       if (isARQuery) {
         console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget} (Role: ${callerIdentity.role})`);
-        
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
           console.warn(`[Security Alert] Unauthorized AR lookup blocked for ${dispatchTarget} (Name: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
-          await dispatchOutboundWhatsApp(
-            dispatchTarget, 
-            `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`
-          );
+          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`);
           return;
         }
 
@@ -1047,67 +995,34 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 3. Dynamic Spoken / Text Estimate Generation
       if (triage?.intent === 'CREATE_ESTIMATE' || lTxt.includes('build an estimate') || lTxt.includes('create estimate') || lTxt.startsWith('/estimate')) {
         if (finance && finance.handleEstimateCreation) {
-          await finance.handleEstimateCreation(
-            CONFIG, 
-            triage || { transcript_en: txt }, 
-            dispatchTarget, 
-            oracleFileURIs, 
-            dispatchOutboundWhatsApp, 
-            dispatchOutboundButtons
-          );
+          await finance.handleEstimateCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
           return;
         }
       }
 
-      // 4. Dynamic Progress Draw Conversion
       if (triage?.intent === 'CONVERT_ESTIMATE' || lTxt.includes('convert to') || lTxt.includes('% invoice') || lTxt.includes('draw')) {
         if (finance && finance.handleInvoiceApproval) {
-          await finance.handleInvoiceApproval(
-            CONFIG, 
-            triage || { transcript_en: txt }, 
-            dispatchTarget, 
-            dispatchOutboundWhatsApp, 
-            dispatchOutboundButtons
-          );
+          await finance.handleInvoiceApproval(CONFIG, triage || { transcript_en: txt }, dispatchTarget, dispatchOutboundWhatsApp, dispatchOutboundButtons);
           return;
         }
       }
 
-      // 5. Direct Invoicing
       if (triage?.intent === 'CREATE_INVOICE' || lTxt.includes('create invoice') || lTxt.includes('direct invoice') || lTxt.startsWith('/invoice')) {
         if (finance && finance.handleInvoiceCreation) {
-          await finance.handleInvoiceCreation(
-            CONFIG, 
-            triage || { transcript_en: txt }, 
-            dispatchTarget, 
-            oracleFileURIs, 
-            dispatchOutboundWhatsApp, 
-            dispatchOutboundButtons
-          );
+          await finance.handleInvoiceCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
           return;
         }
       }
 
-      // 6. Subcontractor Change-Orders
       if (triage?.intent === 'CHANGE_ORDER' || lTxt.includes('change order') || lTxt.includes('change-order') || lTxt.includes('variation') || lTxt.startsWith('/changeorder') || lTxt.startsWith('/co')) {
         if (finance && finance.handleConversationalChangeOrder) {
-          await finance.handleConversationalChangeOrder(
-            CONFIG, 
-            triage || txt, 
-            dispatchTarget, 
-            oracleFileURIs, 
-            dispatchOutboundWhatsApp, 
-            dispatchOutboundButtons, 
-            callerIdentity
-          );
+          await finance.handleConversationalChangeOrder(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons, callerIdentity);
           return;
         }
       }
 
-      // 7. Oracle RAG Engine
       if (triage?.intent === 'ORACLE_QUERY' || lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
         if (oracle && oracle.handleOracleQuery) {
           await oracle.handleOracleQuery(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
@@ -1115,7 +1030,6 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 8. Inventory Tracking
       if (triage?.intent === 'INVENTORY_QUERY' || lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
         if (inventory && inventory.handleSpokenInventorySnapshot) {
           await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
@@ -1123,32 +1037,25 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 9. Conversational Clarification & Zero-Dead-End Recovery
       if (!triage || triage.intent === 'UNKNOWN' || triage.intent === 'GENERAL_UPDATE') {
         const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished'));
-        
         if (isActionable) {
            console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
-           
            if (!boundSite) {
              if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: txt });
              await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at? (Reply with the court name).`);
              return;
            }
-
            await airtableWriteWithAutoDrop('Sites', {
              'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
              'Last Intent': 'GENERAL_UPDATE'
            }, boundSite.id);
-
            await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
            return;
         }
-
         console.log(`[Text Engine] General conversational fallthrough: ignored.`);
         return;
       }
-      
       return;
     }
 
@@ -1376,7 +1283,6 @@ app.post('/api/sync-oracle', async (req, res) => {
   }
 });
 
-// Helper: Resolve Caller Identity from Relational Workers Cache
 async function resolveIdentity(fromPhone) {
   const workers = await getCachedWorkers();
   const cleanDigits = String(fromPhone).replace(/\D/g, '');
@@ -1405,53 +1311,38 @@ app.get('/health', (req, res) => {
 });
 
 // ====================================================================
-// 5. CLUSTER ORCHESTRATION & BOOTSTRAP
+// 5. SINGLE-THREADED ORCHESTRATION & BOOTSTRAP (Fixes Duplicate Idempotency)
 // ====================================================================
 
 process.on('uncaughtException', (err) => console.error('[CRITICAL] Uncaught Exception:', err));
 process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
-if (cluster.isPrimary) {
-  console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.22 PRIMARY ORCHESTRATOR RUNNING`);
-  console.log(`====================================================================`);
-  console.log(`[Cluster Engine] Forking ${numCPUs} concurrent worker processes...`);
+console.log(`====================================================================`);
+console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+console.log(`====================================================================`);
 
-  startFridayNewsletterCron();
-  
-  if (oracle && oracle.syncOracleDocs) {
-    oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
-  }
+startFridayNewsletterCron();
 
-  for (let i = 0; i < numCPUs; i++) cluster.fork();
-
-  cluster.on('exit', (worker, code, signal) => {
-    console.error(`[CRITICAL] Worker ${worker.process.pid} died (${signal || code}). Orchestrator spinning up a replacement...`);
-    cluster.fork();
-  });
-} else {
-  app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`[Cluster Engine] Worker ${process.pid} online and listening on PORT ${PORT}`);
-    try {
-      await getCachedSites();
-      await getCachedWorkers();
-      await getCachedContacts();
-      await getCachedOpenAssignments();
-      
-      if (inventory && inventory.refreshInventoryCache) {
-        await inventory.refreshInventoryCache(CONFIG);
-      }
-      
-      // Ensures worker processes have technical documents hot in RAM
-      if (oracle && oracle.syncOracleDocs) {
-        await oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-      }
-
-      await hydrateQBOCache();
-
-    } catch (err) {
-      console.error(`[Worker ${process.pid} Cache Hydration Error]:`, err.message);
-    }
-  });
+if (oracle && oracle.syncOracleDocs) {
+  oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+  setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
 }
+
+app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
+  try {
+    await getCachedSites();
+    await getCachedWorkers();
+    await getCachedContacts();
+    await getCachedOpenAssignments();
+    
+    if (inventory && inventory.refreshInventoryCache) {
+      await inventory.refreshInventoryCache(CONFIG);
+    }
+    
+    await hydrateQBOCache();
+
+  } catch (err) {
+    console.error(`[Cache Hydration Error]:`, err.message);
+  }
+});
