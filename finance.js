@@ -3,8 +3,8 @@
  * Module: finance.js
  * Purpose: Intuit OAuth2, Dunning, Progressive Draws, Receipt OCR, 
  *          Macro Ghost-Ledger Extraction, Traffic-Light AR Aging,
- *          Conversational Subcontractor Change-Order Negotiation,
- *          and Zero-UI Estimate/Invoice Creation with Global Tax Resolution
+ *          Conversational Multi-Line Estimate & Invoice Compiler,
+ *          and Canadian GST/HST Global Tax Engine.
  */
 
 const fetch = globalThis.fetch || require('node-fetch');
@@ -80,7 +80,7 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
 }
 
 // ====================================================================
-// 1B. DYNAMIC ITEM & TAX RESOLUTION (GLOBAL / CANADIAN COMPATIBILITY)
+// 1B. DYNAMIC CATALOG, TAX CODE & SEQUENTIAL NUMBER RESOLUTION
 // ====================================================================
 
 let cachedDefaultItemRef = null;
@@ -90,26 +90,24 @@ async function getDefaultQboItemRef(config) {
   if (cachedDefaultItemRef) return cachedDefaultItemRef;
 
   try {
-    let itemQuery = `select * from Item where Type='Service' and Active=true MAXRESULTS 1`;
+    // Look specifically for general construction, sales, or service items
+    let itemQuery = `select * from Item where Active=true MAXRESULTS 100`;
     let qboData = await qboApiRequest(config, itemQuery);
+    const items = qboData?.QueryResponse?.Item || [];
 
-    if (!qboData?.QueryResponse?.Item?.[0]) {
-      itemQuery = `select * from Item where Active=true MAXRESULTS 1`;
-      qboData = await qboApiRequest(config, itemQuery);
-    }
-
-    if (qboData?.QueryResponse?.Item?.[0]) {
-      cachedDefaultItemRef = { value: String(qboData.QueryResponse.Item[0].Id) };
+    if (items.length > 0) {
+      const preferred = items.find(i => /court|construction|services|sales|installation/i.test(i.Name)) || items[0];
+      cachedDefaultItemRef = { value: String(preferred.Id), name: preferred.Name };
       return cachedDefaultItemRef;
     }
   } catch (err) {
     console.warn('[QBO Item Discovery Error]:', err.message);
   }
 
-  return { value: "1" };
+  return { value: "1", name: "Services" };
 }
 
-async function resolveQboTaxCode(config, applyTax) {
+async function resolveQboTaxCode(config, isTaxable = false) {
   if (!cachedTaxCodes) {
     try {
       const res = await qboApiRequest(config, `select * from TaxCode where Active=true MAXRESULTS 100`);
@@ -121,20 +119,36 @@ async function resolveQboTaxCode(config, applyTax) {
   }
 
   if (cachedTaxCodes.length === 0) {
-    return applyTax ? { value: '20' } : { value: 'Exempt' }; 
+    return isTaxable ? { value: 'TAX' } : { value: 'NON' };
   }
 
-  if (applyTax) {
-    const taxCode = cachedTaxCodes.find(t => /HST|GST|Standard|Taxable/i.test(t.Name || t.Description)) 
-                    || cachedTaxCodes.find(t => t.Taxable) 
+  if (isTaxable) {
+    // In Ontario/Canada, look for active 13% HST or standard Taxable
+    const hstCode = cachedTaxCodes.find(t => /HST|13%|Ontario|GST\/HST/i.test(t.Name || t.Description))
+                    || cachedTaxCodes.find(t => t.Taxable === true)
                     || cachedTaxCodes[0];
-    return { value: String(taxCode.Id) };
+    return { value: String(hstCode.Id) };
   } else {
-    const exemptCode = cachedTaxCodes.find(t => /Exempt|Zero|Non|Free|Out of scope/i.test(t.Name || t.Description)) 
-                       || cachedTaxCodes.find(t => !t.Taxable) 
-                       || cachedTaxCodes[0];
+    // Look for Zero-Rated or Exempt
+    const exemptCode = cachedTaxCodes.find(t => /exempt|zero|0%|non/i.test(t.Name || t.Description))
+                       || cachedTaxCodes.find(t => t.Taxable === false)
+                       || { value: "NON" };
     return { value: String(exemptCode.Id) };
   }
+}
+
+async function getNextEstimateNumber(config) {
+  try {
+    const query = `select DocNumber from Estimate order by Metadata.CreateTime desc MAXRESULTS 1`;
+    const res = await qboApiRequest(config, query);
+    const lastDoc = res?.QueryResponse?.Estimate?.[0]?.DocNumber;
+    if (lastDoc && !isNaN(parseInt(lastDoc))) {
+      return String(parseInt(lastDoc) + 1);
+    }
+  } catch (e) {
+    console.warn('[QBO Estimate Num Discovery]:', e.message);
+  }
+  return `EST-${Date.now().toString().slice(-4)}`;
 }
 
 // ====================================================================
@@ -374,7 +388,8 @@ JSON SCHEMA:
       "description": "string",
       "quantity": number,
       "unit_price": number,
-      "amount": number
+      "amount": number,
+      "taxable": boolean
     }
   ]
 }`;
@@ -403,7 +418,8 @@ JSON SCHEMA:
     }
 
     const defaultItemRef = await getDefaultQboItemRef(config);
-    const defaultTaxRef = await resolveQboTaxCode(config, true);
+    const taxCodeRef = await resolveQboTaxCode(config, true);
+    const exemptTaxCodeRef = await resolveQboTaxCode(config, false);
 
     const qboLines = changeOrder.line_items.map(item => ({
       Amount: item.amount,
@@ -413,14 +429,16 @@ JSON SCHEMA:
         Qty: item.quantity,
         UnitPrice: item.unit_price,
         ItemRef: defaultItemRef,
-        TaxCodeRef: defaultTaxRef
+        TaxCodeRef: item.taxable ? taxCodeRef : exemptTaxCodeRef
       }
     }));
 
+    const estDocNum = await getNextEstimateNumber(config);
+
     const estPayload = {
+      DocNumber: estDocNum,
       CustomerRef: customerRef,
       GlobalTaxCalculation: "TaxExcluded",
-      TxnTaxDetail: { TxnTaxCodeRef: defaultTaxRef },
       Line: qboLines,
       TxnStatus: "Pending",
       CustomField: [{
@@ -431,7 +449,7 @@ JSON SCHEMA:
     };
 
     const qboRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
-    const estimateDocNumber = qboRes?.Estimate?.DocNumber || qboRes?.Estimate?.Id || `CO-${Date.now().toString().slice(-4)}`;
+    const estimateDocNumber = qboRes?.Estimate?.DocNumber || estDocNum;
     const totalFormatted = changeOrder.total_amount.toFixed(2);
     const finalTotal = qboRes?.Estimate?.TotalAmt || totalFormatted;
 
@@ -445,8 +463,8 @@ JSON SCHEMA:
                  `──────────────────────────────\n` +
                  `${breakdownText}\n` +
                  `──────────────────────────────\n` +
-                 `💰 *Subtotal Adjustment:* $${totalFormatted}\n` +
-                 `💵 *Total (Inc. Tax):* $${parseFloat(finalTotal).toFixed(2)}\n` +
+                 `💰 *Subtotal:* $${totalFormatted} CAD\n` +
+                 `💵 *Total (Inc. Tax):* $${parseFloat(finalTotal).toFixed(2)} CAD\n` +
                  `🧾 *Estimate Ref:* #${estimateDocNumber} (Pending HQ Approval)`;
 
     if (typeof sendWhatsAppButtons === 'function') {
@@ -512,10 +530,10 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
 }
 
 // ====================================================================
-// 6. RAG ORACLE EXPANSION (LINE ITEMS & TAX)
+// 6. RAG ORACLE MULTI-LINE EXPANSION & TAX PARSING
 // ====================================================================
 
-async function expandLineItemsWithOracle(config, rawInput, amount, oracleFileURIs) {
+async function expandLineItemsWithOracle(config, rawInput, totalAmount, oracleFileURIs) {
   const parts = [];
   
   if (oracleFileURIs && oracleFileURIs.length > 0) {
@@ -526,23 +544,27 @@ async function expandLineItemsWithOracle(config, rawInput, amount, oracleFileURI
     });
   }
 
-  const prompt = `You are the Titan OS Financial Copilot. A field operative has requested an estimate or invoice. 
-Your job is to read their short verbal command and expand it into a formal, highly professional line-item description using the standard templates in the provided technical documents.
+  const prompt = `You are the Lead Construction Estimator for Bounce Padel courts worldwide.
+A field operative dictated an estimate via voice memo:
+"${rawInput}"
 
-User's Raw Command: "${rawInput}"
-Amount Provided: $${amount}
+TASK:
+1. Break this down into discrete, highly professional line items matching our technical specifications and sample templates.
+2. For each line item determine:
+   - "description": Professional formal description. If they specify "panoramic padel court", use our official specification wording.
+   - "amount": Explicit dollar amount for this line item (e.g. 70000, 0, 2000).
+   - "taxable": true if the operative states "plus HST", "add tax", or leaves it taxable. Set false if they specifically state "tax exempt" or "zero cost".
+3. Return STRICTLY JSON matching this schema:
 
-RULES:
-1. If the user mentions a specific court type (e.g. "panoramic paddle court"), find the template description for it and use it.
-2. CRITICAL: If the user says "plus HST", "add tax", or mentions taxes, you MUST set "apply_tax": true.
-3. Do not include the price in the description text; it is mapped to a separate variable.
-4. Output STRICTLY in JSON format.
-
-JSON SCHEMA:
 {
-  "formal_description": "string (the expanded, professional line item text)",
-  "apply_tax": boolean,
-  "tax_code_name": "string ('HST', 'GST', 'Exempt' or null)"
+  "summary_scope": "string (1-2 sentence high level overview)",
+  "line_items": [
+    {
+      "description": "string",
+      "amount": number,
+      "taxable": boolean
+    }
+  ]
 }`;
 
   parts.push({ text: prompt });
@@ -563,15 +585,25 @@ JSON SCHEMA:
     const data = await res.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     
-    return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    const parsed = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    if (parsed.line_items && parsed.line_items.length > 0) {
+      return parsed;
+    }
   } catch (err) {
-    console.error('[Finance RAG Error]:', err.message);
-    return {
-      formal_description: rawInput || 'Professional Services',
-      apply_tax: /hst|tax/i.test(rawInput),
-      tax_code_name: /hst/i.test(rawInput) ? 'HST' : null
-    };
+    console.error('[Finance RAG Multi-Line Error]:', err.message);
   }
+
+  // Resilient fallback if AI schema deviates
+  return {
+    summary_scope: rawInput || "Bounce Padel Court Construction",
+    line_items: [
+      {
+        description: rawInput || "Bounce Padel Standard Construction Kit",
+        amount: totalAmount || 70000,
+        taxable: /hst|tax/i.test(rawInput)
+      }
+    ]
+  };
 }
 
 // ====================================================================
@@ -579,14 +611,14 @@ JSON SCHEMA:
 // ====================================================================
 
 async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage) {
-  await sendWhatsAppMessage(dispatchTarget, "⏳ Drafting professional estimate against architectural blueprints...");
+  await sendWhatsAppMessage(dispatchTarget, "⏳ Drafting multi-line estimate against architectural blueprints & tax rules...");
   
   const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
-  const amount = nlp.qbo_amount;
   const rawInput = nlp.transcript_en || nlp.qbo_line_items || '';
+  const fallbackAmount = nlp.qbo_amount || 70000;
 
-  if (!customerNameTarget || !amount) {
-    return await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name and total amount to draft an estimate.`);
+  if (!customerNameTarget) {
+    return await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name to draft an estimate.`);
   }
 
   const customerRef = await findOrCreateQboCustomer(config, customerNameTarget, nlp.email, nlp.phone);
@@ -594,69 +626,77 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     return await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}" in QuickBooks.`);
   }
 
-  const expandedContext = await expandLineItemsWithOracle(config, rawInput, amount, oracleFileURIs);
+  // Compile multi-line items from Oracle blueprints and audio transcript
+  const expansion = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
   const defaultItemRef = await getDefaultQboItemRef(config);
-  const taxCodeRef = await resolveQboTaxCode(config, expandedContext.apply_tax);
-  
-  // Defensive extraction to prevent slice crashes if AI drops the formal_description key
-  const safeDesc = expandedContext?.formal_description || rawInput || 'Professional Services';
-  
-  const lineItem = {
-    Amount: amount,
-    DetailType: "SalesItemLineDetail",
-    Description: safeDesc,
-    SalesItemLineDetail: { 
-      Qty: 1, 
-      UnitPrice: amount, 
-      ItemRef: defaultItemRef,
-      TaxCodeRef: taxCodeRef
-    }
-  };
+  const hstTaxRef = await resolveQboTaxCode(config, true);
+  const exemptTaxRef = await resolveQboTaxCode(config, false);
+
+  let computedSubtotal = 0;
+  const qboLines = expansion.line_items.map(item => {
+    computedSubtotal += item.amount;
+    return {
+      Amount: item.amount,
+      DetailType: "SalesItemLineDetail",
+      Description: item.description,
+      SalesItemLineDetail: {
+        Qty: 1,
+        UnitPrice: item.amount,
+        ItemRef: defaultItemRef,
+        TaxCodeRef: item.taxable ? hstTaxRef : exemptTaxRef
+      }
+    };
+  });
+
+  const nextEstimateNum = await getNextEstimateNumber(config);
 
   const estPayload = {
+    DocNumber: nextEstimateNum,
     CustomerRef: customerRef,
     GlobalTaxCalculation: "TaxExcluded",
-    Line: [lineItem]
+    Line: qboLines
   };
-
-  if (expandedContext.apply_tax) {
-    estPayload.TxnTaxDetail = { TxnTaxCodeRef: taxCodeRef };
-  }
 
   const createRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
   
   if (createRes && createRes.Estimate) {
-    const cleanDesc = safeDesc.length > 150 ? safeDesc.slice(0, 150) + '...' : safeDesc;
-    
-    // Fallback to Id if DocNumber is disabled in QBO company settings
-    const estDocNumber = createRes.Estimate.DocNumber || createRes.Estimate.Id || 'PENDING';
-    const finalTotal = createRes.Estimate.TotalAmt || amount;
-    
+    const est = createRes.Estimate;
+    const estDocNumber = est.DocNumber || est.Id || nextEstimateNum;
+    const finalTotal = est.TotalAmt ? parseFloat(est.TotalAmt).toFixed(2) : computedSubtotal.toFixed(2);
+    const taxAmt = (parseFloat(finalTotal) - computedSubtotal).toFixed(2);
+
+    const lineBreakdown = expansion.line_items.map(li => 
+      `• ${li.description.slice(0, 35)}: $${li.amount.toFixed(2)} ${li.taxable ? '(+HST)' : '(Exempt)'}`
+    ).join('\n');
+
     const estCard = `🧾 *TITAN OS | ESTIMATE DRAFTED*\n` +
                     `──────────────────────────────\n` +
                     `*Estimate:* #${estDocNumber}\n` +
                     `*Client:* ${customerRef.name}\n` +
-                    `*Subtotal:* $${parseFloat(amount).toFixed(2)}\n` +
-                    `*Total (Inc. Tax):* $${parseFloat(finalTotal).toFixed(2)}\n` +
-                    `*Tax Applied:* ${expandedContext.apply_tax ? 'Yes 🇨🇦' : 'No'}\n` +
                     `──────────────────────────────\n` +
-                    `📋 *Scope:*\n_${cleanDesc}_\n\n` +
-                    `✅ Estimate securely generated in QuickBooks Online.`;
+                    `${lineBreakdown}\n` +
+                    `──────────────────────────────\n` +
+                    `*Subtotal:* $${computedSubtotal.toFixed(2)} CAD\n` +
+                    `*Tax (HST):* $${taxAmt} CAD\n` +
+                    `*Total Amount:* $${finalTotal} CAD\n` +
+                    `──────────────────────────────\n` +
+                    `✅ Estimate securely sealed in QuickBooks Online.`;
+
     await sendWhatsAppMessage(dispatchTarget, estCard);
   } else {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create estimate in QuickBooks. Ensure your client name is spelled correctly.`);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create estimate in QuickBooks. Ensure client name and ledger connection are active.`);
   }
 }
 
 async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage) {
-  await sendWhatsAppMessage(dispatchTarget, "⏳ Generating formal invoice...");
+  await sendWhatsAppMessage(dispatchTarget, "⏳ Generating formal multi-line invoice...");
   
   const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
-  const amount = nlp.qbo_amount;
   const rawInput = nlp.transcript_en || nlp.qbo_line_items || '';
+  const fallbackAmount = nlp.qbo_amount || 70000;
 
-  if (!customerNameTarget || !amount) {
-    return await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name and total amount to create a new invoice.`);
+  if (!customerNameTarget) {
+    return await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the client name to create a new invoice.`);
   }
 
   const customerRef = await findOrCreateQboCustomer(config, customerNameTarget, nlp.email, nlp.phone);
@@ -664,48 +704,48 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
     return await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to resolve or provision client "${customerNameTarget}".`);
   }
 
-  const expandedContext = await expandLineItemsWithOracle(config, rawInput, amount, oracleFileURIs);
+  const expansion = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
   const defaultItemRef = await getDefaultQboItemRef(config);
-  const taxCodeRef = await resolveQboTaxCode(config, expandedContext.apply_tax);
+  const hstTaxRef = await resolveQboTaxCode(config, true);
+  const exemptTaxRef = await resolveQboTaxCode(config, false);
 
-  // Defensive extraction to prevent slice crashes
-  const safeDesc = expandedContext?.formal_description || rawInput || 'Professional Services';
-
-  const lineItem = {
-    Amount: amount,
-    DetailType: "SalesItemLineDetail",
-    Description: safeDesc,
-    SalesItemLineDetail: { 
-      Qty: 1, 
-      UnitPrice: amount, 
-      ItemRef: defaultItemRef,
-      TaxCodeRef: taxCodeRef
-    }
-  };
+  let computedSubtotal = 0;
+  const qboLines = expansion.line_items.map(item => {
+    computedSubtotal += item.amount;
+    return {
+      Amount: item.amount,
+      DetailType: "SalesItemLineDetail",
+      Description: item.description,
+      SalesItemLineDetail: {
+        Qty: 1,
+        UnitPrice: item.amount,
+        ItemRef: defaultItemRef,
+        TaxCodeRef: item.taxable ? hstTaxRef : exemptTaxRef
+      }
+    };
+  });
 
   const invoicePayload = {
     CustomerRef: customerRef,
     GlobalTaxCalculation: "TaxExcluded",
-    Line: [lineItem]
+    Line: qboLines
   };
-
-  if (expandedContext.apply_tax) {
-    invoicePayload.TxnTaxDetail = { TxnTaxCodeRef: taxCodeRef };
-  }
 
   const createRes = await qboApiRequest(config, '/invoice', 'POST', invoicePayload);
   
   if (createRes && createRes.Invoice) {
-    const invDocNumber = createRes.Invoice.DocNumber || createRes.Invoice.Id || 'PENDING';
-    const finalTotal = createRes.Invoice.TotalAmt || amount;
+    const inv = createRes.Invoice;
+    const invDocNumber = inv.DocNumber || inv.Id || 'Issued';
+    const finalTotal = inv.TotalAmt ? parseFloat(inv.TotalAmt).toFixed(2) : computedSubtotal.toFixed(2);
+    const taxAmt = (parseFloat(finalTotal) - computedSubtotal).toFixed(2);
 
     const invCard = `🧾 *TITAN OS | INVOICE CREATED*\n` +
                     `──────────────────────────────\n` +
                     `*Invoice:* #${invDocNumber}\n` +
                     `*Client:* ${customerRef.name}\n` +
-                    `*Subtotal:* $${parseFloat(amount).toFixed(2)}\n` +
-                    `*Total (Inc. Tax):* $${parseFloat(finalTotal).toFixed(2)}\n` +
-                    `*Tax Applied:* ${expandedContext.apply_tax ? 'Yes' : 'No'}\n` +
+                    `*Subtotal:* $${computedSubtotal.toFixed(2)} CAD\n` +
+                    `*Tax (HST):* $${taxAmt} CAD\n` +
+                    `*Total Amount:* $${finalTotal} CAD\n` +
                     `──────────────────────────────\n` +
                     `✅ Invoice generated successfully.`;
     await sendWhatsAppMessage(dispatchTarget, invCard);
@@ -739,7 +779,7 @@ async function handleInvoiceApproval(config, nlp, dispatchTarget, sendWhatsAppMe
 
   const invCard = `🧾 *TITAN OS | PROGRESS DRAW APPROVAL*\n` +
                   `──────────────────────────────\n` +
-                  `*Estimate:* #${estimate.DocNumber}\n` +
+                  `*Estimate:* #${estimate.DocNumber || estimate.Id}\n` +
                   `*Client:* ${estimate.CustomerRef.name}\n` +
                   `*Draw Split:* ${percentage}%\n` +
                   `*Est Total:* $${totalAmount.toFixed(2)}\n` +
