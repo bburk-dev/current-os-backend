@@ -813,7 +813,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     const taxAmt = (parseFloat(finalTotal) - computedSubtotal).toFixed(2);
 
     const lineBreakdown = compiled.line_items.map(li => 
-      `• *${li.category}:* $${li.amount.toFixed(2)} ${li.taxable ? '(+HST)' : '(Exempt)'}\n  ${li.description.replace(/\n/g, '\n  ')}`
+      `• *${li.category}:* $${li.amount.toFixed(2)} ${li.taxable ? '_(+HST)_' : '_(Exempt)_'}\n  ${li.description.replace(/\n/g, '\n  ')}`
     ).join('\n\n');
 
     const addressStr = customerAddress?.line1 ? `\n📍 *Site:* ${customerAddress.line1}, ${customerAddress.city || ''}` : '';
