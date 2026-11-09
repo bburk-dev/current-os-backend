@@ -2,9 +2,9 @@
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
- *          Conversational Voice Estimates, Progress Draws, Direct Invoicing,
- *          Zero-UI Change-Orders, Headless IoT Sensor Telemetry, RBAC Bouncer,
- *          and Zero-UI Site Provisioning
+ *          Message Deduplication Buffer, Conversational Voice Estimates,
+ *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
+ *          RBAC Bouncer, and Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -97,6 +97,10 @@ let oracleFileURIs = [];
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
+
+// In-Memory Message Deduplication Store (Guards against Meta burst-retries)
+const processedMessageIds = new Map();
+const DEDUP_TTL_MS = 60 * 1000; // 60-second idempotency window
 
 const memoryCache = {
   sites: null,
@@ -457,7 +461,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// Inbound Event Pipeline
+// Inbound Event Pipeline with 60-Second Message Deduplication
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
@@ -477,7 +481,22 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
 
-  console.log(`[Meta Ingress] Processing message from ${dispatchTarget} (Type: ${message.type || 'text'})`);
+  // 1. Idempotency Check: Prevent duplicate processing of Meta retry bursts
+  const now = Date.now();
+  if (processedMessageIds.has(messageId)) {
+    console.log(`[Meta Ingress] 🛡️ Deduplicated messageId: ${messageId} (Already processed in active window)`);
+    return;
+  }
+  processedMessageIds.set(messageId, now);
+
+  // Sweep memory cache of expired message IDs (>60s)
+  for (const [id, timestamp] of processedMessageIds.entries()) {
+    if (now - timestamp > DEDUP_TTL_MS) {
+      processedMessageIds.delete(id);
+    }
+  }
+
+  console.log(`[Meta Ingress] Processing message ${messageId} from ${dispatchTarget} (Type: ${message.type || 'text'})`);
 
   try {
     const callerIdentity = await resolveIdentity(fromPhone);
@@ -499,9 +518,10 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
+    // Resilient write to Inbound Messages 2 (Field name schema aligned to "Phone")
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
-      'From Phone': fromPhone,
+      'Phone': fromPhone,
       'Message Type': message.type || 'text',
       'Body': message.text?.body || message.caption || message.interactive?.button_reply?.title || `[${message.type || 'media'}]`,
       'Worker': worker?.id ? [worker.id] : []
@@ -639,7 +659,6 @@ app.post('/webhook', async (req, res) => {
         console.log(`[Audio Ingress] Spoken Intent: ${spokenTriage?.intent || 'UNKNOWN'} | Client: ${spokenTriage?.qbo_customer_name || 'None'}`);
 
         if (spokenTriage) {
-          // 1. Spoken Estimate Creation
           if (spokenTriage.intent === 'CREATE_ESTIMATE') {
             if (finance && finance.handleEstimateCreation) {
               await finance.handleEstimateCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
@@ -647,7 +666,6 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // 2. Spoken Percentage Draw Conversion
           if (spokenTriage.intent === 'CONVERT_ESTIMATE') {
             if (finance && finance.handleInvoiceApproval) {
               await finance.handleInvoiceApproval(CONFIG, spokenTriage, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
@@ -655,7 +673,6 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // 3. Spoken Direct Invoice (Without Estimate)
           if (spokenTriage.intent === 'CREATE_INVOICE') {
             if (finance && finance.handleInvoiceCreation) {
               await finance.handleInvoiceCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
@@ -663,7 +680,6 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // 4. Spoken Change Order
           if (spokenTriage.intent === 'CHANGE_ORDER') {
             if (finance && finance.handleConversationalChangeOrder) {
               await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b), callerIdentity);
@@ -671,7 +687,6 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // 5. Spoken AR Lookup (RBAC Gated)
           if (spokenTriage.intent === 'AR_LOOKUP') {
             const userRole = String(callerIdentity.role || '').trim().toLowerCase();
             if (userRole !== 'admin') {
@@ -688,7 +703,6 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // 6. Spoken Technical Oracle Engineering Query
           if (spokenTriage.intent === 'ORACLE_QUERY') {
             if (oracle && oracle.handleOracleQuery) {
               await oracle.handleOracleQuery(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
@@ -696,7 +710,6 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // 7. Spoken Material / Stock Depletion Log
           if (spokenTriage.intent === 'INVENTORY_QUERY') {
             if (inventory && inventory.handleSpokenInventorySnapshot) {
               await inventory.handleSpokenInventorySnapshot(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
@@ -959,7 +972,6 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // 9. Fallback Conversational Intent Routing
       console.log(`[Text Engine] General triage fallthrough: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
       return;
     }
@@ -1233,7 +1245,7 @@ if (cluster.isPrimary) {
   
   if (oracle && oracle.syncOracleDocs) {
     oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
+    setInterval(() => { oracleFileURIs = uris; });
   }
 
   for (let i = 0; i < numCPUs; i++) cluster.fork();
