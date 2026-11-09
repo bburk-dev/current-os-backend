@@ -60,45 +60,50 @@ async function syncOracleDocs(config, setOracleFileURIs = null) {
         const fileName = att.filename || 'manual.pdf';
 
         if (downloadUrl && (downloadUrl.toLowerCase().includes('.pdf') || fileName.toLowerCase().endsWith('.pdf'))) {
-          try {
-            const pdfRes = await fetch(downloadUrl);
-            if (!pdfRes.ok) {
-              console.warn(`[Oracle Engine] Failed to fetch PDF (${pdfRes.status}) for ${docTitle}`);
-              continue;
-            }
-            const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
-            
-            // Raw streaming to Google Gemini File API
-            const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${geminiApiKey}`, {
-              method: 'POST',
-              headers: {
-                'X-Goog-Upload-Protocol': 'raw',
-                'X-Goog-Upload-Command': 'start, upload, finalize',
-                'X-Goog-Upload-Header-Content-Length': String(pdfBuffer.length),
-                'X-Goog-Upload-Header-Content-Type': 'application/pdf',
-                'Content-Type': 'application/pdf'
-              },
-              body: pdfBuffer
-            });
-            
-            if (!uploadRes.ok) {
-              const errTxt = await uploadRes.text();
-              console.error(`[Oracle Engine] Gemini File API upload error for ${docTitle}:`, errTxt);
-              continue;
-            }
-
-            const uploadData = await uploadRes.json();
-            if (uploadData.file && uploadData.file.uri) {
-              newUris.push({
-                uri: uploadData.file.uri,
-                title: docTitle,
-                filename: fileName,
-                downloadUrl: downloadUrl
+          // Exponential backoff retry loop for external file ingestion
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              const pdfRes = await fetch(downloadUrl);
+              if (!pdfRes.ok) {
+                console.warn(`[Oracle Engine] Failed to fetch PDF (${pdfRes.status}) for ${docTitle}`);
+                break;
+              }
+              const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
+              
+              // Raw streaming to Google Gemini File API
+              const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${geminiApiKey}`, {
+                method: 'POST',
+                headers: {
+                  'X-Goog-Upload-Protocol': 'raw',
+                  'X-Goog-Upload-Command': 'start, upload, finalize',
+                  'X-Goog-Upload-Header-Content-Length': String(pdfBuffer.length),
+                  'X-Goog-Upload-Header-Content-Type': 'application/pdf',
+                  'Content-Type': 'application/pdf'
+                },
+                body: pdfBuffer
               });
-              console.log(`[Oracle Engine] Successfully ingested: "${docTitle}" (${fileName})`);
+              
+              if (!uploadRes.ok) {
+                const errTxt = await uploadRes.text();
+                if (attempt === 3) console.error(`[Oracle Engine] Gemini File API upload error for ${docTitle}:`, errTxt);
+                continue;
+              }
+
+              const uploadData = await uploadRes.json();
+              if (uploadData.file && uploadData.file.uri) {
+                newUris.push({
+                  uri: uploadData.file.uri,
+                  title: docTitle,
+                  filename: fileName,
+                  downloadUrl: downloadUrl
+                });
+                console.log(`[Oracle Engine] Successfully ingested: "${docTitle}" (${fileName})`);
+                break; // Success, break the retry loop
+              }
+            } catch (fetchErr) {
+              if (attempt === 3) console.error(`[Oracle Engine] Exception streaming ${docTitle}:`, fetchErr.message);
+              await new Promise(r => setTimeout(r, 1000 * attempt));
             }
-          } catch (fetchErr) {
-            console.error(`[Oracle Engine] Exception streaming ${docTitle}:`, fetchErr.message);
           }
         }
       }
@@ -145,7 +150,6 @@ async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = n
   let fileList = (oracleFileURIs && oracleFileURIs.length > 0) ? oracleFileURIs : activeOracleURIs;
 
   if (!fileList || fileList.length === 0) {
-    // Attempt autonomous emergency synchronization
     console.log('[Oracle Engine] Memory empty. Triggering emergency knowledge sync...');
     fileList = await syncOracleDocs(config);
   }
@@ -157,7 +161,6 @@ async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = n
     );
   }
 
-  // 1. Polymorphic input parsing
   let userQuery = 'Explain structural specifications.';
   if (typeof nlp === 'string' && nlp.trim().length > 0) {
     userQuery = nlp.trim();
@@ -170,7 +173,6 @@ async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = n
 
   const lQuery = userQuery.toLowerCase();
 
-  // 2. Direct Document Retrieval Branch (Zero-UI "Send me the plans")
   const isDirectDocRequest = /send|get|download|pdf|blueprint|drawing|plan|brochure|specs/i.test(lQuery) &&
                              !/how|why|what|calculate|torque|psi|concrete|cure/i.test(lQuery);
 
@@ -194,7 +196,6 @@ async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = n
     }
   }
 
-  // 3. Generative Forensic Engineering Synthesis
   const parts = fileList.map(item => ({ 
     file_data: { 
       mime_type: 'application/pdf', 
@@ -250,7 +251,6 @@ Question: "${userQuery}"`;
     const data = await res.json();
     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'The Oracle could not parse a valid technical answer.';
 
-    // 5. Construct Clickable Citations
     const docCitations = fileList.map(d => {
       const linkStr = d.downloadUrl ? `\n  👉 Download: ${d.downloadUrl}` : '';
       return `• *${d.title}* (${d.filename})${linkStr}`;
