@@ -300,7 +300,9 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
         const errorMsg = errorData?.error?.message || '';
         
         if (res.status === 422) {
-          const match = errorMsg.match(/field\s*["'\\]+([^"'\\]+)["'\\]+/i) || errorMsg.match(/Unknown field name\s*["'\\]+([^"'\\]+)["'\\]+/i);
+          // Robust regex catching colons and varied Airtable error formats
+          const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) ||
+                        errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
           if (match && match[1]) {
             const badField = match[1];
             console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}" from ${tableName}`);
@@ -525,11 +527,10 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2 (Strictly safe fields, avoids 422 errors)
+    // Resilient write to Inbound Messages 2 (Auto-healer strips unmapped columns)
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Message Type': message.type || 'text',
-      'Raw Text': message.text?.body || message.caption || message.interactive?.button_reply?.title || `[${message.type || 'media'}]`,
       'Worker': worker?.id ? [worker.id] : []
     }).catch(() => {});
 
@@ -540,7 +541,7 @@ app.post('/webhook', async (req, res) => {
     if (interactiveButtonId) {
       console.log(`[Button Action] Intercepted button tap: ${interactiveButtonId} from ${dispatchTarget}`);
 
-      // 1. One-Tap Estimate Email Dispatch via QBO REST API (Headless Dispatch)
+      // 1. One-Tap Estimate Email Dispatch via QBO REST API
       if (interactiveButtonId.startsWith('QBO_EMAIL_EST_')) {
         const estId = interactiveButtonId.replace('QBO_EMAIL_EST_', '');
         await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Dispatching official Estimate PDF to client email via QuickBooks...");
@@ -550,7 +551,7 @@ app.post('/webhook', async (req, res) => {
           if (emailRes) {
             await dispatchOutboundWhatsApp(dispatchTarget, `✅ *Estimate Dispatched:*\nOfficial QuickBooks PDF delivered directly to client's email inbox.`);
           } else {
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send email. Verify that a valid client email is registered.`);
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send email. Verify client email address.`);
           }
         } catch (emailErr) {
           console.error('[QBO Send Estimate Error]:', emailErr.message);
@@ -559,7 +560,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 2. One-Tap Invoice Email Dispatch via QBO REST API (Headless Dispatch)
+      // 2. One-Tap Invoice Email Dispatch via QBO REST API
       if (interactiveButtonId.startsWith('QBO_EMAIL_INV_')) {
         const invId = interactiveButtonId.replace('QBO_EMAIL_INV_', '');
         await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Dispatching Invoice PDF to client email via QuickBooks...");
@@ -995,7 +996,7 @@ app.post('/webhook', async (req, res) => {
       const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
       const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
 
-      const triage = whatsapp.triageSpokenOrTextNLP
+      const triage = whatsapp.triageSpokenOrTextNLP 
         ? await whatsapp.triageSpokenOrTextNLP(
             CONFIG, 
             txt, 
@@ -1054,7 +1055,7 @@ app.post('/webhook', async (req, res) => {
             triage || { transcript_en: txt }, 
             dispatchTarget, 
             oracleFileURIs, 
-            dispatchOutboundWhatsApp,
+            dispatchOutboundWhatsApp, 
             dispatchOutboundButtons
           );
           return;
@@ -1083,7 +1084,7 @@ app.post('/webhook', async (req, res) => {
             triage || { transcript_en: txt }, 
             dispatchTarget, 
             oracleFileURIs, 
-            dispatchOutboundWhatsApp,
+            dispatchOutboundWhatsApp, 
             dispatchOutboundButtons
           );
           return;
@@ -1442,7 +1443,7 @@ if (cluster.isPrimary) {
         await inventory.refreshInventoryCache(CONFIG);
       }
       
-      // Ensures worker processes have the technical documents hot in RAM
+      // Ensures worker processes have technical documents hot in RAM
       if (oracle && oracle.syncOracleDocs) {
         await oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
       }
