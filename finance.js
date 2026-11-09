@@ -54,12 +54,17 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
     method,
     headers: {
       'Authorization': `Bearer ${config.qbo.accessToken}`,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json'
+      'Accept': 'application/json'
     }
   };
   
-  if (body) options.body = JSON.stringify(body);
+  // FIX: Prevent QBO HTTP 500 NullPointerException on empty POST requests (like /send)
+  if (body) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  } else if (method === 'POST') {
+    options.headers['Content-Type'] = 'application/octet-stream';
+  }
 
   try {
     const res = await fetch(url, options);
