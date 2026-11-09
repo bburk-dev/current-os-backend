@@ -521,7 +521,7 @@ app.post('/webhook', async (req, res) => {
 
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
-      'Phone': fromPhone,
+      'Phone Number': fromPhone,
       'Message Type': message.type || 'text',
       'Body': message.text?.body || message.caption || message.interactive?.button_reply?.title || `[${message.type || 'media'}]`,
       'Worker': worker?.id ? [worker.id] : []
@@ -560,8 +560,14 @@ app.post('/webhook', async (req, res) => {
             ? await finance.getDefaultQboItemRef(CONFIG) 
             : { value: "1" };
 
+          // Default fallback if a drawn invoice doesn't pull tax mappings automatically
+          const defaultTaxRef = finance.resolveQboTaxCode 
+            ? await finance.resolveQboTaxCode(CONFIG, true)
+            : { value: "TAX" };
+
           const invPayload = {
             CustomerRef: estimate.CustomerRef,
+            GlobalTaxCalculation: "TaxExcluded",
             Line: [
               {
                 Amount: drawAmt,
@@ -570,7 +576,8 @@ app.post('/webhook', async (req, res) => {
                 SalesItemLineDetail: {
                   Qty: 1,
                   UnitPrice: drawAmt,
-                  ItemRef: defaultItemRef
+                  ItemRef: defaultItemRef,
+                  TaxCodeRef: defaultTaxRef
                 }
               }
             ],
@@ -598,7 +605,6 @@ app.post('/webhook', async (req, res) => {
           await dispatchOutboundWhatsApp(dispatchTarget, successCard);
         } catch (convErr) {
           console.error('[Button Convert Draw Error]:', convErr.message);
-          // Zero-Friction Exception Recovery: Do not expose technical errors to the field
           await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Headquarters is finalizing the ledger sync for this invoice.`);
         }
         return;
@@ -622,7 +628,6 @@ app.post('/webhook', async (req, res) => {
           );
         } catch (coApproveErr) {
           console.error('[Button Approve CO Error]:', coApproveErr.message);
-          // Zero-Friction Exception Recovery: Do not expose technical errors to the field
           await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Headquarters is finalizing the change-order ledger sync.`);
         }
         return;
