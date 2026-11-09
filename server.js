@@ -2,7 +2,7 @@
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
- *          Multimodal Receipt/Sweep Batching, and Zero-UI Site Provisioning
+ *          Multimodal Receipt/Sweep Batching, RBAC Bouncer, and Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -43,10 +43,10 @@ const CONFIG = {
   port: PORT,
   meta: {
     verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
-    accessToken: process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
+    accessToken: process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
     appSecret: process.env.META_APP_SECRET,
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
-    wabaId: process.env.META_WABA_ID || process.env.WABA_ID,
+    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
+    wabaId: process.env.META_WABA_ID || process.env.WHATSAPP_WABA_ID || process.env.WABA_ID,
     targetVerifiedPhone: '14379287172',
     graphApiUrl: 'https://graph.facebook.com/v21.0'
   },
@@ -145,8 +145,10 @@ async function getCachedWorkers(forceRefresh = false) {
     const data = await res.json();
     memoryCache.workers = data.records || [];
     memoryCache.workersLastFetched = now;
+    console.log(`[Cache Engine] Refreshed ${memoryCache.workers.length} Workers from Airtable into RAM`);
     return memoryCache.workers;
   } catch (err) {
+    console.warn('[Cache Engine] Workers refresh failed:', err.message);
     return memoryCache.workers || [];
   }
 }
@@ -191,70 +193,70 @@ async function getCachedOpenAssignments(forceRefresh = false) {
 // Autonomous QBO Token Hydration & Auto-Refresh Daemon
 async function hydrateQBOCache() {
   if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) {
-      console.warn('[Cache Engine] Supabase credentials missing. Bypassing QBO state hydration.');
-      return;
+    console.warn('[Cache Engine] Supabase credentials missing. Bypassing QBO state hydration.');
+    return;
   }
   try {
-      const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.serviceRoleKey);
-      const { data, error } = await supabase
-          .from('qbo_credentials')
-          .select('access_token, refresh_token, expires_at')
-          .eq('id', 'primary_tenant')
-          .single();
+    const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.serviceRoleKey);
+    const { data, error } = await supabase
+      .from('qbo_credentials')
+      .select('access_token, refresh_token, expires_at')
+      .eq('id', 'primary_tenant')
+      .single();
 
-      if (error) throw error;
-      if (data && data.access_token && !data.access_token.includes('pending_auth') && !data.access_token.includes('PASTE_')) {
-          const expiresAt = new Date(data.expires_at).getTime();
-          const now = Date.now();
+    if (error) throw error;
+    if (data && data.access_token && !data.access_token.includes('pending_auth') && !data.access_token.includes('PASTE_')) {
+      const expiresAt = new Date(data.expires_at).getTime();
+      const now = Date.now();
 
-          // If token is expired or within 5 minutes of expiring, refresh using refresh_token
-          if (now >= expiresAt - 300000 && data.refresh_token && CONFIG.qbo.clientId && CONFIG.qbo.clientSecret) {
-              console.log('[Cache Engine] QBO Access Token expired or near expiry. Initiating refresh...');
-              const basicAuth = Buffer.from(`${CONFIG.qbo.clientId}:${CONFIG.qbo.clientSecret}`).toString('base64');
-              const refreshRes = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
-                  method: 'POST',
-                  headers: {
-                      'Accept': 'application/json',
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                      'Authorization': `Basic ${basicAuth}`
-                  },
-                  body: new URLSearchParams({
-                      grant_type: 'refresh_token',
-                      refresh_token: data.refresh_token
-                  })
-              });
+      // If token is expired or within 5 minutes of expiring, refresh using refresh_token
+      if (now >= expiresAt - 300000 && data.refresh_token && CONFIG.qbo.clientId && CONFIG.qbo.clientSecret) {
+        console.log('[Cache Engine] QBO Access Token expired or near expiry. Initiating refresh...');
+        const basicAuth = Buffer.from(`${CONFIG.qbo.clientId}:${CONFIG.qbo.clientSecret}`).toString('base64');
+        const refreshRes = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': `Basic ${basicAuth}`
+          },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: data.refresh_token
+          })
+        });
 
-              if (refreshRes.ok) {
-                  const refreshed = await refreshRes.json();
-                  const newExpiresAt = new Date(Date.now() + (refreshed.expires_in * 1000)).toISOString();
-                  
-                  await supabase.from('qbo_credentials').update({
-                      access_token: refreshed.access_token,
-                      refresh_token: refreshed.refresh_token || data.refresh_token,
-                      expires_at: newExpiresAt,
-                      updated_at: new Date().toISOString()
-                  }).eq('id', 'primary_tenant');
+        if (refreshRes.ok) {
+          const refreshed = await refreshRes.json();
+          const newExpiresAt = new Date(Date.now() + (refreshed.expires_in * 1000)).toISOString();
+          
+          await supabase.from('qbo_credentials').update({
+            access_token: refreshed.access_token,
+            refresh_token: refreshed.refresh_token || data.refresh_token,
+            expires_at: newExpiresAt,
+            updated_at: new Date().toISOString()
+          }).eq('id', 'primary_tenant');
 
-                  data.access_token = refreshed.access_token;
-                  data.refresh_token = refreshed.refresh_token || data.refresh_token;
-                  console.log('[Cache Engine] QBO Cryptographic State Successfully Auto-Refreshed & Sealed in DB');
-              } else {
-                  console.warn('[Cache Engine] QBO Token Refresh HTTP error:', refreshRes.status);
-              }
-          }
-
-          memoryCache.qbo.accessToken = data.access_token;
-          memoryCache.qbo.refreshToken = data.refresh_token;
-          memoryCache.qbo.expiresAt = new Date(data.expires_at).getTime();
-
-          CONFIG.qbo.accessToken = data.access_token;
-          CONFIG.qbo.refreshToken = data.refresh_token;
-          console.log('[Cache Engine] QBO Cryptographic State Hydrated into RAM and CONFIG');
-      } else {
-          console.warn('[Cache Engine] QBO Credentials in Supabase are unauthenticated or using placeholders.');
+          data.access_token = refreshed.access_token;
+          data.refresh_token = refreshed.refresh_token || data.refresh_token;
+          console.log('[Cache Engine] QBO Cryptographic State Successfully Auto-Refreshed & Sealed in DB');
+        } else {
+          console.warn('[Cache Engine] QBO Token Refresh HTTP error:', refreshRes.status);
+        }
       }
+
+      memoryCache.qbo.accessToken = data.access_token;
+      memoryCache.qbo.refreshToken = data.refresh_token;
+      memoryCache.qbo.expiresAt = new Date(data.expires_at).getTime();
+
+      CONFIG.qbo.accessToken = data.access_token;
+      CONFIG.qbo.refreshToken = data.refresh_token;
+      console.log('[Cache Engine] QBO Cryptographic State Hydrated into RAM and CONFIG');
+    } else {
+      console.warn('[Cache Engine] QBO Credentials in Supabase are unauthenticated or using placeholders.');
+    }
   } catch (err) {
-      console.warn('[Cache Engine] Failed to hydrate QBO credentials:', err.message);
+    console.warn('[Cache Engine] Failed to hydrate QBO credentials:', err.message);
   }
 }
 
@@ -315,41 +317,41 @@ async function evaluateWeatherTripwires(lat, lon) {
   const timeoutId = setTimeout(() => controller.abort(), 4000);
 
   try {
-      const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,wind_gusts_10m&wind_speed_unit=mph`;
-      const response = await fetch(meteoUrl, { signal: controller.signal });
-      clearTimeout(timeoutId);
+    const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,wind_gusts_10m&wind_speed_unit=mph`;
+    const response = await fetch(meteoUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
 
-      if (!response.ok) throw new Error('Open-Meteo Telemetry Offline');
-      
-      const data = await response.json();
-      const current = data.current;
-      const issues = [];
-      
-      if (current.wind_gusts_10m > 25) {
-          issues.push(`🔴 HIGH WIND HOLD: Gusts at ${current.wind_gusts_10m} mph. Glass lifting suspended.`);
-      }
-      
-      const dewPointDelta = current.temperature_2m - current.dew_point_2m;
-      if (dewPointDelta < 3.0 && current.relative_humidity_2m > 85) {
-          issues.push(`🔴 CONDENSATION HOLD: Dew point delta is ${dewPointDelta.toFixed(1)}°C. Turf adhesive curing suspended.`);
-      }
+    if (!response.ok) throw new Error('Open-Meteo Telemetry Offline');
+    
+    const data = await response.json();
+    const current = data.current;
+    const issues = [];
+    
+    if (current.wind_gusts_10m > 25) {
+      issues.push(`🔴 HIGH WIND HOLD: Gusts at ${current.wind_gusts_10m} mph. Glass lifting suspended.`);
+    }
+    
+    const dewPointDelta = current.temperature_2m - current.dew_point_2m;
+    if (dewPointDelta < 3.0 && current.relative_humidity_2m > 85) {
+      issues.push(`🔴 CONDENSATION HOLD: Dew point delta is ${dewPointDelta.toFixed(1)}°C. Turf adhesive curing suspended.`);
+    }
 
-      return { safe: issues.length === 0, telemetry: current, warnings: issues };
+    return { safe: issues.length === 0, telemetry: current, warnings: issues };
   } catch (error) {
-      clearTimeout(timeoutId);
-      console.error('[Titan OS Edge] Weather Tripwire evaluation bypassed due to network failure.', error.message);
-      return { safe: true, warnings: ['⚠️ Meteorological telemetry offline. Proceed with visual caution.'] };
+    clearTimeout(timeoutId);
+    console.error('[Titan OS Edge] Weather Tripwire evaluation bypassed due to network failure.', error.message);
+    return { safe: true, warnings: ['⚠️ Meteorological telemetry offline. Proceed with visual caution.'] };
   }
 }
 
 function startFridayNewsletterCron() {
   const now = new Date();
-  const estDateString = now.toLocaleString("en-US", {timeZone: "America/New_York"});
+  const estDateString = now.toLocaleString("en-US", { timeZone: "America/New_York" });
   const estDate = new Date(estDateString);
   
   let daysUntilFriday = 5 - estDate.getDay();
   if (daysUntilFriday < 0 || (daysUntilFriday === 0 && estDate.getHours() >= 16)) {
-      daysUntilFriday += 7;
+    daysUntilFriday += 7;
   }
   
   const nextFriday = new Date(estDate.getFullYear(), estDate.getMonth(), estDate.getDate() + daysUntilFriday, 16, 0, 0, 0);
@@ -383,21 +385,21 @@ async function dispatchExecutiveNewsletter() {
       const res = await fetch(url, {
         method: 'GET',
         headers: {
-            'apikey': CONFIG.supabase.serviceRoleKey,
-            'Authorization': `Bearer ${CONFIG.supabase.serviceRoleKey}`
+          'apikey': CONFIG.supabase.serviceRoleKey,
+          'Authorization': `Bearer ${CONFIG.supabase.serviceRoleKey}`
         }
       });
       
       if (res.ok) {
         const vault = await res.json();
         if (vault && vault.length > 0) {
-            darkMatterContent = vault.slice(0, 5).map(dm => 
-              `• *${dm.site_name}* (${dm.category}): ${dm.distilled_context || dm.raw_text}`
-            ).join('\n');
+          darkMatterContent = vault.slice(0, 5).map(dm => 
+            `• *${dm.site_name}* (${dm.category}): ${dm.distilled_context || dm.raw_text}`
+          ).join('\n');
         }
       }
     } catch (e) {
-       console.error('[Newsletter Engine] Supabase fetch failed', e);
+      console.error('[Newsletter Engine] Supabase fetch failed', e);
     }
   }
   
@@ -413,7 +415,7 @@ async function dispatchExecutiveNewsletter() {
               `_Generated autonomously. Have a great weekend._`;
               
   if (whatsapp && whatsapp.fanOutToSubscribers) {
-      await whatsapp.fanOutToSubscribers(CONFIG, CONFIG.meta.targetVerifiedPhone, msg);
+    await whatsapp.fanOutToSubscribers(CONFIG, CONFIG.meta.targetVerifiedPhone, msg);
   }
 }
 
@@ -481,8 +483,8 @@ app.post('/webhook', async (req, res) => {
     if (!site) {
       const allSites = await getCachedSites();
       site = allSites.find(s => {
-          const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
-          return gid && (gid === fromPhone || fromPhone.includes(gid));
+        const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
+        return gid && (gid === fromPhone || fromPhone.includes(gid));
       }) || null;
     }
 
@@ -493,30 +495,30 @@ app.post('/webhook', async (req, res) => {
     // ================================================================
     if (message.type === 'location') {
       if (whatsapp.sendWhatsAppReaction) {
-          whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍').catch(() => {});
+        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍').catch(() => {});
       }
       const userLat = message.location?.latitude;
       const userLon = message.location?.longitude;
       
       if (userLat && userLon) {
         if (whatsapp.lastDroppedCoordinates) {
-            whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
+          whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
         }
 
         const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
         if (!weatherCheck.safe) {
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`);
+          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`);
         }
 
         const allSites = await getCachedSites();
         const nearby = [];
         for (const s of allSites) {
           if (whatsapp.resolveCoordinates) {
-              const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
-              if (coords) {
-                const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
-                if (dist <= 800) nearby.push({ site: s, distance: dist });
-              }
+            const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
+            if (coords) {
+              const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+              if (dist <= 800) nearby.push({ site: s, distance: dist });
+            }
           }
         }
         nearby.sort((a, b) => a.distance - b.distance);
@@ -555,78 +557,78 @@ app.post('/webhook', async (req, res) => {
       const txt = rawText.trim();
       const lTxt = txt.toLowerCase();
 
-      console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget}`);
+      console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
 
       // 0. Zero-UI Site Provisioning Handler
       const isCreateSiteQuery = lTxt.startsWith('create site') || 
                                 lTxt.startsWith('new site') || 
                                 lTxt.startsWith('/createsite') || 
-                                lTxt.startsWith('/newsite') ||
+                                lTxt.startsWith('/newsite') || 
                                 (pendingNewSiteRequests.has(fromPhone) && (lTxt.startsWith('yes') || lTxt.startsWith('site:')));
 
       if (isCreateSiteQuery) {
-          let siteName = txt
-            .replace(/^create\s+site:?/i, '')
-            .replace(/^new\s+site:?/i, '')
-            .replace(/^\/createsite:?/i, '')
-            .replace(/^\/newsite:?/i, '')
-            .replace(/^yes,?:?/i, '')
-            .replace(/^site:?/i, '')
-            .trim();
+        let siteName = txt
+          .replace(/^create\s+site:?/i, '')
+          .replace(/^new\s+site:?/i, '')
+          .replace(/^\/createsite:?/i, '')
+          .replace(/^\/newsite:?/i, '')
+          .replace(/^yes,?:?/i, '')
+          .replace(/^site:?/i, '')
+          .trim();
 
-          if (!siteName) {
-              await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
-              return;
-          }
-
-          const pendingGeo = pendingNewSiteRequests.get(fromPhone) || whatsapp.lastDroppedCoordinates?.get(fromPhone);
-          
-          if (!pendingGeo || (Date.now() - pendingGeo.timestamp > 2 * 60 * 60 * 1000)) {
-              await dispatchOutboundWhatsApp(dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
-              return;
-          }
-
-          console.log(`[Site Engine] Provisioning "${siteName}" at (${pendingGeo.lat}, ${pendingGeo.lon}) for ${dispatchTarget}`);
-          
-          const newRecord = await airtableWriteWithAutoDrop('Sites', {
-              'Site Name': siteName,
-              'Workflow Mode': 'INSTALLATION',
-              'Site Status': 'ACTIVE',
-              'Latitude': pendingGeo.lat,
-              'Longitude': pendingGeo.lon
-          });
-
-          if (newRecord && newRecord.id) {
-              pendingNewSiteRequests.delete(fromPhone);
-              await getCachedSites(true);
-
-              if (whatsapp.userActiveSiteMap) {
-                  whatsapp.userActiveSiteMap.set(fromPhone, newRecord.id);
-              }
-
-              const weather = await evaluateWeatherTripwires(pendingGeo.lat, pendingGeo.lon);
-              let weatherNote = '';
-              if (!weather.safe) {
-                  weatherNote = `\n\n⚠️ *METEOROLOGICAL WARNING*\n${weather.warnings.join('\n')}`;
-              }
-
-              const confirmMsg = `🏟️ *NEW SITE PROVISIONED*\n` +
-                  `━━━━━━━━━━━━━━━━━━━━\n` +
-                  `📍 *Site:* ${siteName}\n` +
-                  `🌐 *Coordinates:* \`${pendingGeo.lat.toFixed(5)}, ${pendingGeo.lon.toFixed(5)}\`\n` +
-                  `⚙️ *Mode:* INSTALLATION\n` +
-                  `📊 *Status:* ACTIVE\n\n` +
-                  `✅ Digital twin active. You are now checked in to *${siteName}*.\n` +
-                  `Send photos, voice memos, or video sweeps to begin logging progress.${weatherNote}`;
-
-              await dispatchOutboundWhatsApp(dispatchTarget, confirmMsg);
-          } else {
-              await dispatchOutboundWhatsApp(dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
-          }
+        if (!siteName) {
+          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
           return;
+        }
+
+        const pendingGeo = pendingNewSiteRequests.get(fromPhone) || whatsapp.lastDroppedCoordinates?.get(fromPhone);
+        
+        if (!pendingGeo || (Date.now() - pendingGeo.timestamp > 2 * 60 * 60 * 1000)) {
+          await dispatchOutboundWhatsApp(dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
+          return;
+        }
+
+        console.log(`[Site Engine] Provisioning "${siteName}" at (${pendingGeo.lat}, ${pendingGeo.lon}) for ${dispatchTarget}`);
+        
+        const newRecord = await airtableWriteWithAutoDrop('Sites', {
+          'Site Name': siteName,
+          'Workflow Mode': 'INSTALLATION',
+          'Site Status': 'ACTIVE',
+          'Latitude': pendingGeo.lat,
+          'Longitude': pendingGeo.lon
+        });
+
+        if (newRecord && newRecord.id) {
+          pendingNewSiteRequests.delete(fromPhone);
+          await getCachedSites(true);
+
+          if (whatsapp.userActiveSiteMap) {
+            whatsapp.userActiveSiteMap.set(fromPhone, newRecord.id);
+          }
+
+          const weather = await evaluateWeatherTripwires(pendingGeo.lat, pendingGeo.lon);
+          let weatherNote = '';
+          if (!weather.safe) {
+            weatherNote = `\n\n⚠️ *METEOROLOGICAL WARNING*\n${weather.warnings.join('\n')}`;
+          }
+
+          const confirmMsg = `🏟️ *NEW SITE PROVISIONED*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📍 *Site:* ${siteName}\n` +
+            `🌐 *Coordinates:* \`${pendingGeo.lat.toFixed(5)}, ${pendingGeo.lon.toFixed(5)}\`\n` +
+            `⚙️ *Mode:* INSTALLATION\n` +
+            `📊 *Status:* ACTIVE\n\n` +
+            `✅ Digital twin active. You are now checked in to *${siteName}*.\n` +
+            `Send photos, voice memos, or video sweeps to begin logging progress.${weatherNote}`;
+
+          await dispatchOutboundWhatsApp(dispatchTarget, confirmMsg);
+        } else {
+          await dispatchOutboundWhatsApp(dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
+        }
+        return;
       }
 
-      // 1. Headless Accounts Receivable (QBO) Ingress
+      // 1. Headless Accounts Receivable (QBO) Ingress with Strict RBAC Bouncer
       const isARQuery = lTxt === 'ar' || 
                         lTxt.startsWith('ar ') || 
                         lTxt.endsWith(' ar') || 
@@ -641,56 +643,68 @@ app.post('/webhook', async (req, res) => {
                         lTxt.startsWith('/ar');
 
       if (isARQuery) {
-          console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget}`);
-          if (finance && finance.handleARLookup) {
-              await finance.handleARLookup(CONFIG, dispatchTarget, dispatchOutboundWhatsApp);
-          } else if (finance && finance.getAgingReport) {
-              const report = await finance.getAgingReport(CONFIG, 30);
-              await dispatchOutboundWhatsApp(dispatchTarget, report);
-          } else {
-              console.warn('[Finance Engine] AR lookup handler not exported in finance.js');
-          }
+        console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget} (Role: ${callerIdentity.role})`);
+        
+        // Strict RBAC: Restrict financial metrics exclusively to Executive/Admin roles
+        const userRole = String(callerIdentity.role || '').trim().toLowerCase();
+        if (userRole !== 'admin') {
+          console.warn(`[Security Alert] Unauthorized AR lookup blocked for ${dispatchTarget} (Name: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
+          await dispatchOutboundWhatsApp(
+            dispatchTarget, 
+            `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`
+          );
           return;
+        }
+
+        if (finance && finance.handleARLookup) {
+          await finance.handleARLookup(CONFIG, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity);
+        } else if (finance && finance.getAgingReport) {
+          const report = await finance.getAgingReport(CONFIG, 30);
+          await dispatchOutboundWhatsApp(dispatchTarget, report);
+        } else {
+          console.warn('[Finance Engine] AR lookup handler not exported in finance.js');
+        }
+        return;
       }
 
       // 2. Structured Invoicing & Estimates
       if (lTxt.startsWith('/estimate') || lTxt.startsWith('/invoice')) {
-          if (whatsapp.triageSpokenOrTextNLP) {
-              const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-              if (triage) {
-                  if (triage.intent === 'CREATE_ESTIMATE' && finance.handleEstimateCreation) {
-                      await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-                  } else if (triage.intent === 'CREATE_INVOICE' && finance.handleInvoiceCreation) {
-                      await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-                  } else if (finance && finance.handleInvoiceApproval) {
-                      await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
-                  }
-              }
+        if (whatsapp.triageSpokenOrTextNLP) {
+          const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
+          if (triage) {
+            if (triage.intent === 'CREATE_ESTIMATE' && finance.handleEstimateCreation) {
+              await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+            } else if (triage.intent === 'CREATE_INVOICE' && finance.handleInvoiceCreation) {
+              await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+            } else if (finance && finance.handleInvoiceApproval) {
+              await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+            }
           }
-          return;
+        }
+        return;
       }
       
       // 3. Oracle RAG Engine
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
-          if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
-              const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-              await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-          }
-          return;
+        if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
+          const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
+          await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+        }
+        return;
       }
 
       // 4. Inventory Tracking
       if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
-          if (inventory && inventory.handleSpokenInventorySnapshot) {
-              await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => dispatchOutboundWhatsApp(t, m));
-          }
-          return;
+        if (inventory && inventory.handleSpokenInventorySnapshot) {
+          await inventory.handleSpokenInventorySnapshot(dispatchTarget, (t,m) => dispatchOutboundWhatsApp(t, m));
+        }
+        return;
       }
 
       // 5. Fallback Conversational Intent Routing
       if (whatsapp.triageSpokenOrTextNLP) {
-          const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
-          console.log(`[Text Engine] General triage: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
+        const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
+        console.log(`[Text Engine] General triage: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
       }
       
       return;
@@ -705,7 +719,7 @@ app.post('/webhook', async (req, res) => {
       const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
       
       if (whatsapp.sendWhatsAppReaction) {
-          whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
+        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
       }
 
       let mediaBuffer = null;
@@ -726,41 +740,52 @@ app.post('/webhook', async (req, res) => {
       const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
 
       if (whatsapp.mediaDebounceQueues) {
-          if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
-            whatsapp.mediaDebounceQueues.set(queueKey, {
-              items: [],
-              timer: null,
-              site,
-              worker,
-              dispatchTarget,
-              callerIdentity
-            });
-          }
+        if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
+          whatsapp.mediaDebounceQueues.set(queueKey, {
+            items: [],
+            timer: null,
+            site,
+            worker,
+            dispatchTarget,
+            callerIdentity
+          });
+        }
 
-          const queue = whatsapp.mediaDebounceQueues.get(queueKey);
-          queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
+        const queue = whatsapp.mediaDebounceQueues.get(queueKey);
+        queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
+        
+        if (queue.timer) clearTimeout(queue.timer);
+        queue.timer = setTimeout(async () => {
+          const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
+          whatsapp.mediaDebounceQueues.delete(queueKey);
+          if (!currentBatch || currentBatch.items.length === 0) return;
           
-          if (queue.timer) clearTimeout(queue.timer);
-          queue.timer = setTimeout(async () => {
-             const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
-             whatsapp.mediaDebounceQueues.delete(queueKey);
-             if (!currentBatch || currentBatch.items.length === 0) return;
-             
-             console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
+          console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
 
-             try {
-               if (whatsapp && whatsapp.processMediaBatch) {
-                 await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
-               } else if (finance && finance.handleReceiptUpload) {
-                 await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp);
-               } else {
-                 console.warn('[Batch Engine] No registered batch media handler.');
-               }
-             } catch (batchErr) {
-               console.error('[Batch Engine Failure]:', batchErr);
-               await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
-             }
-          }, 3500);
+          try {
+            // Check for explicit receipt/expense context or image-only uploads without active video
+            const hasVideo = currentBatch.items.some(i => i.type === 'video');
+            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice/i.test(i.caption || ''));
+            
+            if (!hasVideo && (hasReceiptKeyword || currentBatch.items.every(i => i.type === 'image'))) {
+              if (finance && finance.handleReceiptUpload) {
+                await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+                return;
+              }
+            }
+
+            if (whatsapp && whatsapp.processMediaBatch) {
+              await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
+            } else if (finance && finance.handleReceiptUpload) {
+              await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+            } else {
+              console.warn('[Batch Engine] No registered batch media handler.');
+            }
+          } catch (batchErr) {
+            console.error('[Batch Engine Failure]:', batchErr);
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
+          }
+        }, 3500);
       }
       return;
     }
@@ -793,7 +818,7 @@ app.post('/api/inbound-email', async (req, res) => {
 
     console.log(`[Email Ingress] Processing email from ${emailPayload.from}: "${emailPayload.subject}"`);
     if (whatsapp && whatsapp.handleInboundEmail) {
-        await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
+      await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
     }
 
   } catch (err) {
@@ -806,37 +831,46 @@ app.post('/api/inbound-email', async (req, res) => {
 // ====================================================================
 app.post('/api/sync-oracle', async (req, res) => {
   try {
-      const internalKey = req.headers['x-titan-internal-key'];
-      if (process.env.INTERNAL_API_KEY && internalKey !== process.env.INTERNAL_API_KEY) {
-          return res.status(403).json({ error: 'Unauthorized: Invalid Cryptographic Signature' });
-      }
+    const internalKey = req.headers['x-titan-internal-key'];
+    if (process.env.INTERNAL_API_KEY && internalKey !== process.env.INTERNAL_API_KEY) {
+      return res.status(403).json({ error: 'Unauthorized: Invalid Cryptographic Signature' });
+    }
 
-      console.log('[Titan OS Oracle] Manual synchronization triggered via Airtable webhook.');
-      res.status(202).json({ status: 'Accepted', message: 'Oracle Sync Protocol Initiated in background.' });
+    console.log('[Titan OS Oracle] Manual synchronization triggered via Airtable webhook.');
+    res.status(202).json({ status: 'Accepted', message: 'Oracle Sync Protocol Initiated in background.' });
 
-      if (oracle && oracle.syncOracleDocs) {
-          oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-      } else {
-          console.warn('[Titan OS Oracle] Sync module not found. Payload ignored.');
-      }
+    if (oracle && oracle.syncOracleDocs) {
+      oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+    } else {
+      console.warn('[Titan OS Oracle] Sync module not found. Payload ignored.');
+    }
   } catch (error) {
-      console.error('[Titan OS Oracle] Manual Sync execution failed:', error);
+    console.error('[Titan OS Oracle] Manual Sync execution failed:', error);
   }
 });
 
-// Helper: Resolve Caller Identity from Relational Workers Cache
+// Helper: Resolve Caller Identity from Relational Workers Cache across multiple column variations
 async function resolveIdentity(fromPhone) {
-    const workers = await getCachedWorkers();
-    const cleanDigits = fromPhone.replace(/\D/g, '');
-    const worker = workers.find(w => {
-      const pE164 = String(w.fields['Phone E164'] || '').replace(/\D/g, '');
-      return pE164 && (pE164 === cleanDigits || cleanDigits.endsWith(pE164));
-    });
-    
-    if (worker) {
-      return { type: 'WORKER', id: worker.id, name: worker.fields['Full Name'] || 'Field Tech', role: worker.fields['Role'], workerRecord: worker, phone: fromPhone };
-    }
-    return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: fromPhone };
+  const workers = await getCachedWorkers();
+  const cleanDigits = String(fromPhone).replace(/\D/g, '');
+  
+  const worker = workers.find(w => {
+    const rawNumber = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || '').replace(/\D/g, '');
+    return rawNumber && (rawNumber === cleanDigits || cleanDigits.endsWith(rawNumber) || rawNumber.endsWith(cleanDigits));
+  });
+  
+  if (worker) {
+    return { 
+      type: 'WORKER', 
+      id: worker.id, 
+      name: worker.fields['Full Name'] || 'Field Tech', 
+      role: worker.fields['Role'] || 'Installer', 
+      workerRecord: worker, 
+      phone: fromPhone,
+      language: worker.fields['Language'] || 'English'
+    };
+  }
+  return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: fromPhone, language: 'English' };
 }
 
 app.get('/health', (req, res) => {
@@ -879,7 +913,7 @@ if (cluster.isPrimary) {
       await getCachedOpenAssignments();
       
       if (inventory && inventory.refreshInventoryCache) {
-          await inventory.refreshInventoryCache(CONFIG);
+        await inventory.refreshInventoryCache(CONFIG);
       }
       
       await hydrateQBOCache();
