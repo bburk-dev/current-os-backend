@@ -5,7 +5,7 @@
  *          Atomic Message Deduplication, Conversational Voice Estimates,
  *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
  *          Conversational Clarification Engine, Ambient Multi-Turn Memory,
- *          RBAC Bouncer, and Zero-UI Site Provisioning
+ *          RBAC Bouncer, Zero-UI Site Provisioning, and Virtual Readiness.
  */
 
 // ====================================================================
@@ -33,6 +33,7 @@ const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
+const metrics = require('./metrics'); // NEW: Telemetry Layer
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -306,6 +307,8 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
         }
         throw new Error(`HTTP ${res.status}: ${errorMsg}`);
       }
+      
+      metrics.incrementMetric('database_mutations');
       return await res.json();
     } catch (err) {
       if (attempt === retries) {
@@ -359,6 +362,103 @@ async function evaluateWeatherTripwires(lat, lon) {
     console.error('[Titan OS Edge] Weather Tripwire evaluation bypassed due to network failure.', error.message);
     return { safe: true, warnings: ['⚠️ Meteorological telemetry offline. Proceed with visual caution.'] };
   }
+}
+
+// NEW: Virtual Site Readiness Engine (No Database Duplication)
+async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget) {
+  await dispatchOutboundWhatsApp(dispatchTarget, `⏳ Computing virtual readiness matrix for ${siteNameStr}...`);
+  
+  const allSites = await getCachedSites();
+  const site = allSites.find(s => 
+    s.fields['Site Name'] && 
+    s.fields['Site Name'].toLowerCase().includes(siteNameStr.toLowerCase())
+  );
+
+  if (!site) {
+    return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Could not locate site matching "${siteNameStr}".`);
+  }
+
+  const siteId = site.id;
+  const siteName = site.fields['Site Name'];
+  const lat = site.fields['Latitude'];
+  const lon = site.fields['Longitude'];
+
+  // 1. Crew Assignment Check
+  const openAssignments = await getCachedOpenAssignments();
+  const siteAssignments = openAssignments.filter(a => a.fields['Site'] && a.fields['Site'].includes(siteId));
+  const hasCrew = siteAssignments.some(a => a.fields['Worker'] && a.fields['Worker'].length > 0);
+  let crewStatus = hasCrew ? `✅ Crew Assigned` : `❌ No Crew Assigned`;
+  let confidenceScore = 100;
+
+  // 2. Weather Check
+  let weatherStatus = `❓ Unknown Weather`;
+  if (lat && lon) {
+    const weather = await evaluateWeatherTripwires(lat, lon);
+    weatherStatus = weather.safe ? `✅ Weather Clear` : `❌ Active Weather Holds`;
+    if (!weather.safe) confidenceScore -= 20;
+  } else {
+    confidenceScore -= 10;
+  }
+
+  // 3. Finance Check (QBO Query via finance.js)
+  let financeStatus = `❓ Deposit Pending`;
+  try {
+    const qboCustomer = await finance.findOrCreateQboCustomer(config, siteName);
+    if (qboCustomer) {
+       const arQuery = `select * from Invoice where CustomerRef.value = '${qboCustomer.value}' and Balance > '0' MAXRESULTS 1`;
+       const arRes = await finance.qboApiRequest(config, arQuery);
+       if (arRes && arRes.QueryResponse && arRes.QueryResponse.Invoice && arRes.QueryResponse.Invoice.length > 0) {
+         financeStatus = `❌ Open Balance Pending`;
+         confidenceScore -= 15;
+       } else {
+         financeStatus = `✅ Deposit/Account Cleared`;
+       }
+    }
+  } catch (e) {
+    console.warn("Readiness finance check failed", e.message);
+    confidenceScore -= 10;
+  }
+
+  // 4. Critical Inventory Validation (Virtual Check against cached stock)
+  let inventoryStatus = `✅ Core Materials Ready`;
+  if (inventory && inventory.refreshInventoryCache) {
+    const stock = await inventory.refreshInventoryCache(config);
+    const criticalItems = ['Glass', 'Steel', 'Turf', 'Neoprene', 'Entrance']; // Condensed Tier 1
+    const missing = [];
+    
+    for (const crit of criticalItems) {
+      const match = stock.find(i => (i.fields['Item Name'] || '').toLowerCase().includes(crit.toLowerCase()));
+      if (match) {
+        const qty = Number(match.fields['Quantity on hand'] || match.fields['Quantity'] || 0);
+        if (qty <= 0) missing.push(crit);
+      } else {
+         missing.push(crit); // Count as missing if not in ledger
+      }
+    }
+    
+    if (missing.length > 0) {
+      inventoryStatus = `❌ Missing: ${missing.join(', ')}`;
+      confidenceScore -= 30;
+    }
+  }
+
+  // 5. Compute Overall Status
+  const isReady = hasCrew && (weatherStatus.includes('✅')) && (financeStatus.includes('✅')) && (inventoryStatus.includes('✅'));
+  const overall = isReady ? `✅ *READY TO MOBILIZE*` : `❌ *NOT READY*`;
+
+  const card = `📊 *TITAN OS | VIRTUAL SITE READINESS*\n` +
+               `──────────────────────────────\n` +
+               `📍 *Site:* ${siteName}\n` +
+               `──────────────────────────────\n` +
+               `👥 ${crewStatus}\n` +
+               `🌤️ ${weatherStatus}\n` +
+               `💰 ${financeStatus}\n` +
+               `📦 ${inventoryStatus}\n` +
+               `──────────────────────────────\n` +
+               `*OVERALL:* ${overall}\n` +
+               `*Confidence:* ${confidenceScore}%`;
+
+  await dispatchOutboundWhatsApp(dispatchTarget, card);
 }
 
 function startFridayNewsletterCron() {
@@ -483,6 +583,8 @@ app.post('/webhook', async (req, res) => {
   const messageId = message.id || `msg_${Date.now()}`;
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
+
+  metrics.incrementMetric('messages_processed'); // TELEMETRY LOG
 
   // Atomic Single-Threaded Deduplication Lock
   const now = Date.now();
@@ -653,6 +755,8 @@ app.post('/webhook', async (req, res) => {
           const inv = invRes?.Invoice;
           const invoiceNum = inv?.DocNumber || inv?.Id || 'Issued';
           const invTotal = inv?.TotalAmt ? parseFloat(inv.TotalAmt).toFixed(2) : '0.00';
+          
+          metrics.incrementMetric('invoices_generated'); // TELEMETRY LOG
 
           const successCard = `🧾 *TITAN OS | PROGRESS DRAW INVOICE ISSUED*\n` +
                               `──────────────────────────────\n` +
@@ -702,6 +806,8 @@ app.post('/webhook', async (req, res) => {
       const mediaObj = message[message.type];
       const mediaId = mediaObj?.id;
       const mimeType = mediaObj?.mime_type || 'audio/ogg';
+      
+      metrics.incrementMetric('voice_commands'); // TELEMETRY LOG
 
       if (whatsapp.sendWhatsAppReaction) {
         whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '🎙️').catch(() => {});
@@ -734,56 +840,30 @@ app.post('/webhook', async (req, res) => {
         if (spokenTriage) {
           if (spokenTriage.intent === 'CREATE_ESTIMATE') {
             if (finance && finance.handleEstimateCreation) {
-              await finance.handleEstimateCreation(
-                CONFIG, 
-                spokenTriage, 
-                dispatchTarget, 
-                oracleFileURIs, 
-                dispatchOutboundWhatsApp,
-                dispatchOutboundButtons
-              );
+              await finance.handleEstimateCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
+              metrics.incrementMetric('estimates_generated');
               return;
             }
           }
 
           if (spokenTriage.intent === 'CONVERT_ESTIMATE') {
             if (finance && finance.handleInvoiceApproval) {
-              await finance.handleInvoiceApproval(
-                CONFIG, 
-                spokenTriage, 
-                dispatchTarget, 
-                dispatchOutboundWhatsApp, 
-                dispatchOutboundButtons
-              );
+              await finance.handleInvoiceApproval(CONFIG, spokenTriage, dispatchTarget, dispatchOutboundWhatsApp, dispatchOutboundButtons);
               return;
             }
           }
 
           if (spokenTriage.intent === 'CREATE_INVOICE') {
             if (finance && finance.handleInvoiceCreation) {
-              await finance.handleInvoiceCreation(
-                CONFIG, 
-                spokenTriage, 
-                dispatchTarget, 
-                oracleFileURIs, 
-                dispatchOutboundWhatsApp,
-                dispatchOutboundButtons
-              );
+              await finance.handleInvoiceCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
+              metrics.incrementMetric('invoices_generated');
               return;
             }
           }
 
           if (spokenTriage.intent === 'CHANGE_ORDER') {
             if (finance && finance.handleConversationalChangeOrder) {
-              await finance.handleConversationalChangeOrder(
-                CONFIG, 
-                spokenTriage, 
-                dispatchTarget, 
-                oracleFileURIs, 
-                dispatchOutboundWhatsApp, 
-                dispatchOutboundButtons, 
-                callerIdentity
-              );
+              await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons, callerIdentity);
               return;
             }
           }
@@ -792,10 +872,7 @@ app.post('/webhook', async (req, res) => {
             const userRole = String(callerIdentity.role || '').trim().toLowerCase();
             if (userRole !== 'admin') {
               console.warn(`[Security Alert] Unauthorized spoken AR lookup blocked for ${dispatchTarget}`);
-              await dispatchOutboundWhatsApp(
-                dispatchTarget, 
-                `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`
-              );
+              await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`);
               return;
             }
             if (finance && finance.handleARLookup) {
@@ -807,6 +884,7 @@ app.post('/webhook', async (req, res) => {
           if (spokenTriage.intent === 'ORACLE_QUERY') {
             if (oracle && oracle.handleOracleQuery) {
               await oracle.handleOracleQuery(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+              metrics.incrementMetric('oracle_queries');
               return;
             }
           }
@@ -816,6 +894,23 @@ app.post('/webhook', async (req, res) => {
               await inventory.handleSpokenInventorySnapshot(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
               return;
             }
+          }
+
+          // Handle Readines/Metrics via Voice
+          if (spokenTriage.intent === 'METRICS_QUERY') {
+            const userRole = String(callerIdentity.role || '').trim().toLowerCase();
+            if (userRole !== 'admin') {
+               return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Access Denied. Metrics are restricted to Executive/Admin roles.`);
+            }
+            return await dispatchOutboundWhatsApp(dispatchTarget, metrics.getTelemetryReport());
+          }
+
+          if (spokenTriage.intent === 'READINESS_QUERY') {
+             const targetSiteName = spokenTriage.qbo_customer_name || (boundSite ? boundSite.fields['Site Name'] : null);
+             if (!targetSiteName) {
+               return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please specify a site (e.g., "Are we ready for Aurora?")`);
+             }
+             return await evaluateVirtualSiteReadiness(CONFIG, targetSiteName, dispatchTarget);
           }
 
           if (spokenTriage.intent === 'UNKNOWN' || spokenTriage.intent === 'GENERAL_UPDATE') {
@@ -831,6 +926,7 @@ app.post('/webhook', async (req, res) => {
                  'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
                  'Last Intent': 'GENERAL_UPDATE'
                }, boundSite.id);
+               metrics.incrementMetric('sites_updated');
                await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
                return;
             }
@@ -902,6 +998,24 @@ app.post('/webhook', async (req, res) => {
       const lTxt = txt.toLowerCase();
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
+
+      // NEW: Telemetry Report Intent
+      if (lTxt === '/metrics' || lTxt === '/telemetry') {
+        const userRole = String(callerIdentity.role || '').trim().toLowerCase();
+        if (userRole !== 'admin') {
+           return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Access Denied. Metrics are restricted to Executive/Admin roles.`);
+        }
+        return await dispatchOutboundWhatsApp(dispatchTarget, metrics.getTelemetryReport());
+      }
+
+      // NEW: Virtual Site Readiness Intent
+      if (lTxt.startsWith('/readiness')) {
+        const siteNameStr = txt.replace(/^\/readiness\s*/i, '').trim();
+        if (!siteNameStr) {
+          return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please specify a site (e.g., /readiness Aurora)`);
+        }
+        return await evaluateVirtualSiteReadiness(CONFIG, siteNameStr, dispatchTarget);
+      }
 
       if (lTxt.startsWith('create site') || lTxt.startsWith('new site') || lTxt.startsWith('/createsite') || lTxt.startsWith('/newsite') || (pendingNewSiteRequests.has(fromPhone) && (lTxt.startsWith('yes') || lTxt.startsWith('site:')))) {
         let siteName = txt.replace(/^create\s+site:?/i, '').replace(/^new\s+site:?/i, '').replace(/^\/createsite:?/i, '').replace(/^\/newsite:?/i, '').replace(/^yes,?:?/i, '').replace(/^site:?/i, '').trim();
@@ -990,6 +1104,7 @@ app.post('/webhook', async (req, res) => {
       if (triage?.intent === 'CREATE_ESTIMATE' || lTxt.includes('build an estimate') || lTxt.includes('create estimate') || lTxt.startsWith('/estimate')) {
         if (finance && finance.handleEstimateCreation) {
           await finance.handleEstimateCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
+          metrics.incrementMetric('estimates_generated');
           return;
         }
       }
@@ -1004,6 +1119,7 @@ app.post('/webhook', async (req, res) => {
       if (triage?.intent === 'CREATE_INVOICE' || lTxt.includes('create invoice') || lTxt.includes('direct invoice') || lTxt.startsWith('/invoice')) {
         if (finance && finance.handleInvoiceCreation) {
           await finance.handleInvoiceCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
+          metrics.incrementMetric('invoices_generated');
           return;
         }
       }
@@ -1018,6 +1134,7 @@ app.post('/webhook', async (req, res) => {
       if (triage?.intent === 'ORACLE_QUERY' || lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
         if (oracle && oracle.handleOracleQuery) {
           await oracle.handleOracleQuery(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+          metrics.incrementMetric('oracle_queries');
           return;
         }
       }
@@ -1042,6 +1159,7 @@ app.post('/webhook', async (req, res) => {
              'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
              'Last Intent': 'GENERAL_UPDATE'
            }, boundSite.id);
+           metrics.incrementMetric('sites_updated');
            await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
            return;
         }
@@ -1056,6 +1174,8 @@ app.post('/webhook', async (req, res) => {
       const mediaId = mediaObj.id;
       const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
       
+      metrics.incrementMetric('photos_processed'); // TELEMETRY LOG
+
       if (whatsapp.sendWhatsAppReaction) {
         whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
       }
