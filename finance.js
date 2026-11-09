@@ -93,9 +93,13 @@ async function getCachedCatalogItems(config) {
     const qboData = await qboApiRequest(config, `select * from Item where Active=true MAXRESULTS 500`);
     const rawItems = qboData?.QueryResponse?.Item || [];
     
-    // Strict filter: Exclude QBO Categories to prevent QBO Error 2500
-    cachedItems = rawItems.filter(i => i.Type && i.Type.toLowerCase() !== 'category');
-    console.log(`[QBO Catalog] Filtered ${cachedItems.length} sellable items (excluded ${rawItems.length - cachedItems.length} categories)`);
+    // Strict filter: Exclude QBO Categories and Bundles to prevent QBO Error 8331 (Invalid bundle entry)
+    cachedItems = rawItems.filter(i => {
+      const type = (i.Type || '').toLowerCase();
+      return type !== 'category' && type !== 'bundle' && type !== 'group';
+    });
+    
+    console.log(`[QBO Catalog] Filtered ${cachedItems.length} sellable items (excluded ${rawItems.length - cachedItems.length} categories/bundles/groups)`);
     return cachedItems;
   } catch (err) {
     console.warn('[QBO Catalog Discovery Error]:', err.message);
