@@ -3,7 +3,8 @@
  * Module: finance.js
  * Purpose: Intuit OAuth2, Dunning, Progressive Draws, Receipt OCR, 
  *          Macro Ghost-Ledger Extraction, Traffic-Light AR Aging,
- *          and Conversational Subcontractor Change-Order Negotiation
+ *          Conversational Subcontractor Change-Order Negotiation,
+ *          and Zero-UI Estimate/Invoice Creation
  */
 
 const fetch = globalThis.fetch || require('node-fetch');
@@ -77,6 +78,43 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
     return null;
   }
 }
+
+// ====================================================================
+// 1B. DYNAMIC ITEM RESOLUTION
+// ====================================================================
+
+let cachedDefaultItemRef = null;
+
+/**
+ * Discovers a valid QBO ItemRef (Product/Service) dynamically to prevent "Invalid Reference Id" errors
+ * when constructing net-new line items for invoices or estimates.
+ */
+async function getDefaultQboItemRef(config) {
+  if (cachedDefaultItemRef) return cachedDefaultItemRef;
+
+  try {
+    // Attempt to find a standard "Services" or "Sales" item
+    let itemQuery = `select * from Item where Type='Service' and Active=true MAXRESULTS 1`;
+    let qboData = await qboApiRequest(config, itemQuery);
+
+    if (!qboData?.QueryResponse?.Item?.[0]) {
+      // Fallback: just grab the very first active item in the catalog
+      itemQuery = `select * from Item where Active=true MAXRESULTS 1`;
+      qboData = await qboApiRequest(config, itemQuery);
+    }
+
+    if (qboData?.QueryResponse?.Item?.[0]) {
+      cachedDefaultItemRef = { value: String(qboData.QueryResponse.Item[0].Id) };
+      return cachedDefaultItemRef;
+    }
+  } catch (err) {
+    console.warn('[QBO Item Discovery Error]:', err.message);
+  }
+
+  // Absolute fallback if the catalog is completely empty or queries fail
+  return { value: "1" };
+}
+
 
 // ====================================================================
 // 2. ACCOUNTS RECEIVABLE & AGING (AR LOOKUP WITH TRAFFIC-LIGHT DOTS)
@@ -343,6 +381,8 @@ JSON SCHEMA:
       return;
     }
 
+    const defaultItemRef = await getDefaultQboItemRef(config);
+
     const qboLines = changeOrder.line_items.map(item => ({
       Amount: item.amount,
       DetailType: "SalesItemLineDetail",
@@ -350,7 +390,7 @@ JSON SCHEMA:
       SalesItemLineDetail: {
         Qty: item.quantity,
         UnitPrice: item.unit_price,
-        ItemRef: { value: "1" }
+        ItemRef: defaultItemRef
       }
     }));
 
@@ -387,7 +427,7 @@ JSON SCHEMA:
         { id: `QBO_APPROVE_CO_${qboRes?.Estimate?.Id || '0'}`, title: "✅ Approve & Issue" },
         { id: `QBO_REVISE_CO_${qboRes?.Estimate?.Id || '0'}`, title: "✏️ Revise Scope" }
       ];
-      await sendWhatsAppButtons(dispatchTarget, card, buttons);
+      await sendWhatsAppButtons(config, dispatchTarget, card, buttons);
     } else {
       await sendWhatsAppMessage(dispatchTarget, card);
     }
@@ -512,6 +552,8 @@ JSON SCHEMA:
 // ====================================================================
 
 async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage) {
+  await sendWhatsAppMessage(dispatchTarget, "⏳ Drafting professional estimate against architectural blueprints...");
+  
   const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
   const amount = nlp.qbo_amount;
   const rawInput = nlp.transcript_en || nlp.qbo_line_items || '';
@@ -526,6 +568,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   }
 
   const expandedContext = await expandLineItemsWithOracle(config, rawInput, amount, oracleFileURIs);
+  const defaultItemRef = await getDefaultQboItemRef(config);
   
   const lineItem = {
     Amount: amount,
@@ -534,7 +577,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     SalesItemLineDetail: { 
       Qty: 1, 
       UnitPrice: amount, 
-      ItemRef: { value: "1" } 
+      ItemRef: defaultItemRef 
     }
   };
 
@@ -563,11 +606,13 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
                     `✅ Estimate securely generated in QuickBooks Online.`;
     await sendWhatsAppMessage(dispatchTarget, estCard);
   } else {
-    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create estimate in QuickBooks. Check API logs.`);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to create estimate in QuickBooks. Ensure your client name is spelled correctly.`);
   }
 }
 
 async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage) {
+  await sendWhatsAppMessage(dispatchTarget, "⏳ Generating formal invoice...");
+  
   const customerNameTarget = nlp.qbo_customer_name || nlp.referenced_entity_name;
   const amount = nlp.qbo_amount;
   const rawInput = nlp.transcript_en || nlp.qbo_line_items || '';
@@ -582,6 +627,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   }
 
   const expandedContext = await expandLineItemsWithOracle(config, rawInput, amount, oracleFileURIs);
+  const defaultItemRef = await getDefaultQboItemRef(config);
 
   const lineItem = {
     Amount: amount,
@@ -590,7 +636,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
     SalesItemLineDetail: { 
       Qty: 1, 
       UnitPrice: amount, 
-      ItemRef: { value: "1" } 
+      ItemRef: defaultItemRef 
     }
   };
 
@@ -656,7 +702,7 @@ async function handleInvoiceApproval(config, nlp, dispatchTarget, sendWhatsAppMe
                   `Tap below to cryptographically bind this ${percentage}% draw to the estimate ledger.`;
 
   const buttons = [{ id: `QBO_CONVERT_${estimate.Id}_${percentage}`, title: `✉️ Execute ${percentage}% Draw` }];
-  await sendWhatsAppButtons(dispatchTarget, invCard, buttons);
+  await sendWhatsAppButtons(config, dispatchTarget, invCard, buttons);
 }
 
 module.exports = {
