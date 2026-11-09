@@ -4,7 +4,7 @@
  * Purpose: Intuit OAuth2, Dunning, Progressive Draws, Receipt OCR, 
  *          Macro Ghost-Ledger Extraction, Traffic-Light AR Aging,
  *          Conversational Subcontractor Change-Order Negotiation,
- *          and Zero-UI Estimate/Invoice Creation
+ *          and Zero-UI Estimate/Invoice Creation with Global Tax Resolution
  */
 
 const fetch = globalThis.fetch || require('node-fetch');
@@ -80,25 +80,20 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
 }
 
 // ====================================================================
-// 1B. DYNAMIC ITEM RESOLUTION
+// 1B. DYNAMIC ITEM & TAX RESOLUTION (GLOBAL / CANADIAN COMPATIBILITY)
 // ====================================================================
 
 let cachedDefaultItemRef = null;
+let cachedTaxCodes = null;
 
-/**
- * Discovers a valid QBO ItemRef (Product/Service) dynamically to prevent "Invalid Reference Id" errors
- * when constructing net-new line items for invoices or estimates.
- */
 async function getDefaultQboItemRef(config) {
   if (cachedDefaultItemRef) return cachedDefaultItemRef;
 
   try {
-    // Attempt to find a standard "Services" or "Sales" item
     let itemQuery = `select * from Item where Type='Service' and Active=true MAXRESULTS 1`;
     let qboData = await qboApiRequest(config, itemQuery);
 
     if (!qboData?.QueryResponse?.Item?.[0]) {
-      // Fallback: just grab the very first active item in the catalog
       itemQuery = `select * from Item where Active=true MAXRESULTS 1`;
       qboData = await qboApiRequest(config, itemQuery);
     }
@@ -111,10 +106,35 @@ async function getDefaultQboItemRef(config) {
     console.warn('[QBO Item Discovery Error]:', err.message);
   }
 
-  // Absolute fallback if the catalog is completely empty or queries fail
   return { value: "1" };
 }
 
+async function resolveQboTaxCode(config, applyTax) {
+  if (!cachedTaxCodes) {
+    try {
+      const res = await qboApiRequest(config, `select * from TaxCode where Active=true MAXRESULTS 100`);
+      if (res?.QueryResponse?.TaxCode) {
+        cachedTaxCodes = res.QueryResponse.TaxCode;
+      }
+    } catch (e) {
+      console.warn('[QBO Tax] Failed to fetch tax codes:', e.message);
+    }
+  }
+
+  if (!cachedTaxCodes || cachedTaxCodes.length === 0) {
+    return applyTax ? { value: 'TAX' } : { value: 'NON' };
+  }
+
+  if (applyTax) {
+    const taxCode = cachedTaxCodes.find(t => /HST|GST|Standard|Taxable/i.test(t.Name || t.Description)) || cachedTaxCodes[0];
+    return { value: String(taxCode.Id) };
+  } else {
+    const exemptCode = cachedTaxCodes.find(t => /Exempt|Zero|Non|Free/i.test(t.Name || t.Description)) 
+                       || cachedTaxCodes.find(t => t.Id === 'NON') 
+                       || cachedTaxCodes[cachedTaxCodes.length - 1];
+    return { value: String(exemptCode.Id) };
+  }
+}
 
 // ====================================================================
 // 2. ACCOUNTS RECEIVABLE & AGING (AR LOOKUP WITH TRAFFIC-LIGHT DOTS)
@@ -382,6 +402,7 @@ JSON SCHEMA:
     }
 
     const defaultItemRef = await getDefaultQboItemRef(config);
+    const defaultTaxRef = await resolveQboTaxCode(config, true);
 
     const qboLines = changeOrder.line_items.map(item => ({
       Amount: item.amount,
@@ -390,12 +411,14 @@ JSON SCHEMA:
       SalesItemLineDetail: {
         Qty: item.quantity,
         UnitPrice: item.unit_price,
-        ItemRef: defaultItemRef
+        ItemRef: defaultItemRef,
+        TaxCodeRef: defaultTaxRef
       }
     }));
 
     const estPayload = {
       CustomerRef: customerRef,
+      GlobalTaxCalculation: "TaxExcluded",
       Line: qboLines,
       TxnStatus: "Pending",
       CustomField: [{
@@ -569,6 +592,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
 
   const expandedContext = await expandLineItemsWithOracle(config, rawInput, amount, oracleFileURIs);
   const defaultItemRef = await getDefaultQboItemRef(config);
+  const taxCodeRef = await resolveQboTaxCode(config, expandedContext.apply_tax);
   
   const lineItem = {
     Amount: amount,
@@ -577,18 +601,14 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     SalesItemLineDetail: { 
       Qty: 1, 
       UnitPrice: amount, 
-      ItemRef: defaultItemRef 
+      ItemRef: defaultItemRef,
+      TaxCodeRef: taxCodeRef
     }
   };
 
-  if (expandedContext.apply_tax) {
-    lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'TAX' };
-  } else {
-    lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'NON' };
-  }
-
   const estPayload = {
     CustomerRef: customerRef,
+    GlobalTaxCalculation: "TaxExcluded",
     Line: [lineItem]
   };
 
@@ -628,6 +648,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
 
   const expandedContext = await expandLineItemsWithOracle(config, rawInput, amount, oracleFileURIs);
   const defaultItemRef = await getDefaultQboItemRef(config);
+  const taxCodeRef = await resolveQboTaxCode(config, expandedContext.apply_tax);
 
   const lineItem = {
     Amount: amount,
@@ -636,18 +657,14 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
     SalesItemLineDetail: { 
       Qty: 1, 
       UnitPrice: amount, 
-      ItemRef: defaultItemRef 
+      ItemRef: defaultItemRef,
+      TaxCodeRef: taxCodeRef
     }
   };
 
-  if (expandedContext.apply_tax) {
-    lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'TAX' };
-  } else {
-    lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'NON' };
-  }
-
   const invoicePayload = {
     CustomerRef: customerRef,
+    GlobalTaxCalculation: "TaxExcluded",
     Line: [lineItem]
   };
 
@@ -716,5 +733,7 @@ module.exports = {
   handleConversationalChangeOrder,
   getAgingReport,
   handleARLookup,
-  handleReceiptUpload
+  handleReceiptUpload,
+  getDefaultQboItemRef,
+  resolveQboTaxCode
 };
