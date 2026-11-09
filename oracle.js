@@ -1,14 +1,19 @@
 /**
  * TITAN OS V6.0.22 — TECHNICAL ORACLE RAG ENGINE
  * Module: oracle.js
- * Purpose: Gemini File API Ingestion, Caching, and Engineering Lookup
+ * Purpose: Gemini File API Ingestion, Caching, Clickable Blueprint Delivery,
+ *          Defensive 48-Hour TTL Auto-Resync, and Engineering Forensics
  */
 
-// Defensive fetch polyfill for Node.js clustering
 const fetch = globalThis.fetch || require('node-fetch');
 
+// Module-level RAM Cache
+let activeOracleURIs = [];
+let lastSyncTimestamp = 0;
+const RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24-hour proactive rotation
+
 // ====================================================================
-// 1. KNOWLEDGE BASE SYNCHRONIZATION
+// 1. KNOWLEDGE BASE SYNCHRONIZATION (AIRTABLE -> GEMINI FILE API)
 // ====================================================================
 
 /**
@@ -16,9 +21,10 @@ const fetch = globalThis.fetch || require('node-fetch');
  * from Airtable "Oracle Docs" table into the Google Gemini File API.
  * 
  * @param {object} config - Master Titan OS CONFIG object
- * @param {function} setOracleFileURIs - Callback updating the active RAM cache of file URIs
+ * @param {function} [setOracleFileURIs] - Optional external state callback
+ * @returns {Promise<Array>} - Active array of ingested Oracle file descriptors
  */
-async function syncOracleDocs(config, setOracleFileURIs) {
+async function syncOracleDocs(config, setOracleFileURIs = null) {
   const apiKey = config?.airtable?.apiKey || process.env.AIRTABLE_API_KEY;
   const baseId = config?.airtable?.baseId || process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP';
   const endpoint = config?.airtable?.endpoint || 'https://api.airtable.com/v0';
@@ -26,7 +32,7 @@ async function syncOracleDocs(config, setOracleFileURIs) {
 
   if (!apiKey || !geminiApiKey) {
     console.warn('[Oracle Engine] Missing Airtable or Gemini API keys. Sync aborted.');
-    return;
+    return activeOracleURIs;
   }
 
   try {
@@ -36,7 +42,7 @@ async function syncOracleDocs(config, setOracleFileURIs) {
     
     if (!res.ok) {
       console.warn(`[Oracle Engine] Table "Oracle Docs" returned HTTP ${res.status}. Skipping.`);
-      return;
+      return activeOracleURIs;
     }
     
     const data = await res.json();
@@ -98,37 +104,60 @@ async function syncOracleDocs(config, setOracleFileURIs) {
       }
     }
 
+    activeOracleURIs = newUris;
+    lastSyncTimestamp = Date.now();
+
     if (typeof setOracleFileURIs === 'function') {
       setOracleFileURIs(newUris);
     }
-    console.log(`[Oracle Engine] Sync complete. ${newUris.length} technical documents active in AI memory.`);
+
+    console.log(`[Oracle Engine] Sync complete. ${activeOracleURIs.length} technical documents active in AI memory.`);
+    return activeOracleURIs;
   } catch (e) {
     console.error('[Oracle Engine] Sync failed:', e.message);
+    return activeOracleURIs;
   }
 }
 
+/**
+ * Accessor for the active in-memory Oracle file URIs
+ */
+function getOracleFileURIs() {
+  return activeOracleURIs;
+}
+
 // ====================================================================
-// 2. ENGINEERING & STRUCTURAL LOOKUP
+// 2. ENGINEERING & BLUEPRINT LOOKUP (ZERO-UI HEADLESS COPILOT)
 // ====================================================================
 
 /**
- * Grounded Engineering RAG Lookup for Court Operatives & PMs
+ * Grounded Engineering RAG Lookup for Field Technicians & PMs
+ * Supports direct PDF link dispatching, generative answers, and auto-resync on TTL expiry.
  * 
  * @param {object} config - Master CONFIG object
  * @param {object|string} nlp - Triage NLP object or raw string query
  * @param {string} dispatchTarget - E.164 phone number
- * @param {Array} oracleFileURIs - Array of active Gemini File URIs
- * @param {function} sendWhatsAppMessage - Dispatch adapter function
+ * @param {Array} [oracleFileURIs] - Optional array of active Gemini File URIs (defaults to internal cache)
+ * @param {function} sendWhatsAppMessage - Outbound WhatsApp dispatcher
+ * @param {boolean} [isRetry=false] - Retry guard for 48h TTL expiration
  */
-async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage) {
-  if (!oracleFileURIs || oracleFileURIs.length === 0) {
+async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = null, sendWhatsAppMessage, isRetry = false) {
+  let fileList = (oracleFileURIs && oracleFileURIs.length > 0) ? oracleFileURIs : activeOracleURIs;
+
+  if (!fileList || fileList.length === 0) {
+    // Attempt autonomous emergency synchronization
+    console.log('[Oracle Engine] Memory empty. Triggering emergency knowledge sync...');
+    fileList = await syncOracleDocs(config);
+  }
+
+  if (!fileList || fileList.length === 0) {
     return await sendWhatsAppMessage(
       dispatchTarget, 
-      `⚠️ *TITAN OS | TECHNICAL ORACLE*\n──────────────────────────────\nThe Oracle is currently offline or syncing documents.\n\nPlease upload foundation plans or engineering PDFs into the *Attachments* column of the "Oracle Docs" Airtable table.`
+      `⚠️ *TITAN OS | TECHNICAL ORACLE*\n──────────────────────────────\nThe Oracle is currently offline or synchronizing.\n\nPlease upload engineering PDFs into the *Attachments* column of the "Oracle Docs" Airtable table.`
     );
   }
 
-  // Polymorphic input parsing to prevent TypeError crashes
+  // 1. Polymorphic input parsing
   let userQuery = 'Explain structural specifications.';
   if (typeof nlp === 'string' && nlp.trim().length > 0) {
     userQuery = nlp.trim();
@@ -136,37 +165,64 @@ async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs, se
     userQuery = nlp.transcript_en || nlp.update_note || nlp.raw_text || nlp.query || 'Explain structural specifications.';
   }
 
-  // Strip slash command triggers if present
-  userQuery = userQuery.replace(/^\/(docs|specs)\s*/i, '').trim();
+  userQuery = userQuery.replace(/^\/(docs|specs|plan|plans)\s*/i, '').trim();
   if (!userQuery) userQuery = 'Explain structural specifications.';
 
-  const parts = oracleFileURIs.map(item => ({ 
+  const lQuery = userQuery.toLowerCase();
+
+  // 2. Direct Document Retrieval Branch (Zero-UI "Send me the plans")
+  const isDirectDocRequest = /send|get|download|pdf|blueprint|drawing|plan|brochure|specs/i.test(lQuery) &&
+                             !/how|why|what|calculate|torque|psi|concrete|cure/i.test(lQuery);
+
+  if (isDirectDocRequest) {
+    const matchedDoc = fileList.find(d => 
+      lQuery.includes(d.title.toLowerCase()) || 
+      d.title.toLowerCase().includes(lQuery) ||
+      (d.filename && lQuery.includes(d.filename.toLowerCase()))
+    );
+
+    if (matchedDoc && matchedDoc.downloadUrl) {
+      const docCard = `📐 *TITAN OS | TECHNICAL BLUEPRINT*\n` +
+                      `──────────────────────────────\n` +
+                      `📄 *Document:* ${matchedDoc.title}\n` +
+                      `📎 *File:* \`${matchedDoc.filename}\`\n` +
+                      `──────────────────────────────\n` +
+                      `🔗 *Click to Download Official PDF:*\n` +
+                      `${matchedDoc.downloadUrl}\n\n` +
+                      `_Access authorized via Bounce Padel Engineering._`;
+      return await sendWhatsAppMessage(dispatchTarget, docCard);
+    }
+  }
+
+  // 3. Generative Forensic Engineering Synthesis
+  const parts = fileList.map(item => ({ 
     file_data: { 
       mime_type: 'application/pdf', 
       file_uri: item.uri 
     } 
   }));
 
-  const prompt = `You are the Titan OS Technical Oracle for Bounce Padel court installations. 
-Answer the following engineering, foundation, structural, electrical, or glass specification question based STRICTLY on the attached proprietary engineering documents.
+  const prompt = `You are the Lead Structural Engineer and Master Oracle for Bounce Padel courts worldwide.
+Answer the following field question based STRICTLY and EXCLUSIVELY on the attached proprietary engineering documents.
 
 RULES:
-1. Ground every claim directly in the blueprints or technical PDFs.
-2. If the answer cannot be verified within the attached documents, state clearly: "Not specified in active technical documentation."
-3. Format with clean, high-impact WhatsApp markdown bullets.
-4. Keep the output concrete and actionable for field installers.
+1. Ground every single claim directly in the blueprints, foundation drawings, or technical specifications.
+2. If specific values exist (e.g., anchor bolt torque specs, 12mm glass tolerances, footing dimensions, polyurethane glue cure temps, wind ratings), state them with exact numerical precision.
+3. If the answer cannot be verified within the attached documents, state clearly: "Not specified in active technical documentation." Do not guess.
+4. Format with clean, high-impact WhatsApp markdown bullets.
+5. Keep the tone authoritative, direct, and actionable for trade installers on an active construction site.
 
-Question: ${userQuery}`;
+Question: "${userQuery}"`;
 
   parts.push({ text: prompt });
-  
+
   const payload = {
     contents: [{ role: 'user', parts }],
     generationConfig: { 
       temperature: 0.0 
     }
   };
-  
+
   const endpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
   const apiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
 
@@ -176,20 +232,36 @@ Question: ${userQuery}`;
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    
+
     if (!res.ok) {
-      throw new Error(`Gemini API HTTP ${res.status}: ${await res.text()}`);
+      const errTxt = await res.text();
+
+      // 4. Autonomous 48-Hour TTL Self-Healing Guard
+      const isExpiredFile = res.status === 400 && (errTxt.includes('File') || errTxt.includes('expired') || errTxt.includes('not found'));
+      if (isExpiredFile && !isRetry) {
+        console.warn('[Oracle Engine] ⚠️ Detected expired Gemini File API URIs (48h TTL limit). Resyncing automatically...');
+        const refreshedList = await syncOracleDocs(config);
+        return await handleOracleQuery(config, nlp, dispatchTarget, refreshedList, sendWhatsAppMessage, true);
+      }
+
+      throw new Error(`Gemini API HTTP ${res.status}: ${errTxt}`);
     }
 
     const data = await res.json();
     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'The Oracle could not parse a valid technical answer.';
-    
-    const docCitations = oracleFileURIs.map(d => `• ${d.title}`).join('\n');
+
+    // 5. Construct Clickable Citations
+    const docCitations = fileList.map(d => {
+      const linkStr = d.downloadUrl ? `\n  👉 Download: ${d.downloadUrl}` : '';
+      return `• *${d.title}* (${d.filename})${linkStr}`;
+    }).join('\n\n');
+
     const msg = `🧠 *TITAN OS | TECHNICAL ORACLE*\n` +
                 `──────────────────────────────\n` +
                 `${answer.trim()}\n\n` +
                 `──────────────────────────────\n` +
-                `📚 *Referenced Documents:*\n${docCitations}`;
+                `📚 *Referenced Blueprints & Downloads:*\n` +
+                `${docCitations}`;
 
     await sendWhatsAppMessage(dispatchTarget, msg);
   } catch (err) {
@@ -200,5 +272,6 @@ Question: ${userQuery}`;
 
 module.exports = {
   syncOracleDocs,
+  getOracleFileURIs,
   handleOracleQuery
 };
