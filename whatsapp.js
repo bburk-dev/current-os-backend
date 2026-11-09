@@ -170,8 +170,6 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   let safeBodyText = textBody;
   
   // DEFENSIVE INTERCEPTOR: Meta Graph API hard-limits interactive body text to 1024 characters.
-  // If the payload exceeds 950 chars, decouple the dispatch: send the heavy text as a standard 
-  // message first, then immediately follow up with a short interactive menu.
   if (safeBodyText.length > 950) {
     await sendWhatsAppMessage(config, cleanDestination, safeBodyText);
     safeBodyText = "⚡ *Action Required:*\nDocument drafted. Please select an operational command below to execute:";
@@ -463,6 +461,7 @@ async function triageSpokenOrTextNLP(config, rawInput, activeSitesList = [], isA
   const boundSiteId = fromPhone ? (userActiveSiteMap.get(fromPhone) || session?.boundSiteId) : null;
   const boundSiteName = siteContext?.fields?.['Site Name'] || session?.siteName || (boundSiteId ? `Site ID ${boundSiteId}` : 'Bounce Padel General Fleet');
 
+  // TELEMETRY/READINESS INTENTS ADDED TO NLP RULES
   const intentPrompt = `You are the Titan OS Ambient Intelligence Scribe for Bounce Padel court operations and QuickBooks Online headless ERP.
 Your mission: Translate natural, informal, spoken voice memos and field text into structured operational and financial commands.
 
@@ -470,51 +469,34 @@ ACTIVE REGISTERED SITES: [${siteListStr}]
 ACTIVE BOUND SITE CONTEXT: "${boundSiteName}"
 
 RULES FOR INTENT RECOGNITION:
-1. CREATE_ESTIMATE:
-   - Operative wants to quote, estimate, or price a build, court, or service.
+1. CREATE_ESTIMATE: (Operative wants to quote, estimate, or price a build, court, or service).
    - EXTRACT:
      * qbo_customer_name: Look for a client, club, or site name. IF NO CLIENT IS MENTIONED, use ACTIVE BOUND SITE CONTEXT: "${boundSiteName}". IF THE SPEAKER SPELLS A NAME OUT (e.g. "B-U-R-K"), OUTPUT THE EXACT SPELLED WORD.
      * qbo_customer_email: Extract the exact email address if spoken (e.g. "bobburk@gmail.com").
      * qbo_amount: Extract numeric value (e.g. 70000, 65000). Handle "70k" -> 70000, "setenta mil" -> 70000.
-     * qbo_line_items: Extract formal description of the item (e.g. "one panoramic padel court", "standard court kit").
      * apply_tax: true if "plus HST", "add tax", "plus tax", "mas tax" is mentioned; otherwise false.
-     * tax_code_name: "HST", "GST", "Sales Tax", or null.
-
-2. CONVERT_ESTIMATE:
-   - Operative wants to convert an existing estimate into a partial or full progress draw / invoice.
-
-3. CREATE_INVOICE:
-   - Operative wants to bill or invoice DIRECTLY without prior estimate.
-
-4. CHANGE_ORDER:
-   - Scope modification, client addition, or extra physical work requested in the field.
-
-5. AR_LOOKUP:
-   - Queries regarding accounts receivable, overdue invoices, 30+ aging, balances.
-
-6. ORACLE_QUERY:
-   - Engineering specifications, foundation slab drawings, hurricane wind loads, glass gasket requirements.
-
-7. INVENTORY_QUERY:
-   - Material counts, depletion logs.
-
-8. CHECKIN / GENERAL_UPDATE:
-   - Operational site notes, status reports.
+2. CONVERT_ESTIMATE: (Operative wants to convert an existing estimate into a partial or full progress draw / invoice).
+3. CREATE_INVOICE: (Operative wants to bill or invoice DIRECTLY without prior estimate).
+4. CHANGE_ORDER: (Scope modification, client addition, or extra physical work requested in the field).
+5. AR_LOOKUP: (Queries regarding accounts receivable, overdue invoices, balances).
+6. ORACLE_QUERY: (Engineering specifications, drawings, loads).
+7. INVENTORY_QUERY: (Material counts, depletion logs).
+8. READINESS_QUERY: (Executive queries asking if a site is ready to mobilize, start, or if materials/crew are available. E.g., "Are we ready for Aurora?").
+9. METRICS_QUERY: (Queries asking for system telemetry, stats, usage numbers, or hours saved).
+10. CHECKIN / GENERAL_UPDATE: (Operational site notes, status reports).
 
 CRITICAL INSTRUCTION FOR TRANSCRIPT:
 You MUST output the EXACT, FULL, VERBATIM word-for-word transcript of the audio in the 'transcript_en' field. Do NOT summarize it. If a word is spelled out letter-by-letter (e.g. "Burke, B-U-R-K"), you MUST correct the spelling in the transcript to match the spoken letters exactly ("Wendy Burk").
 
 Return STRICTLY a JSON object with this schema:
 {
-  "intent": "CREATE_ESTIMATE" | "CONVERT_ESTIMATE" | "CREATE_INVOICE" | "CHANGE_ORDER" | "AR_LOOKUP" | "ORACLE_QUERY" | "INVENTORY_QUERY" | "CHECKIN" | "GENERAL_UPDATE",
+  "intent": "CREATE_ESTIMATE" | "CONVERT_ESTIMATE" | "CREATE_INVOICE" | "CHANGE_ORDER" | "AR_LOOKUP" | "ORACLE_QUERY" | "INVENTORY_QUERY" | "READINESS_QUERY" | "METRICS_QUERY" | "CHECKIN" | "GENERAL_UPDATE",
   "qbo_customer_name": "string (resolved client/site name, correct spelling if spelled out)",
   "qbo_customer_email": "string (extract email address if spoken, else null)",
   "qbo_amount": number or null,
   "qbo_estimate_number": "string or null",
   "qbo_invoice_percentage": number or null,
-  "qbo_line_items": "string or null",
   "apply_tax": boolean,
-  "tax_code_name": "string or null",
   "transcript_en": "string (CRITICAL: Full verbatim word-for-word transcript. Never summarize.)"
 }`;
 
