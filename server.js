@@ -2,7 +2,8 @@
  * TITAN OS V6.0.22 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
- *          Multimodal Receipt/Sweep Batching, RBAC Bouncer, and Zero-UI Site Provisioning
+ *          Conversational Change-Orders, Headless IoT Sensor Telemetry,
+ *          RBAC Bouncer, and Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -209,7 +210,6 @@ async function hydrateQBOCache() {
       const expiresAt = new Date(data.expires_at).getTime();
       const now = Date.now();
 
-      // If token is expired or within 5 minutes of expiring, refresh using refresh_token
       if (now >= expiresAt - 300000 && data.refresh_token && CONFIG.qbo.clientId && CONFIG.qbo.clientSecret) {
         console.log('[Cache Engine] QBO Access Token expired or near expiry. Initiating refresh...');
         const basicAuth = Buffer.from(`${CONFIG.qbo.clientId}:${CONFIG.qbo.clientSecret}`).toString('base64');
@@ -317,7 +317,7 @@ async function evaluateWeatherTripwires(lat, lon) {
   const timeoutId = setTimeout(() => controller.abort(), 4000);
 
   try {
-    const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,wind_gusts_10m&wind_speed_unit=mph`;
+    const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,weather_code,wind_gusts_10m&wind_speed_unit=mph`;
     const response = await fetch(meteoUrl, { signal: controller.signal });
     clearTimeout(timeoutId);
 
@@ -328,12 +328,20 @@ async function evaluateWeatherTripwires(lat, lon) {
     const issues = [];
     
     if (current.wind_gusts_10m > 25) {
-      issues.push(`🔴 HIGH WIND HOLD: Gusts at ${current.wind_gusts_10m} mph. Glass lifting suspended.`);
+      issues.push(`🔴 HIGH WIND HOLD: Gusts at ${current.wind_gusts_10m} mph. Suction cup glass installation suspended.`);
     }
     
+    if (current.temperature_2m < 10) {
+      issues.push(`🔴 LOW TEMP HOLD: Ambient temperature is ${current.temperature_2m}°C. Polyurethane turf glue curing suspended.`);
+    }
+
     const dewPointDelta = current.temperature_2m - current.dew_point_2m;
     if (dewPointDelta < 3.0 && current.relative_humidity_2m > 85) {
-      issues.push(`🔴 CONDENSATION HOLD: Dew point delta is ${dewPointDelta.toFixed(1)}°C. Turf adhesive curing suspended.`);
+      issues.push(`🔴 CONDENSATION HOLD: Dew point delta is ${dewPointDelta.toFixed(1)}°C (Humidity: ${current.relative_humidity_2m}%). Substrate moisture will ruin turf adhesive bond.`);
+    }
+
+    if (current.precipitation > 0 || (current.weather_code >= 51 && current.weather_code <= 99)) {
+      issues.push(`🌧️ RAIN HOLD: Active precipitation detected. Silica sand infill and adhesive operations suspended.`);
     }
 
     return { safe: issues.length === 0, telemetry: current, warnings: issues };
@@ -458,7 +466,7 @@ app.post('/webhook', async (req, res) => {
   const entry = body.entry?.[0];
   const changes = entry?.changes?.[0]?.value;
   
-  if (changes?.statuses) return; // Drop read/delivery receipts
+  if (changes?.statuses) return;
 
   const message = changes?.messages?.[0];
   if (!message) return;
@@ -489,6 +497,14 @@ app.post('/webhook', async (req, res) => {
     }
 
     const worker = callerIdentity.workerRecord;
+
+    airtableWriteWithAutoDrop('Inbound Messages 2', {
+      'Message ID': messageId,
+      'From Phone': fromPhone,
+      'Message Type': message.type || 'text',
+      'Body': message.text?.body || message.caption || `[${message.type || 'media'}]`,
+      'Worker': worker?.id ? [worker.id] : []
+    }).catch(() => {});
 
     // ================================================================
     // A. LOCATION DROPS (Proof of Presence, Weather & Site Discovery)
@@ -645,7 +661,6 @@ app.post('/webhook', async (req, res) => {
       if (isARQuery) {
         console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget} (Role: ${callerIdentity.role})`);
         
-        // Strict RBAC: Restrict financial metrics exclusively to Executive/Admin roles
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
           console.warn(`[Security Alert] Unauthorized AR lookup blocked for ${dispatchTarget} (Name: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
@@ -661,13 +676,33 @@ app.post('/webhook', async (req, res) => {
         } else if (finance && finance.getAgingReport) {
           const report = await finance.getAgingReport(CONFIG, 30);
           await dispatchOutboundWhatsApp(dispatchTarget, report);
-        } else {
-          console.warn('[Finance Engine] AR lookup handler not exported in finance.js');
         }
         return;
       }
 
-      // 2. Structured Invoicing & Estimates
+      // 2. Conversational Change-Orders & Scope Variations
+      const isChangeOrderQuery = lTxt.includes('change order') || 
+                                 lTxt.includes('change-order') || 
+                                 lTxt.includes('variation') || 
+                                 lTxt.startsWith('/changeorder') || 
+                                 lTxt.startsWith('/co');
+
+      if (isChangeOrderQuery) {
+        if (finance && finance.handleConversationalChangeOrder) {
+          await finance.handleConversationalChangeOrder(
+            CONFIG, 
+            txt, 
+            dispatchTarget, 
+            oracleFileURIs, 
+            dispatchOutboundWhatsApp, 
+            (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b), 
+            callerIdentity
+          );
+        }
+        return;
+      }
+
+      // 3. Structured Invoicing & Estimates
       if (lTxt.startsWith('/estimate') || lTxt.startsWith('/invoice')) {
         if (whatsapp.triageSpokenOrTextNLP) {
           const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
@@ -684,7 +719,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
       
-      // 3. Oracle RAG Engine
+      // 4. Oracle RAG Engine
       if (lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
         if (whatsapp.triageSpokenOrTextNLP && oracle && oracle.handleOracleQuery) {
           const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
@@ -695,7 +730,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 4. Inventory Tracking & Material Depletion (Polymorphic Rich Invocation)
+      // 5. Inventory Tracking & Material Depletion
       if (lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
         if (inventory && inventory.handleSpokenInventorySnapshot) {
           await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
@@ -703,7 +738,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 5. Fallback Conversational Intent Routing
+      // 6. Fallback Conversational Intent Routing
       if (whatsapp.triageSpokenOrTextNLP) {
         const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, []);
         console.log(`[Text Engine] General triage: ${triage?.intent || 'CONVERSATIONAL_FALLTHROUGH'}`);
@@ -765,11 +800,43 @@ app.post('/webhook', async (req, res) => {
           console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
 
           try {
-            // Check for explicit receipt/expense context or image-only uploads without active video
             const hasVideo = currentBatch.items.some(i => i.type === 'video');
-            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware/i.test(i.caption || ''));
+            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware|bill|store/i.test(i.caption || ''));
             
-            if (!hasVideo && (hasReceiptKeyword || currentBatch.items.every(i => i.type === 'image'))) {
+            let isReceipt = hasReceiptKeyword;
+            
+            if (!hasVideo && !isReceipt && currentBatch.items.length > 0) {
+              try {
+                const firstImg = currentBatch.items[0];
+                const checkPrompt = "Determine if this image is a paper financial receipt/invoice/store bill OR a construction/padel court scene. Return JSON strictly: {\"is_receipt\": boolean}";
+                const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{
+                      role: 'user',
+                      parts: [
+                        { text: checkPrompt },
+                        { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } }
+                      ]
+                    }],
+                    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+                  })
+                });
+
+                if (checkRes.ok) {
+                  const checkData = await checkRes.json();
+                  const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+                  if (parsedCheck.is_receipt === true) {
+                    isReceipt = true;
+                  }
+                }
+              } catch (e) {
+                console.warn('[Batch Triage] Fast receipt classifier bypassed:', e.message);
+              }
+            }
+
+            if (!hasVideo && isReceipt) {
               if (finance && finance.handleReceiptUpload) {
                 await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
                 return;
@@ -780,8 +847,6 @@ app.post('/webhook', async (req, res) => {
               await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
             } else if (finance && finance.handleReceiptUpload) {
               await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
-            } else {
-              console.warn('[Batch Engine] No registered batch media handler.');
             }
           } catch (batchErr) {
             console.error('[Batch Engine Failure]:', batchErr);
@@ -798,7 +863,64 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ====================================================================
-// D. INBOUND EMAIL WEBHOOK 
+// D. HEADLESS IN-SITU IOT TELEMETRY INGRESS (SLAB MOISTURE & CURE SENSORS)
+// ====================================================================
+app.post('/api/telemetry/iot', async (req, res) => {
+  res.status(202).json({ status: 'Accepted', message: 'In-situ sensor telemetry ingested.' });
+
+  try {
+    const { site_id, site_name, slab_moisture_pct, slab_temp_c, ambient_humidity_pct } = req.body;
+    
+    if (!site_id && !site_name) {
+      console.warn('[IoT Telemetry] Discarded telemetry: No site reference.');
+      return;
+    }
+
+    const allSites = await getCachedSites();
+    const site = allSites.find(s => s.id === site_id || (site_name && s.fields['Site Name']?.toLowerCase() === site_name.toLowerCase()));
+
+    if (!site) {
+      console.warn(`[IoT Telemetry] Site not found for identifier: ${site_id || site_name}`);
+      return;
+    }
+
+    console.log(`[IoT Telemetry] Logging physical telemetry for ${site.fields['Site Name']}: Moisture=${slab_moisture_pct}%, Temp=${slab_temp_c}°C`);
+
+    const holds = [];
+    if (slab_moisture_pct !== undefined && slab_moisture_pct > 3.0) {
+      holds.push(`💧 *IN-SITU SLAB MOISTURE CRITICAL (${slab_moisture_pct}%):* Exceeds 3.0% threshold. Polyurethane turf glue will suffer osmotic blistering.`);
+    }
+
+    if (slab_temp_c !== undefined && slab_temp_c < 10.0) {
+      holds.push(`❄️ *SUBSTRATE TEMP CRITICAL (${slab_temp_c}°C):* Concrete slab too cold for adhesive molecular curing.`);
+    }
+
+    const note = `[IoT SENSOR LOG] Moisture: ${slab_moisture_pct ?? 'N/A'}% | Temp: ${slab_temp_c ?? 'N/A'}°C | Humidity: ${ambient_humidity_pct ?? 'N/A'}%`;
+    await airtableWriteWithAutoDrop('Sites', {
+      'Last Note': note,
+      'Last Intent': holds.length > 0 ? 'PHYSICAL_HOLD_ENGAGED' : 'IOT_TELEMETRY_LOG'
+    }, site.id);
+
+    if (holds.length > 0) {
+      const alertCard = `⚠️ *TITAN OS | IN-SITU PHYSICAL HOLD*\n` +
+                        `──────────────────────────────\n` +
+                        `🏟️ *Court:* ${site.fields['Site Name']}\n` +
+                        `📡 *Source:* Embedded Concrete Data Logger\n` +
+                        `──────────────────────────────\n` +
+                        holds.join('\n') + `\n\n` +
+                        `_Physical turf gluing & glass seating automatically suspended on this asset._`;
+
+      const groupTarget = site.fields['WhatsApp Group ID'] || CONFIG.meta.targetVerifiedPhone;
+      await dispatchOutboundWhatsApp(groupTarget, alertCard);
+    }
+
+  } catch (err) {
+    console.error('[IoT Ingress Runtime Error]:', err.message);
+  }
+});
+
+// ====================================================================
+// E. INBOUND EMAIL WEBHOOK 
 // ====================================================================
 app.post('/api/inbound-email', async (req, res) => {
   res.sendStatus(200);
@@ -829,7 +951,7 @@ app.post('/api/inbound-email', async (req, res) => {
 });
 
 // ====================================================================
-// E. ON-DEMAND HEADLESS WEBHOOK FOR ORACLE SYNC
+// F. ON-DEMAND HEADLESS WEBHOOK FOR ORACLE SYNC
 // ====================================================================
 app.post('/api/sync-oracle', async (req, res) => {
   try {
@@ -843,8 +965,6 @@ app.post('/api/sync-oracle', async (req, res) => {
 
     if (oracle && oracle.syncOracleDocs) {
       oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-    } else {
-      console.warn('[Titan OS Oracle] Sync module not found. Payload ignored.');
     }
   } catch (error) {
     console.error('[Titan OS Oracle] Manual Sync execution failed:', error);
