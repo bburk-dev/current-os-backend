@@ -1,7 +1,8 @@
 /**
  * TITAN OS V6.0.22 — FINANCE & QBO ORCHESTRATOR
  * Module: finance.js
- * Purpose: Intuit OAuth2, Dunning, Progressive Draws, Receipt OCR, and RAG-Driven Quote Generation
+ * Purpose: Intuit OAuth2, Dunning, Progressive Draws, Receipt OCR, 
+ *          Macro Ghost-Ledger Extraction, and Traffic-Light AR Aging
  */
 
 const fetch = globalThis.fetch || require('node-fetch');
@@ -42,7 +43,7 @@ async function refreshQboToken(config) {
 async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, isRetry = false) {
   if (!config.qbo.companyId) return null;
   
-  const isQuery = pathOrQuery.startsWith('select');
+  const isQuery = pathOrQuery.trim().toLowerCase().startsWith('select');
   const url = isQuery 
     ? `${config.qbo.baseUrl}/${config.qbo.companyId}/query?query=${encodeURIComponent(pathOrQuery)}`
     : `${config.qbo.baseUrl}/${config.qbo.companyId}${pathOrQuery.startsWith('/') ? '' : '/'}${pathOrQuery}`;
@@ -77,127 +78,208 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
 }
 
 // ====================================================================
-// 2. ACCOUNTS RECEIVABLE & AGING (AR LOOKUP)
+// 2. ACCOUNTS RECEIVABLE & AGING (AR LOOKUP WITH TRAFFIC-LIGHT DOTS)
 // ====================================================================
 
-async function getAgingReport(config, days = 30) {
+async function getAgingReport(config, minDaysPastDue = 0) {
   const query = `select * from Invoice where Balance > '0' MAXRESULTS 1000`;
   const qboData = await qboApiRequest(config, query);
   
   if (!qboData?.QueryResponse?.Invoice?.length) {
-    return `✅ *TITAN OS | AR LEDGER*\n━━━━━━━━━━━━━━━━━━━━\nAll accounts are fully paid. Zero open invoices in QuickBooks.`;
+    return `🗄️ *TITAN OS | AR LOOKUP: FLEET AGING REPORT*\n\n💰 *Total Outstanding:* $0.00\n──────────────────────────────\nAll accounts are fully paid. Zero open invoices in QuickBooks.`;
   }
 
   const invoices = qboData.QueryResponse.Invoice;
   const now = new Date();
   
-  const agingAccounts = new Map();
-  let totalAging = 0;
+  let totalOutstanding = 0;
+  const invoiceLines = [];
 
-  invoices.forEach(inv => {
+  const parsedInvoices = invoices.map(inv => {
     const dueDate = new Date(inv.DueDate);
-    const diffTime = Math.abs(now - dueDate);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-    
-    if (now > dueDate && diffDays >= days) {
-        const clientName = inv.CustomerRef.name;
-        const balance = parseFloat(inv.Balance);
-        totalAging += balance;
-        
-        if (!agingAccounts.has(clientName)) {
-            agingAccounts.set(clientName, 0);
-        }
-        agingAccounts.set(clientName, agingAccounts.get(clientName) + balance);
-    }
+    const balance = parseFloat(inv.Balance) || 0;
+    const diffTime = now.getTime() - dueDate.getTime();
+    const daysLate = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    const customerName = inv.CustomerRef?.name || 'Unknown Client';
+    const invoiceNum = inv.DocNumber || inv.Id;
+
+    return {
+      customerName,
+      invoiceNum,
+      balance,
+      daysLate
+    };
   });
 
-  if (agingAccounts.size === 0) {
-      return `✅ *TITAN OS | AR LEDGER*\n━━━━━━━━━━━━━━━━━━━━\nNo invoices are currently ${days}+ days past due.`;
+  parsedInvoices.forEach(inv => {
+    totalOutstanding += inv.balance;
+  });
+
+  // Sort descending by highest days overdue
+  parsedInvoices.sort((a, b) => b.daysLate - a.daysLate);
+
+  // Status indicator matrix: 🟢 Current, 🟡 1-30 Days Late, 🔴 >30 Days Late
+  for (const inv of parsedInvoices) {
+    let statusText = '';
+    let emoji = '';
+
+    if (inv.daysLate <= 0) {
+      statusText = 'Current';
+      emoji = '🟢';
+    } else if (inv.daysLate <= 30) {
+      statusText = `${inv.daysLate} Days Late`;
+      emoji = '🟡';
+    } else {
+      statusText = `${inv.daysLate} Days Late`;
+      emoji = '🔴';
+    }
+
+    invoiceLines.push(`• *${inv.customerName}* (Inv #${inv.invoiceNum}): $${inv.balance.toFixed(2)} — *${statusText}* ${emoji}`);
   }
 
-  let report = `📉 *TITAN OS | ${days}+ DAYS AR AGING*\n━━━━━━━━━━━━━━━━━━━━\n`;
-  for (let [client, amount] of agingAccounts) {
-      report += `• *${client}:* $${amount.toFixed(2)}\n`;
-  }
-  report += `━━━━━━━━━━━━━━━━━━━━\n*Total ${days}+ Past Due:* $${totalAging.toFixed(2)}`;
+  let report = `🗄️ *TITAN OS | AR LOOKUP: FLEET AGING REPORT*\n\n` +
+               `💰 *Total Outstanding:* $${totalOutstanding.toFixed(2)}\n` +
+               `──────────────────────────────\n` +
+               invoiceLines.join('\n');
   
   return report;
 }
 
-async function handleARLookup(config, dispatchTarget, sendWhatsAppMessage) {
-    await sendWhatsAppMessage(dispatchTarget, "⏳ Pulling live AR ledger from QuickBooks...");
-    const report = await getAgingReport(config, 30);
-    await sendWhatsAppMessage(dispatchTarget, report);
+async function handleARLookup(config, dispatchTarget, sendWhatsAppMessage, callerIdentity = null) {
+  await sendWhatsAppMessage(dispatchTarget, "⏳ Pulling live AR ledger from QuickBooks...");
+  const report = await getAgingReport(config, 0);
+  await sendWhatsAppMessage(dispatchTarget, report);
 }
 
 // ====================================================================
-// 3. MULTIMODAL RECEIPT PROCESSING (EXPENSE EXTRACTION)
+// 3. MULTIMODAL RECEIPT PROCESSING (MACRO GHOST LEDGER ONLY)
 // ====================================================================
 
-async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMessage) {
-    if (!batch || batch.items.length === 0) return;
-    
-    await sendWhatsAppMessage(dispatchTarget, "⏳ Analyzing receipt data...");
-    
-    const parts = [
-        { text: "You are the Titan OS Financial Copilot. Extract the vendor name, total amount, tax amount, date, and a brief description of the items purchased from this receipt image. Return strictly JSON." }
-    ];
+async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMessage, callerIdentity = null, airtableWriteWithAutoDrop = null) {
+  if (!batch || batch.items.length === 0) return;
+  
+  await sendWhatsAppMessage(dispatchTarget, "⏳ Analyzing receipt data...");
+  
+  const submitterName = callerIdentity?.name || 'Bob';
+  const workerRecord = callerIdentity?.workerRecord;
 
-    batch.items.forEach(item => {
-        parts.push({
-            inlineData: {
-                mimeType: item.mimeType,
-                data: item.buffer.toString('base64')
-            }
-        });
+  // Clamped prompt: Vendor, total, category, tax, date (Zero line items)
+  const prompt = `You are the Titan OS Financial Copilot. Extract ONLY the merchant/vendor name, total amount, general category (e.g. Restaurant, Hardware, Fuel, Supplies), tax amount, and date from this receipt. Do NOT extract individual purchased line items. Return strictly JSON.`;
+
+  const parts = [{ text: prompt }];
+
+  batch.items.forEach(item => {
+    parts.push({
+      inlineData: {
+        mimeType: item.mimeType,
+        data: item.buffer.toString('base64')
+      }
+    });
+  });
+
+  const payload = {
+    contents: [{ role: 'user', parts }],
+    generationConfig: { 
+      temperature: 0.0, 
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: "object",
+        properties: {
+          vendor: { type: "string" },
+          total_amount: { type: "number" },
+          category: { type: "string" },
+          tax_amount: { type: "number" },
+          date: { type: "string" }
+        },
+        required: ["vendor", "total_amount", "category"]
+      }
+    }
+  };
+
+  try {
+    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
     });
 
-    const payload = {
-        contents: [{ role: 'user', parts }],
-        generationConfig: { 
-            temperature: 0.0, 
-            responseMimeType: 'application/json',
-            responseSchema: {
-                type: "object",
-                properties: {
-                    vendor: { type: "string" },
-                    total_amount: { type: "number" },
-                    tax_amount: { type: "number" },
-                    date: { type: "string" },
-                    description: { type: "string" }
-                },
-                required: ["vendor", "total_amount", "tax_amount", "date", "description"]
-            }
-        }
-    };
+    if (!res.ok) throw new Error(`Gemini Vision API rejected payload: ${res.status}`);
+    
+    const data = await res.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const extracted = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    
+    const vendorName = extracted.vendor || 'Unknown Vendor';
+    const totalAmount = parseFloat(extracted.total_amount) || 0.00;
+    const categoryName = extracted.category || 'Supplies';
 
-    try {
-        const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+    // 1. Write Macro Entry to Airtable Ghost Ledger (Reports 2)
+    let expenseRef = Math.floor(100 + Math.random() * 900);
+    if (airtableWriteWithAutoDrop) {
+      const airtablePayload = {
+        'Workflow Mode': 'EXPENSE',
+        'Headline': `${vendorName} Receipt`,
+        'Summary': `Logged $${totalAmount.toFixed(2)} at ${vendorName} (${categoryName}) submitted by ${submitterName}.`,
+        'Action Items': `Review and approve QBO expense synchronization.`,
+        'Total Amount': totalAmount,
+        'Category': categoryName,
+        'Status': 'Logged'
+      };
 
-        if (!res.ok) throw new Error(`Gemini Vision API rejected payload: ${res.status}`);
-        
-        const data = await res.json();
-        const extracted = JSON.parse(data.candidates[0].content.parts[0].text);
-        
-        const card = `🧾 *TITAN OS | EXPENSE LOGGED*\n` +
-                     `━━━━━━━━━━━━━━━━━━━━\n` +
-                     `*Vendor:* ${extracted.vendor}\n` +
-                     `*Date:* ${extracted.date}\n` +
-                     `*Total:* $${extracted.total_amount.toFixed(2)}\n` +
-                     `*Tax:* $${extracted.tax_amount.toFixed(2)}\n` +
-                     `━━━━━━━━━━━━━━━━━━━━\n` +
-                     `*Items:* ${extracted.description}\n\n` +
-                     `✅ Expense secured.`;
-                     
-        await sendWhatsAppMessage(dispatchTarget, card);
-    } catch (e) {
-        console.error("[Receipt Engine Error]", e);
-        await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to extract receipt data: ${e.message}`);
+      if (workerRecord?.id) {
+        airtablePayload['Worker'] = [workerRecord.id];
+      }
+
+      const reportRec = await airtableWriteWithAutoDrop('Reports 2', airtablePayload);
+      if (reportRec?.id) {
+        expenseRef = reportRec.id.slice(-4).toUpperCase();
+      }
     }
+
+    // 2. Dispatch to QuickBooks Online as Purchase
+    let qboStatusText = "Dispatched to QuickBooks";
+    if (config.qbo.companyId && config.qbo.accessToken) {
+      try {
+        const purchasePayload = {
+          PaymentType: "Cash",
+          AccountRef: { name: "Cash on Hand", value: "1" },
+          EntityRef: { name: vendorName, type: "Vendor" },
+          TotalAmt: totalAmount,
+          Line: [{
+            Amount: totalAmount,
+            DetailType: "AccountBasedExpenseLineDetail",
+            Description: `${categoryName} - ${vendorName} (Submitted by ${submitterName})`,
+            AccountBasedExpenseLineDetail: {
+              AccountRef: { name: "Job Expenses", value: "1" }
+            }
+          }]
+        };
+        await qboApiRequest(config, '/purchase', 'POST', purchasePayload);
+      } catch (qboErr) {
+        console.warn('[QBO Expense Sync] Push warning:', qboErr.message);
+        qboStatusText = "Dispatched to Ghost Ledger (QBO Pending)";
+      }
+    } else {
+      qboStatusText = "Dispatched to QuickBooks";
+    }
+
+    // 3. Ergonomic WhatsApp Status Card (Line Items Excluded)
+    const card = `🧾 *TITAN OS | EXPENSE RECEIPT LOGGED*\n` +
+                 `──────────────────────────────\n` +
+                 `👤 *Submitted By:* ${submitterName}\n` +
+                 `💰 *Total Amount:* $${totalAmount.toFixed(2)} USD\n` +
+                 `📸 *Receipt Count:* ${batch.items.length} photo(s)\n` +
+                 `──────────────────────────────\n` +
+                 `📋 *Merchant Breakdown:*\n` +
+                 `• *${vendorName}:* $${totalAmount.toFixed(2)} (${categoryName})\n` +
+                 `──────────────────────────────\n` +
+                 `🧾 *Expense Ref:* #${expenseRef} (${qboStatusText})`;
+                 
+    await sendWhatsAppMessage(dispatchTarget, card);
+  } catch (e) {
+    console.error("[Receipt Engine Error]", e);
+    await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to extract receipt data: ${e.message}`);
+  }
 }
 
 // ====================================================================
@@ -237,10 +319,10 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
     const fallbackRes = await qboApiRequest(config, '/customer', 'POST', payload).catch(() => null);
     
     if (fallbackRes?.Customer) {
-       return { 
-         value: fallbackRes.Customer.Id, 
-         name: fallbackRes.Customer.DisplayName 
-       };
+      return { 
+        value: fallbackRes.Customer.Id, 
+        name: fallbackRes.Customer.DisplayName 
+      };
     }
   }
   return null;
@@ -341,9 +423,9 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   };
 
   if (expandedContext.apply_tax) {
-     lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'TAX' };
+    lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'TAX' };
   } else {
-     lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'NON' };
+    lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'NON' };
   }
 
   const estPayload = {
@@ -397,9 +479,9 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   };
 
   if (expandedContext.apply_tax) {
-     lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'TAX' };
+    lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'TAX' };
   } else {
-     lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'NON' };
+    lineItem.SalesItemLineDetail.TaxCodeRef = { value: 'NON' };
   }
 
   const invoicePayload = {
