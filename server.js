@@ -227,7 +227,7 @@ async function hydrateQBOCache() {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Authorization': `Basic ${basicAuth}`
           },
-          body: newSearchParams({
+          body: new URLSearchParams({
             grant_type: 'refresh_token',
             refresh_token: data.refresh_token
           })
@@ -667,7 +667,7 @@ app.post('/webhook', async (req, res) => {
                               `✅ Invoice sealed in QuickBooks Online and linked to Estimate #${estimate.DocNumber || estimate.Id}.`;
 
           const buttons = [
-            { id: `QBO_EMAIL_INV_${inv?.Id}`, title: "✉️ Email Invoice" }
+            { id: `QBO_EMAIL_INV_${inv?.Id}`, title: "Email Invoice" }
           ];
           await dispatchOutboundButtons(dispatchTarget, successCard, buttons);
         } catch (convErr) {
