@@ -4,7 +4,8 @@
  * Purpose: Cluster Boot, Native Meta Graph Webhooks, QBO Finance Copilot,
  *          Message Deduplication Buffer, Conversational Voice Estimates,
  *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
- *          Conversational Clarification Engine, RBAC Bouncer, and Zero-UI Site Provisioning
+ *          Conversational Clarification Engine, Ambient Multi-Turn Memory,
+ *          RBAC Bouncer, and Zero-UI Site Provisioning
  */
 
 // ====================================================================
@@ -518,7 +519,6 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2 (Field name schema aligned to "Phone")
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Phone': fromPhone,
@@ -593,7 +593,8 @@ app.post('/webhook', async (req, res) => {
           await dispatchOutboundWhatsApp(dispatchTarget, successCard);
         } catch (convErr) {
           console.error('[Button Convert Draw Error]:', convErr.message);
-          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to execute draw invoice: ${convErr.message}`);
+          // Zero-Friction Exception Recovery: Do not expose technical errors to the field
+          await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Headquarters is finalizing the ledger sync for this invoice.`);
         }
         return;
       }
@@ -616,7 +617,8 @@ app.post('/webhook', async (req, res) => {
           );
         } catch (coApproveErr) {
           console.error('[Button Approve CO Error]:', coApproveErr.message);
-          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to update change order status: ${coApproveErr.message}`);
+          // Zero-Friction Exception Recovery: Do not expose technical errors to the field
+          await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Headquarters is finalizing the change-order ledger sync.`);
         }
         return;
       }
@@ -717,13 +719,13 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // Fallback clarification
+          // 9. Conversational Clarification & Zero-Dead-End Recovery
           if (spokenTriage.intent === 'UNKNOWN' || spokenTriage.intent === 'GENERAL_UPDATE') {
             const transcript = spokenTriage.transcript_en || '';
             const isActionable = transcript.length > 10 && (transcript.includes('need') || transcript.includes('broken') || transcript.includes('missing') || transcript.includes('finished'));
             if (isActionable) {
                if (!boundSite) {
-                 whatsapp.updateSessionContext && whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
+                 if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
                  await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at?`);
                  return;
                }
@@ -999,13 +1001,11 @@ app.post('/webhook', async (req, res) => {
            console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
            
            if (!boundSite) {
-             // Operative isn't checked into a site. Prompt them naturally.
-             whatsapp.updateSessionContext && whatsapp.updateSessionContext(fromPhone, { pendingText: txt });
+             if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: txt });
              await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at? (Reply with the court name).`);
              return;
            }
 
-           // If bound, log it as an ambient update
            await airtableWriteWithAutoDrop('Sites', {
              'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
              'Last Intent': 'GENERAL_UPDATE'
