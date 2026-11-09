@@ -91,6 +91,7 @@ async function getCachedCatalogItems(config) {
   try {
     const qboData = await qboApiRequest(config, `select * from Item where Active=true MAXRESULTS 100`);
     cachedItems = qboData?.QueryResponse?.Item || [];
+    console.log('[QBO Catalog Items]:', cachedItems.map(i => `${i.Id}: ${i.Name}`).join(', '));
     return cachedItems;
   } catch (err) {
     console.warn('[QBO Catalog Discovery Error]:', err.message);
@@ -106,15 +107,20 @@ async function resolveCategoryItemRef(config, categoryName) {
   let matched = null;
 
   if (cat.includes('court') || cat.includes('padel')) {
-    matched = items.find(i => /court|padel|kit|standard|panoramic/i.test(i.Name));
+    matched = items.find(i => /court|padel|kit|standard|panoramic/i.test(i.Name || '')) ||
+              items.find(i => /court|padel/i.test(i.Description || ''));
   } else if (cat.includes('install')) {
-    matched = items.find(i => /install|assembly|labour|labor|service/i.test(i.Name));
+    matched = items.find(i => /install|assembly|labour|labor/i.test(i.Name || '')) ||
+              items.find(i => /install|assembly/i.test(i.Description || ''));
   } else if (cat.includes('delivery') || cat.includes('freight')) {
-    matched = items.find(i => /delivery|freight|shipping|transport/i.test(i.Name));
+    matched = items.find(i => /delivery|freight|shipping|transport/i.test(i.Name || '')) ||
+              items.find(i => /delivery|freight/i.test(i.Description || ''));
   }
 
   if (!matched) {
-    matched = items.find(i => /service|sales|general/i.test(i.Name)) || items[0];
+    matched = items.find(i => i.Type === 'Service') ||
+              items.find(i => /service|sales|general/i.test(i.Name || '')) ||
+              items[0];
   }
 
   return { value: String(matched.Id), name: matched.Name };
@@ -136,12 +142,12 @@ async function resolveQboTaxCode(config, isTaxable = false) {
   }
 
   if (isTaxable) {
-    const hstCode = cachedTaxCodes.find(t => /HST|13%|Ontario|GST\/HST/i.test(t.Name || t.Description))
+    const hstCode = cachedTaxCodes.find(t => /HST|13%|Ontario|GST\/HST/i.test(t.Name || t.Description || ''))
                     || cachedTaxCodes.find(t => t.Taxable === true)
                     || cachedTaxCodes[0];
     return { value: String(hstCode.Id) };
   } else {
-    const exemptCode = cachedTaxCodes.find(t => /exempt|zero|0%|non/i.test(t.Name || t.Description))
+    const exemptCode = cachedTaxCodes.find(t => /exempt|zero|0%|non|out of scope/i.test(t.Name || t.Description || ''))
                        || cachedTaxCodes.find(t => t.Taxable === false)
                        || cachedTaxCodes[cachedTaxCodes.length - 1];
     return { value: String(exemptCode.Id) };
@@ -150,16 +156,23 @@ async function resolveQboTaxCode(config, isTaxable = false) {
 
 async function getNextEstimateNumber(config) {
   try {
-    const query = `select DocNumber from Estimate order by Id desc MAXRESULTS 1`;
+    const query = `select DocNumber, Id from Estimate order by Id desc MAXRESULTS 5`;
     const res = await qboApiRequest(config, query);
-    const lastDoc = res?.QueryResponse?.Estimate?.[0]?.DocNumber;
-    if (lastDoc && !isNaN(parseInt(lastDoc))) {
-      return String(parseInt(lastDoc) + 1);
+    const estimates = res?.QueryResponse?.Estimate || [];
+    
+    for (const est of estimates) {
+      if (est.DocNumber && !isNaN(parseInt(est.DocNumber))) {
+        return String(parseInt(est.DocNumber) + 1);
+      }
+    }
+
+    if (estimates[0]?.Id && !isNaN(parseInt(estimates[0].Id))) {
+      return String(1000 + parseInt(estimates[0].Id));
     }
   } catch (e) {
     console.warn('[QBO Estimate Number Discovery Error]:', e.message);
   }
-  return `10${Math.floor(10 + Math.random() * 90)}`;
+  return `1001`;
 }
 
 // ====================================================================
@@ -431,6 +444,7 @@ JSON SCHEMA:
       DocNumber: estDocNum,
       CustomerRef: customerRef,
       GlobalTaxCalculation: "TaxExcluded",
+      TxnTaxDetail: { TxnTaxCodeRef: hstTaxRef },
       Line: qboLines,
       TxnStatus: "Pending",
       CustomField: [{
@@ -488,17 +502,15 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
   
   if (qboData?.QueryResponse?.Customer?.[0]) {
     const existing = qboData.QueryResponse.Customer[0];
-    
-    // Auto-heal missing email or address on existing client record in QBO
     let needsPatch = false;
     const patchPayload = { Id: existing.Id, SyncToken: existing.SyncToken, sparse: true };
 
-    if (email && !existing.PrimaryEmailAddr?.Address) {
+    if (email && (!existing.PrimaryEmailAddr || !existing.PrimaryEmailAddr.Address)) {
       patchPayload.PrimaryEmailAddr = { Address: email.trim().toLowerCase() };
       needsPatch = true;
     }
 
-    if (address && !existing.BillAddr?.Line1) {
+    if (address && (!existing.BillAddr || !existing.BillAddr.Line1)) {
       patchPayload.BillAddr = {
         Line1: address.line1 || '',
         City: address.city || '',
@@ -521,7 +533,11 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
   }
   
   // Provision Net-New Customer Record in QBO
-  const payload = { DisplayName: clientName.trim() };
+  const payload = { 
+    DisplayName: clientName.trim(),
+    PrintOnCheckName: clientName.trim()
+  };
+  
   if (email) payload.PrimaryEmailAddr = { Address: email.trim().toLowerCase() };
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone.replace(/[^\d+]/g, '') };
   if (address) {
@@ -544,7 +560,22 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
       };
     }
   } catch (err) {
-    console.warn('[QBO Customer] Collision, provisioning with timestamp suffix...');
+    console.warn('[QBO Customer] Collision, querying inactive or appending suffix...');
+    try {
+      const inactiveQuery = `select * from Customer where DisplayName LIKE '%${cleanName}%' and Active in (true, false) MAXRESULTS 1`;
+      const inactiveData = await qboApiRequest(config, inactiveQuery);
+      if (inactiveData?.QueryResponse?.Customer?.[0]) {
+        const reactivated = inactiveData.QueryResponse.Customer[0];
+        await qboApiRequest(config, '/customer', 'POST', {
+          Id: reactivated.Id,
+          SyncToken: reactivated.SyncToken,
+          Active: true,
+          sparse: true
+        });
+        return { value: reactivated.Id, name: reactivated.DisplayName, email };
+      }
+    } catch (inactErr) {}
+
     const fallbackName = `${clientName.trim()} (${new Date().toLocaleDateString('en-CA')})`;
     payload.DisplayName = fallbackName;
     const fallbackRes = await qboApiRequest(config, '/customer', 'POST', payload).catch(() => null);
@@ -579,14 +610,15 @@ A field operative has verbally dictated an estimate through a voice memo:
 
 TASK:
 1. Extract the Customer's Name, Email Address, and Street Address:
-   - Recognize spoken letters and emails (e.g. "b-o-b b-u-r-k @ gmail.com" -> "bobbuerk@gmail.com").
-   - Extract street address, city, and province/state (e.g. "88 Catherine with a C Ave, Aurora Ontario").
+   - Respect exact letter-by-letter spelling (e.g., "Burk, B-U-R-K" -> "Wendy Burk", "Catherine with a C" -> "Catherine").
+   - Extract spelled-out emails (e.g., "b-o-b b-u-r-k @ gmail.com" -> "bobburk@gmail.com").
+   - Extract street address, city, and province/state (e.g., "88 Catherine with a C Ave, Aurora Ontario" -> "88 Catherine Ave", city: "Aurora", province: "ON").
 2. Deconstruct the order into individual, highly professional construction line items.
 3. For each line item:
    - Identify category: "COURT", "INSTALLATION", "DELIVERY", or "ACCESSORY".
    - If a court is mentioned (e.g., "Panoramic padel court"), consult the attached technical blueprints (Sample Estimate, Engineering Plans) to generate formal architectural copy detailing structural steel, 12mm tempered safety glass panels, electro-welded wire mesh, LED lighting fixtures, and texturized synthetic turf carpet with silica sand infill.
    - For installation: describe turnkey physical court assembly and mechanical erection.
-   - For delivery: describe flatbed freight logistics and offloading.
+   - For delivery: describe flatbed freight logistics and specialized offloading.
    - Extract unit price and line total.
    - Determine taxability: mark "taxable": true ONLY if "plus HST", "add tax", or standard taxable is implied. Mark "taxable": false if the operative explicitly says "tax exempt" or "zero cost".
 
@@ -665,10 +697,9 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   const rawInput = nlp.transcript_en || nlp.qbo_line_items || '';
   const fallbackAmount = nlp.qbo_amount || 70000;
 
-  // Run the Multimodal Oracle RAG expansion
   const compiled = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
 
-  const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'Wendy Burke';
+  const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'Wendy Burk';
   const customerEmail = compiled.customer?.email || nlp.email || null;
   const customerAddress = compiled.customer?.address || null;
 
@@ -710,6 +741,10 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     GlobalTaxCalculation: "TaxExcluded",
     Line: qboLines
   };
+
+  if (hasTaxableLines) {
+    estPayload.TxnTaxDetail = { TxnTaxCodeRef: hstTaxRef };
+  }
 
   const createRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
   
@@ -762,7 +797,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
 
   const compiled = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
 
-  const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'VIP Client';
+  const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'Wendy Burk';
   const customerEmail = compiled.customer?.email || nlp.email || null;
   const customerAddress = compiled.customer?.address || null;
 
@@ -775,10 +810,12 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   const exemptTaxRef = await resolveQboTaxCode(config, false);
 
   let computedSubtotal = 0;
+  let hasTaxableLines = false;
   const qboLines = [];
 
   for (const item of compiled.line_items) {
     computedSubtotal += item.amount;
+    if (item.taxable) hasTaxableLines = true;
     const itemRef = await resolveCategoryItemRef(config, item.category);
 
     qboLines.push({
@@ -799,6 +836,10 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
     GlobalTaxCalculation: "TaxExcluded",
     Line: qboLines
   };
+
+  if (hasTaxableLines) {
+    invoicePayload.TxnTaxDetail = { TxnTaxCodeRef: hstTaxRef };
+  }
 
   const createRes = await qboApiRequest(config, '/invoice', 'POST', invoicePayload);
   
