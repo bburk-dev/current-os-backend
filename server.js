@@ -90,6 +90,14 @@ function dispatchOutboundWhatsApp(targetOrConfig, textOrTarget, possibleText) {
   return whatsapp.sendWhatsAppMessage(CONFIG, targetOrConfig, textOrTarget);
 }
 
+// Universal WhatsApp interactive button dispatcher adapter
+function dispatchOutboundButtons(targetOrConfig, textOrTarget, possibleButtonsOrText, possibleButtons) {
+  if (possibleButtons !== undefined) {
+    return whatsapp.sendWhatsAppButtons(targetOrConfig, textOrTarget, possibleButtonsOrText, possibleButtons);
+  }
+  return whatsapp.sendWhatsAppButtons(CONFIG, targetOrConfig, textOrTarget, possibleButtonsOrText);
+}
+
 // ====================================================================
 // 2. STATE MACHINES & CACHE-ASIDE ENGINE
 // ====================================================================
@@ -519,28 +527,66 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
+    // Resilient write to Inbound Messages 2 (Strictly safe fields)
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
-      'Phone': fromPhone,
       'Message Type': message.type || 'text',
       'Body': message.text?.body || message.caption || message.interactive?.button_reply?.title || `[${message.type || 'media'}]`,
       'Worker': worker?.id ? [worker.id] : []
     }).catch(() => {});
 
     // ================================================================
-    // A. INTERACTIVE BUTTON & LIST REPLIES (ONE-TAP ACTIONS)
+    // A. INTERACTIVE BUTTON & LIST REPLIES (ONE-TAP ZERO-UI ACTIONS)
     // ================================================================
     const interactiveButtonId = message.interactive?.button_reply?.id || '';
     if (interactiveButtonId) {
       console.log(`[Button Action] Intercepted button tap: ${interactiveButtonId} from ${dispatchTarget}`);
 
-      // 1. One-Tap Progress Draw Conversion Execution (Estimate -> Invoice)
+      // 1. One-Tap Estimate Email Dispatch via QBO REST API (Headless Dispatch)
+      if (interactiveButtonId.startsWith('QBO_EMAIL_EST_')) {
+        const estId = interactiveButtonId.replace('QBO_EMAIL_EST_', '');
+        await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Dispatching official Estimate PDF to client email via QuickBooks...");
+
+        try {
+          const emailRes = await finance.sendQboTransactionEmail(CONFIG, 'estimate', estId);
+          if (emailRes) {
+            await dispatchOutboundWhatsApp(dispatchTarget, `✅ *Estimate Dispatched:*\nOfficial QuickBooks PDF delivered directly to client's email inbox.`);
+          } else {
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send email. Verify that a valid client email is registered.`);
+          }
+        } catch (emailErr) {
+          console.error('[QBO Send Estimate Error]:', emailErr.message);
+          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to send estimate email via QuickBooks.`);
+        }
+        return;
+      }
+
+      // 2. One-Tap Invoice Email Dispatch via QBO REST API (Headless Dispatch)
+      if (interactiveButtonId.startsWith('QBO_EMAIL_INV_')) {
+        const invId = interactiveButtonId.replace('QBO_EMAIL_INV_', '');
+        await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Dispatching Invoice PDF to client email via QuickBooks...");
+
+        try {
+          const emailRes = await finance.sendQboTransactionEmail(CONFIG, 'invoice', invId);
+          if (emailRes) {
+            await dispatchOutboundWhatsApp(dispatchTarget, `✅ *Invoice Dispatched:*\nOfficial QuickBooks Invoice delivered directly to client's email inbox.`);
+          } else {
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send invoice email. Verify client email address.`);
+          }
+        } catch (emailErr) {
+          console.error('[QBO Send Invoice Error]:', emailErr.message);
+          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to send invoice email via QuickBooks.`);
+        }
+        return;
+      }
+
+      // 3. One-Tap Progress Draw Conversion Execution (Estimate -> Invoice)
       if (interactiveButtonId.startsWith('QBO_CONVERT_')) {
         const parts = interactiveButtonId.split('_');
         const estimateId = parts[2];
         const percentage = parseFloat(parts[3]) || 100;
 
-        await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Converting estimate into active QuickBooks invoice...");
+        await dispatchOutboundWhatsApp(dispatchTarget, `⏳ Converting estimate into active ${percentage}% QuickBooks invoice...`);
 
         try {
           const estData = await finance.qboApiRequest(CONFIG, `/estimate/${estimateId}`);
@@ -551,34 +597,52 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
-          const totalAmt = parseFloat(estimate.TotalAmt) || 0;
-          const drawAmt = parseFloat((totalAmt * (percentage / 100)).toFixed(2));
-          const primaryDesc = estimate.Line?.[0]?.Description || 'Bounce Padel Court Construction';
-
           const defaultItemRef = finance.getDefaultQboItemRef 
             ? await finance.getDefaultQboItemRef(CONFIG) 
-            : { value: "1" };
-
+            : { value: "1", name: "Services" };
           const defaultTaxRef = finance.resolveQboTaxCode 
-            ? await finance.resolveQboTaxCode(CONFIG, true)
+            ? await finance.resolveQboTaxCode(CONFIG, true) 
             : { value: "TAX" };
+
+          const invLines = [];
+          const estLines = (estimate.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
+
+          if (estLines.length > 0) {
+            for (const line of estLines) {
+              const origAmt = parseFloat(line.Amount) || 0;
+              const drawAmt = parseFloat((origAmt * (percentage / 100)).toFixed(2));
+              invLines.push({
+                Amount: drawAmt,
+                DetailType: "SalesItemLineDetail",
+                Description: `Progress Draw (${percentage}%) - ${line.Description || 'Bounce Padel Court Construction'}`,
+                SalesItemLineDetail: {
+                  Qty: line.SalesItemLineDetail?.Qty || 1,
+                  UnitPrice: drawAmt,
+                  ItemRef: line.SalesItemLineDetail?.ItemRef || defaultItemRef,
+                  TaxCodeRef: line.SalesItemLineDetail?.TaxCodeRef || defaultTaxRef
+                }
+              });
+            }
+          } else {
+            const totalAmt = parseFloat(estimate.TotalAmt) || 0;
+            const drawAmt = parseFloat((totalAmt * (percentage / 100)).toFixed(2));
+            invLines.push({
+              Amount: drawAmt,
+              DetailType: "SalesItemLineDetail",
+              Description: `Progress Draw (${percentage}%) against Estimate #${estimate.DocNumber || estimate.Id}`,
+              SalesItemLineDetail: {
+                Qty: 1,
+                UnitPrice: drawAmt,
+                ItemRef: defaultItemRef,
+                TaxCodeRef: defaultTaxRef
+              }
+            });
+          }
 
           const invPayload = {
             CustomerRef: estimate.CustomerRef,
             GlobalTaxCalculation: "TaxExcluded",
-            Line: [
-              {
-                Amount: drawAmt,
-                DetailType: "SalesItemLineDetail",
-                Description: `Progress Draw (${percentage}%) against Estimate #${estimate.DocNumber} - ${primaryDesc}`,
-                SalesItemLineDetail: {
-                  Qty: 1,
-                  UnitPrice: drawAmt,
-                  ItemRef: defaultItemRef,
-                  TaxCodeRef: defaultTaxRef
-                }
-              }
-            ],
+            Line: invLines,
             LinkedTxn: [
               {
                 TxnId: estimate.Id,
@@ -588,19 +652,24 @@ app.post('/webhook', async (req, res) => {
           };
 
           const invRes = await finance.qboApiRequest(CONFIG, '/invoice', 'POST', invPayload);
-          const invoiceNum = invRes?.Invoice?.DocNumber || 'Issued';
+          const inv = invRes?.Invoice;
+          const invoiceNum = inv?.DocNumber || inv?.Id || 'Issued';
+          const invTotal = inv?.TotalAmt ? parseFloat(inv.TotalAmt).toFixed(2) : '0.00';
 
           const successCard = `🧾 *TITAN OS | PROGRESS DRAW INVOICE ISSUED*\n` +
                               `──────────────────────────────\n` +
                               `*Invoice:* #${invoiceNum}\n` +
                               `*Client:* ${estimate.CustomerRef.name}\n` +
-                              `*Estimate Ref:* #${estimate.DocNumber}\n` +
+                              `*Estimate Ref:* #${estimate.DocNumber || estimate.Id}\n` +
                               `*Draw Split:* ${percentage}%\n` +
-                              `*Invoice Amount:* $${drawAmt.toFixed(2)} USD\n` +
+                              `*Total (Inc. Tax):* $${invTotal} CAD\n` +
                               `──────────────────────────────\n` +
-                              `✅ Invoice created in QuickBooks Online and linked to Estimate #${estimate.DocNumber}.`;
+                              `✅ Invoice sealed in QuickBooks Online and linked to Estimate #${estimate.DocNumber || estimate.Id}.`;
 
-          await dispatchOutboundWhatsApp(dispatchTarget, successCard);
+          const buttons = [
+            { id: `QBO_EMAIL_INV_${inv?.Id}`, title: "✉️ Email Invoice" }
+          ];
+          await dispatchOutboundButtons(dispatchTarget, successCard, buttons);
         } catch (convErr) {
           console.error('[Button Convert Draw Error]:', convErr.message);
           await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Headquarters is finalizing the ledger sync for this invoice.`);
@@ -608,7 +677,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // 2. One-Tap Change-Order Approval
+      // 4. One-Tap Change-Order Approval
       if (interactiveButtonId.startsWith('QBO_APPROVE_CO_')) {
         const coEstimateId = interactiveButtonId.replace('QBO_APPROVE_CO_', '');
         await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Locking Change-Order into QuickBooks ledger...");
@@ -671,28 +740,56 @@ app.post('/webhook', async (req, res) => {
         if (spokenTriage) {
           if (spokenTriage.intent === 'CREATE_ESTIMATE') {
             if (finance && finance.handleEstimateCreation) {
-              await finance.handleEstimateCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+              await finance.handleEstimateCreation(
+                CONFIG, 
+                spokenTriage, 
+                dispatchTarget, 
+                oracleFileURIs, 
+                dispatchOutboundWhatsApp,
+                dispatchOutboundButtons
+              );
               return;
             }
           }
 
           if (spokenTriage.intent === 'CONVERT_ESTIMATE') {
             if (finance && finance.handleInvoiceApproval) {
-              await finance.handleInvoiceApproval(CONFIG, spokenTriage, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+              await finance.handleInvoiceApproval(
+                CONFIG, 
+                spokenTriage, 
+                dispatchTarget, 
+                dispatchOutboundWhatsApp, 
+                dispatchOutboundButtons
+              );
               return;
             }
           }
 
           if (spokenTriage.intent === 'CREATE_INVOICE') {
             if (finance && finance.handleInvoiceCreation) {
-              await finance.handleInvoiceCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+              await finance.handleInvoiceCreation(
+                CONFIG, 
+                spokenTriage, 
+                dispatchTarget, 
+                oracleFileURIs, 
+                dispatchOutboundWhatsApp,
+                dispatchOutboundButtons
+              );
               return;
             }
           }
 
           if (spokenTriage.intent === 'CHANGE_ORDER') {
             if (finance && finance.handleConversationalChangeOrder) {
-              await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b), callerIdentity);
+              await finance.handleConversationalChangeOrder(
+                CONFIG, 
+                spokenTriage, 
+                dispatchTarget, 
+                oracleFileURIs, 
+                dispatchOutboundWhatsApp, 
+                dispatchOutboundButtons, 
+                callerIdentity
+              );
               return;
             }
           }
@@ -948,7 +1045,14 @@ app.post('/webhook', async (req, res) => {
       // 3. Dynamic Spoken / Text Estimate Generation
       if (triage?.intent === 'CREATE_ESTIMATE' || lTxt.includes('build an estimate') || lTxt.includes('create estimate') || lTxt.startsWith('/estimate')) {
         if (finance && finance.handleEstimateCreation) {
-          await finance.handleEstimateCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+          await finance.handleEstimateCreation(
+            CONFIG, 
+            triage || { transcript_en: txt }, 
+            dispatchTarget, 
+            oracleFileURIs, 
+            dispatchOutboundWhatsApp,
+            dispatchOutboundButtons
+          );
           return;
         }
       }
@@ -956,7 +1060,13 @@ app.post('/webhook', async (req, res) => {
       // 4. Dynamic Progress Draw Conversion (Percentage-Based)
       if (triage?.intent === 'CONVERT_ESTIMATE' || lTxt.includes('convert to') || lTxt.includes('% invoice') || lTxt.includes('draw')) {
         if (finance && finance.handleInvoiceApproval) {
-          await finance.handleInvoiceApproval(CONFIG, triage || { transcript_en: txt }, dispatchTarget, dispatchOutboundWhatsApp, (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b));
+          await finance.handleInvoiceApproval(
+            CONFIG, 
+            triage || { transcript_en: txt }, 
+            dispatchTarget, 
+            dispatchOutboundWhatsApp, 
+            dispatchOutboundButtons
+          );
           return;
         }
       }
@@ -964,7 +1074,14 @@ app.post('/webhook', async (req, res) => {
       // 5. Direct Voice / Text Invoicing (Without Prior Estimate)
       if (triage?.intent === 'CREATE_INVOICE' || lTxt.includes('create invoice') || lTxt.includes('direct invoice') || lTxt.startsWith('/invoice')) {
         if (finance && finance.handleInvoiceCreation) {
-          await finance.handleInvoiceCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+          await finance.handleInvoiceCreation(
+            CONFIG, 
+            triage || { transcript_en: txt }, 
+            dispatchTarget, 
+            oracleFileURIs, 
+            dispatchOutboundWhatsApp,
+            dispatchOutboundButtons
+          );
           return;
         }
       }
@@ -978,7 +1095,7 @@ app.post('/webhook', async (req, res) => {
             dispatchTarget, 
             oracleFileURIs, 
             dispatchOutboundWhatsApp, 
-            (c,t,m,b) => whatsapp.sendWhatsAppButtons(c,t,m,b), 
+            dispatchOutboundButtons, 
             callerIdentity
           );
           return;
@@ -1146,7 +1263,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ====================================================================
-// F. HEADLESS IN-SITU IOT TELEMETRY INGRESS (SLAB MOISTURE & CURE SENSORS)
+// F. HEADLESS IN-SITU IOT TELEMETRY INGRESS
 // ====================================================================
 app.post('/api/telemetry/iot', async (req, res) => {
   res.status(202).json({ status: 'Accepted', message: 'In-situ sensor telemetry ingested.' });
