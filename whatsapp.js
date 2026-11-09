@@ -1,8 +1,9 @@
 /**
  * TITAN OS V6.0.22 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
- * Purpose: Webhooks, Debouncing, NLP Intent Routing, Forensic Vision,
- *          12-Gate State Machine, Supabase Private Archival, and Telemetry
+ * Purpose: Webhooks, Debouncing, Ambient Voice-to-Ledger NLP Intent Routing,
+ *          Conversational Estimates & Draws, Forensic Vision, 12-Gate State Machine,
+ *          Supabase Private Archival, and Meteorological Telemetry
  */
 
 const crypto = require('crypto');
@@ -62,7 +63,7 @@ async function sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText, r
   let toTarget = '';
   let messageBody = '';
 
-  // Polymorphic argument resolver to prevent caller mismatch
+  // Polymorphic argument resolver
   if (possibleText !== undefined) {
     config = targetOrConfig;
     toTarget = textOrTarget;
@@ -144,11 +145,12 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
+  // Meta strictly caps reply buttons at 3 items and title length at 20 characters
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
     type: 'reply',
     reply: {
       id: btn.id || `btn_${idx}_${Date.now()}`,
-      title: (btn.title || 'Select').slice(0, 20)
+      title: String(btn.title || 'Select').trim().slice(0, 20)
     }
   }));
 
@@ -176,12 +178,12 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
     });
 
     if (!res.ok) {
-      const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
+      const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 *${b.title}*`).join('\n');
       return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
     }
     return true;
   } catch (err) {
-    const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
+    const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 *${b.title}*`).join('\n');
     return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
   }
 }
@@ -308,7 +310,7 @@ function evaluateWeatherTripwires(weather) {
   }
 
   if (weather.humidity > 85 || dewDelta <= 2.5) {
-    holds.push(`💧 *CONDENSATION HOLD:* Dew delta is ${dewDelta.toFixed(1)}°C (Humidity: ${weather.humidity}%). Pad/carpet moisture will ruin adhesive bond.`);
+    holds.push(`💧 *CONDENSATION HOLD:* Dew delta is ${dewDelta.toFixed(1)}°C (Humidity: ${weather.humidity}%). Substrate moisture will ruin adhesive bond.`);
   }
 
   if (weather.isRainingOrStorm || weather.precip > 0) {
@@ -423,29 +425,112 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 }
 
 // ====================================================================
-// 5. NLP INTENT CLASSIFICATION (GEMINI 2.5)
+// 5. AMBIENT VOICE-TO-LEDGER NLP INTENT CLASSIFICATION (GEMINI 2.5 PRO)
 // ====================================================================
 
-async function triageSpokenOrTextNLP(config, rawInput, activeSitesList = [], isAudio = false, audioItems = []) {
+/**
+ * Parses spoken voice memos, audio walkthroughs, and conversational text
+ * into deterministic QBO, Oracle, and Inventory operations with ambient site inheritance.
+ * 
+ * @param {object} config - Master configuration object
+ * @param {string|object} rawInput - Text message or spoken prompt
+ * @param {Array} activeSitesList - Array of registered site names for entity grounding
+ * @param {boolean} isAudio - True if voice note/memo payload attached
+ * @param {Array} audioItems - Array of { buffer, mimeType } audio objects
+ * @param {string} fromPhone - Caller phone for ambient context lookup
+ * @param {object} siteContext - Optional currently bound site object
+ */
+async function triageSpokenOrTextNLP(config, rawInput, activeSitesList = [], isAudio = false, audioItems = [], fromPhone = null, siteContext = null) {
   const siteListStr = Array.isArray(activeSitesList) ? activeSitesList.join(', ') : '';
   const geminiEndpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
   const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
 
-  const intentPrompt = `You are the Titan OS Ambient Intelligence Scribe. Classify the intent of the message. 
-Active Registry: [${siteListStr}]
-Input: "${typeof rawInput === 'string' ? rawInput : 'Spoken Voice Memo'}"
+  // "Be Water" Ambient Context Resolution:
+  // If the operative didn't speak the client name, inherit it from the bound jobsite
+  const boundSiteId = fromPhone ? userActiveSiteMap.get(fromPhone) : null;
+  const boundSiteName = siteContext?.fields?.['Site Name'] || (boundSiteId ? `Site ID ${boundSiteId}` : 'Bounce Padel General Fleet');
 
-Respond STRICTLY in JSON conforming to:
+  const intentPrompt = `You are the Titan OS Ambient Intelligence Scribe for Bounce Padel court operations and QuickBooks Online headless ERP.
+Your mission: Translate natural, informal, spoken voice memos and field text into structured operational and financial commands.
+Field operatives work on active construction sites—they speak quickly, use slang ("k" for thousand, "half", "draw", "plus HST"), speak polyglot (Spanish/English), and do not speak like accountants.
+
+ACTIVE REGISTERED SITES: [${siteListStr}]
+ACTIVE BOUND SITE CONTEXT: "${boundSiteName}"
+
+RULES FOR INTENT RECOGNITION:
+1. CREATE_ESTIMATE:
+   - Operative wants to quote, estimate, or price a build, court, or service.
+   - Examples:
+     * "build an estimate for RCOR for one panoramic paddle court for $70,000 plus HST"
+     * "I want to build an estimate, please build an estimate for one panoramic paddle court for $70,000 plus HST"
+     * "quote 65k for standard court for Miami Shores"
+     * "presupuesto para una pista panoramica por 70 mil mas HST"
+   - EXTRACT:
+     * qbo_customer_name: Look for a client, club, or site name. IF NO CLIENT IS MENTIONED, use ACTIVE BOUND SITE CONTEXT: "${boundSiteName}".
+     * qbo_amount: Extract numeric value (e.g. 70000, 65000). Handle "70k" -> 70000, "setenta mil" -> 70000.
+     * qbo_line_items: Extract formal description of the item (e.g. "one panoramic padel court", "standard court kit").
+     * apply_tax: true if "plus HST", "add tax", "plus tax", "mas tax" is mentioned; otherwise false.
+     * tax_code_name: "HST", "GST", "Sales Tax", or null.
+
+2. CONVERT_ESTIMATE:
+   - Operative wants to convert an existing estimate into a partial or full progress draw / invoice.
+   - Examples:
+     * "convert estimate 1045 to a 50% invoice"
+     * "convert the RCOR estimate to 40% draw"
+     * "bill 50% on Burke site"
+     * "execute 30% progress draw for RCOR"
+     * "factura el 50 por ciento del presupuesto de RCOR"
+   - EXTRACT:
+     * qbo_customer_name: Customer/site name.
+     * qbo_estimate_number: Numeric string of estimate if mentioned (e.g. "1045", "1022"), else null.
+     * qbo_invoice_percentage: Numeric percentage (e.g. 50, 40, 30, 100). Default to 100 if "convert to invoice" without percentage.
+
+3. CREATE_INVOICE:
+   - Operative wants to bill or invoice DIRECTLY without prior estimate.
+   - Examples:
+     * "invoice Miami Shores $4,500 for emergency net replacement and court realignment"
+     * "bill David $1,200 for silica sand infill"
+     * "create invoice for 3000 to RCOR"
+     * "factura directa a RCOR por 3500 por cambio de red"
+   - EXTRACT:
+     * qbo_customer_name: Customer name. IF NOT SPOKEN, inherit "${boundSiteName}".
+     * qbo_amount: Numeric billing value.
+     * qbo_line_items: Description of scope.
+     * apply_tax: true/false.
+
+4. CHANGE_ORDER:
+   - Scope modification, client addition, or extra physical work requested in the field.
+   - Examples: "client wants 2 extra lights and 1 foot extra concrete on north beam", "change order on Court 2 for extra excavation".
+
+5. AR_LOOKUP:
+   - Queries regarding accounts receivable, overdue invoices, 30+ aging, balances.
+   - Examples: "what is my 30+ ar", "ar report", "who owes money", "aging balance".
+
+6. ORACLE_QUERY:
+   - Engineering specifications, foundation slab drawings, hurricane wind loads, glass gasket requirements.
+
+7. INVENTORY_QUERY:
+   - Material counts, depletion logs ("used 2 tubs turf glue", "check inventory", "stock on anchors").
+
+8. CHECKIN / GENERAL_UPDATE:
+   - Operational site notes, status reports.
+
+Return STRICTLY a JSON object with this schema:
 {
-  "intent": "AR_LOOKUP" | "CREATE_ESTIMATE" | "CREATE_INVOICE" | "ORACLE_QUERY" | "INVENTORY_QUERY" | "CHECKIN" | "GENERAL_UPDATE",
-  "referenced_site_name": string or null,
-  "qbo_customer_name": string or null,
+  "intent": "CREATE_ESTIMATE" | "CONVERT_ESTIMATE" | "CREATE_INVOICE" | "CHANGE_ORDER" | "AR_LOOKUP" | "ORACLE_QUERY" | "INVENTORY_QUERY" | "CHECKIN" | "GENERAL_UPDATE",
+  "qbo_customer_name": "string (resolved client/site name, never null if bound site exists)",
   "qbo_amount": number or null,
-  "transcript_en": string
+  "qbo_estimate_number": "string or null",
+  "qbo_invoice_percentage": number or null,
+  "qbo_line_items": "string or null",
+  "apply_tax": boolean,
+  "tax_code_name": "string or null",
+  "transcript_en": "string (clean English transcript or translated command)"
 }`;
 
   const contentParts = [{ text: intentPrompt }];
 
+  // Native Gemini Multimodal Audio Ingestion (Zero-UI Speech-to-Intent)
   if (isAudio && audioItems.length > 0) {
     for (const item of audioItems) {
       contentParts.push({
@@ -455,6 +540,8 @@ Respond STRICTLY in JSON conforming to:
         }
       });
     }
+  } else if (typeof rawInput === 'string' && rawInput.trim().length > 0) {
+    contentParts.push({ text: `Field Transmission: "${rawInput.trim()}"` });
   }
 
   const payload = {
@@ -478,7 +565,14 @@ Respond STRICTLY in JSON conforming to:
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!rawText) return null;
 
-    return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    const parsed = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    
+    // Fallback: If customer is still undefined, enforce the bound site name
+    if (!parsed.qbo_customer_name && boundSiteName && boundSiteName !== 'Bounce Padel General Fleet') {
+      parsed.qbo_customer_name = boundSiteName;
+    }
+
+    return parsed;
   } catch (err) {
     console.error('[NLP Triage Exception]:', err.message);
     return null;
@@ -626,7 +720,7 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
       airtableWriteWithAutoDrop
     );
     if (truth.is_padel_court === false) {
-      return; // Handled and archived as partial media
+      return; 
     }
   }
 
@@ -739,7 +833,6 @@ Return STRICTLY a JSON object with this schema:
 
       await airtableWriteWithAutoDrop('Reports 2', reportPayload);
 
-      // Update Parent Site Record
       if (site?.id) {
         await airtableWriteWithAutoDrop('Sites', {
           'Current Gate': `Gate ${finalGate}`,
@@ -884,11 +977,23 @@ RULES:
   }
 }
 
+// ====================================================================
+// 8. CONTEXT RETRIEVAL HELPERS
+// ====================================================================
+
+/**
+ * Returns currently bound site ID for a given caller phone number
+ */
+function getUserBoundSiteId(phone) {
+  return userActiveSiteMap.get(String(phone).replace(/\D/g, '')) || null;
+}
+
 module.exports = {
   mediaDebounceQueues,
   lastDroppedCoordinates,
   userActiveSiteMap,
   dailyEasterEggTracker,
+  getUserBoundSiteId,
   sendWhatsAppReaction,
   sendWhatsAppMessage,
   sendWhatsAppButtons,
