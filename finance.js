@@ -124,18 +124,18 @@ async function resolveCategoryItemRef(config, categoryName, descriptionContext =
   let matched = null;
 
   if (cat.includes('court') || cat.includes('padel') || desc.includes('panoramic')) {
-    matched = items.find(i => /padel|panoramic/i.test(i.Name || '') && !/pickleball/i.test(i.Name || '')) ||
-              items.find(i => /court|kit/i.test(i.Name || '') && !/pickleball/i.test(i.Name || ''));
+    matched = items.find(i => /court|padel|panoramic/i.test(i.Name || '') && !/pickleball|glass|turf|sand|mesh|lights/i.test(i.Name || '')) ||
+              items.find(i => /court/i.test(i.Name || '') && !/pickleball|glass/i.test(i.Name || ''));
   } else if (cat.includes('install') || desc.includes('erect') || desc.includes('assembly')) {
-    matched = items.find(i => /install|assembly|labour|labor/i.test(i.Name || '') && !/delivery/i.test(i.Name || '')) ||
-              items.find(i => /install/i.test(i.Description || ''));
+    matched = items.find(i => /install|assembly/i.test(i.Name || '') && !/delivery|logistics|freight/i.test(i.Name || '')) ||
+              items.find(i => /labor|labour/i.test(i.Name || ''));
   } else if (cat.includes('delivery') || cat.includes('freight') || desc.includes('forklift')) {
-    matched = items.find(i => /delivery|freight|shipping|transport|logistics/i.test(i.Name || '')) ||
-              items.find(i => /delivery|freight|logistics/i.test(i.Description || ''));
+    matched = items.find(i => /delivery|freight|shipping/i.test(i.Name || '') && !/install|logistics/i.test(i.Name || '')) ||
+              items.find(i => /delivery|freight/i.test(i.Description || ''));
   }
 
   if (!matched) {
-    matched = items.find(i => i.Type === 'Service' && !/pickleball/i.test(i.Name || '')) ||
+    matched = items.find(i => i.Type === 'Service' && !/pickleball|glass/i.test(i.Name || '')) ||
               items.find(i => i.Type === 'NonInventory') ||
               items.find(i => /service|sales/i.test(i.Name || '')) ||
               items[0];
@@ -160,14 +160,17 @@ async function resolveQboTaxCode(config, isTaxable = false) {
   }
 
   if (isTaxable) {
-    // Explicitly target the Canadian AST Tax Code ID for HST ON
-    const hstCode = cachedTaxCodes.find(t => /HST ON|HST \(ON\)|HST/i.test(t.Name))
-                    || cachedTaxCodes.find(t => t.Taxable === true && t.Name !== 'TAX' && t.Name !== 'NON')
+    // Explicitly target standard Canadian HST codes
+    const hstCode = cachedTaxCodes.find(t => t.Name === 'H' || t.Name === 'HST ON')
+                    || cachedTaxCodes.find(t => /HST|13%/i.test(t.Name) && t.Taxable === true)
+                    || cachedTaxCodes.find(t => t.Taxable === true && t.Name === 'TAX')
                     || cachedTaxCodes.find(t => t.Taxable === true)
                     || cachedTaxCodes[0];
     return { value: String(hstCode.Id) };
   } else {
-    const exemptCode = cachedTaxCodes.find(t => /exempt|zero|0%|non|out of scope/i.test(t.Name || t.Description || ''))
+    // Explicitly target standard Canadian Exempt codes
+    const exemptCode = cachedTaxCodes.find(t => t.Name === 'E' || t.Name === 'Exempt')
+                       || cachedTaxCodes.find(t => /exempt|zero|0%|non/i.test(t.Name))
                        || cachedTaxCodes.find(t => t.Taxable === false)
                        || cachedTaxCodes[cachedTaxCodes.length - 1];
     return { value: String(exemptCode.Id) };
@@ -620,7 +623,7 @@ TASK:
 2. Deconstruct the order into individual, highly professional construction line items.
 3. For each line item:
    - Identify category: "COURT", "INSTALLATION", "DELIVERY", or "ACCESSORY".
-   - CRITICAL INSTRUCTION FOR DESCRIPTIONS: DO NOT hallucinate or generate generic architectural copy. You MUST extract the EXACT, VERBATIM line item descriptions from the attached "Sample Estimate_2.pdf" for the corresponding category, preserving all newlines and bullet points.
+   - CRITICAL INSTRUCTION FOR DESCRIPTIONS: DO NOT hallucinate or generate generic architectural copy. You MUST extract the EXACT, VERBATIM line item descriptions from the attached "Sample Estimate_3.pdf" for the corresponding category, preserving all newlines and bullet points.
      - For "COURT", copy the full text starting from "Panoramic Padel Court - BLACK" down to "Mondo XN Super Turf - Green".
      - For "INSTALLATION", describe turnkey physical court assembly and mechanical erection.
      - For "DELIVERY", output EXACTLY this string with bullet points: "ALL INCLUSIVE\n• Delivery to final installation\n• Forklift 12K to unload\n• Unloading team and tools"
@@ -774,7 +777,14 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     Line: qboLines
   };
 
-  // Enforce explicit Email population from the transcript extraction fallback
+  // Enforce global Canadian Tax Detail requirement to trigger AST Engine
+  if (hstTaxRef && hstTaxRef.value) {
+    estPayload.TxnTaxDetail = {
+      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
+    };
+  }
+
+  // Force explicit Email population from the resolved customer entity or the raw NLP intent
   if (customerRef.email) {
     estPayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
   } else if (customerEmail) {
@@ -803,7 +813,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     const taxAmt = (parseFloat(finalTotal) - computedSubtotal).toFixed(2);
 
     const lineBreakdown = compiled.line_items.map(li => 
-      `• *${li.category}:* $${li.amount.toFixed(2)} ${li.taxable ? '_(+HST)_' : '_(Exempt)_'}\n  _${li.description.replace(/\n/g, '\n  ')}_`
+      `• *${li.category}:* $${li.amount.toFixed(2)} ${li.taxable ? '(+HST)' : '(Exempt)'}\n  ${li.description.replace(/\n/g, '\n  ')}`
     ).join('\n\n');
 
     const addressStr = customerAddress?.line1 ? `\n📍 *Site:* ${customerAddress.line1}, ${customerAddress.city || ''}` : '';
@@ -885,6 +895,12 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
     GlobalTaxCalculation: "TaxExcluded",
     Line: qboLines
   };
+
+  if (hstTaxRef && hstTaxRef.value) {
+    invoicePayload.TxnTaxDetail = {
+      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
+    };
+  }
 
   if (customerRef.email) {
     invoicePayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
