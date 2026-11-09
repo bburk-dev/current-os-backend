@@ -93,7 +93,6 @@ async function getCachedCatalogItems(config) {
     const qboData = await qboApiRequest(config, `select * from Item where Active=true MAXRESULTS 500`);
     const rawItems = qboData?.QueryResponse?.Item || [];
     
-    // Strict filter: Exclude QBO Categories and Bundles to prevent QBO Error 8331
     cachedItems = rawItems.filter(i => {
       const type = (i.Type || '').toLowerCase();
       return type !== 'category' && type !== 'bundle' && type !== 'group';
@@ -131,8 +130,8 @@ async function resolveCategoryItemRef(config, categoryName, descriptionContext =
     matched = items.find(i => /install|assembly|labour|labor/i.test(i.Name || '') && !/delivery/i.test(i.Name || '')) ||
               items.find(i => /install/i.test(i.Description || ''));
   } else if (cat.includes('delivery') || cat.includes('freight') || desc.includes('forklift')) {
-    matched = items.find(i => /delivery|freight|shipping/i.test(i.Name || '')) ||
-              items.find(i => /delivery|freight/i.test(i.Description || ''));
+    matched = items.find(i => /delivery|freight|shipping|transport|logistics/i.test(i.Name || '')) ||
+              items.find(i => /delivery|freight|logistics/i.test(i.Description || ''));
   }
 
   if (!matched) {
@@ -161,7 +160,8 @@ async function resolveQboTaxCode(config, isTaxable = false) {
   }
 
   if (isTaxable) {
-    const hstCode = cachedTaxCodes.find(t => /HST|13%|Ontario|GST\/HST/i.test(t.Name || t.Description || ''))
+    const hstCode = cachedTaxCodes.find(t => /HST|13%|Ontario/i.test(t.Name || t.Description || ''))
+                    || cachedTaxCodes.find(t => t.Taxable === true && t.Name !== 'TAX')
                     || cachedTaxCodes.find(t => t.Taxable === true)
                     || cachedTaxCodes[0];
     return { value: String(hstCode.Id) };
@@ -464,9 +464,6 @@ JSON SCHEMA:
         name: customerRef.name
       },
       GlobalTaxCalculation: "TaxExcluded",
-      TxnTaxDetail: {
-        TxnTaxCodeRef: { value: String(hstTaxRef.value) }
-      },
       Line: qboLines,
       TxnStatus: "Pending",
       CustomField: [{
@@ -620,9 +617,9 @@ TASK:
 3. For each line item:
    - Identify category: "COURT", "INSTALLATION", "DELIVERY", or "ACCESSORY".
    - CRITICAL INSTRUCTION FOR DESCRIPTIONS: DO NOT hallucinate or generate generic architectural copy. You MUST extract the EXACT, VERBATIM line item descriptions from the attached "Sample Estimate.pdf" for the corresponding category. 
-     - For "COURT", extract the exact multi-line text block from the sample estimate that describes the "Panoramic Padel Court - BLACK" including the steel structure, mesh, fasteners, lights, glass, sand, and turf. Do NOT use bullet points in the extracted string; use exact text with newlines.
+     - For "COURT", output EXACTLY this string: "Panoramic Padel Court - BLACK\nMain steel structure around glass HSS 2\"x6\"x.01\"\nMain steel structure around mesh panels HSS 2\"x4\"x0125\"\nMesh panels made of:\n1.5\"x.100\" square tube\n1/8\" formed plate\n2\"x2\"x1/8\" Welded wire mesh\nFasteners:\nAll required stainless fasteners for assembly.\nLights - 4 posts and 8 LED lights\nGlass: 1995mmx2995mmx12mmx18 pieces of tempered glass per court (All glass certified by US Safety Glazing Certification Council (SGCC), and in alignment with the American National Standards Institute (ANSI) accreditation.)\nSAND: 3300 pounds silica sand\nMondo XN Super Turf - Green"
      - For "INSTALLATION", describe turnkey physical court assembly and mechanical erection.
-     - For "DELIVERY", extract the exact text block starting with "ALL INCLUSIVE" (Delivery, Forklift, Unloading team). Do NOT use bullet points in the extracted string; use exact text with newlines.
+     - For "DELIVERY", output EXACTLY this string: "ALL INCLUSIVE\n- Delivery to final installation\n- Forklift 12K to unload\n- Unloading team and tools"
    - Extract unit price and line total.
    - Determine taxability: mark "taxable": true ONLY if "plus HST", "add tax", or standard taxable is implied. Mark "taxable": false if the operative explicitly says "tax exempt" or "zero cost".
 
@@ -654,7 +651,7 @@ OUTPUT STRICTLY JSON:
 
   const payload = {
     contents: [{ role: 'user', parts }],
-    generationConfig: { temperature: 0.1, responseMimeType: 'application/json' }
+    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
   };
 
   try {
@@ -705,7 +702,7 @@ OUTPUT STRICTLY JSON:
       },
       {
         category: "DELIVERY",
-        description: "ALL INCLUSIVE\nDelivery to final installation\nForklift 12K to unload\nUnloading team and tools",
+        description: "ALL INCLUSIVE\n- Delivery to final installation\n- Forklift 12K to unload\n- Unloading team and tools",
         quantity: 1,
         unit_price: 2000,
         amount: 2000,
@@ -768,15 +765,21 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
       name: customerRef.name
     },
     GlobalTaxCalculation: "TaxExcluded",
-    TxnTaxDetail: {
-      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
-    },
     Line: qboLines
   };
+
+  // Enforce global Canadian Tax Detail requirement
+  if (hstTaxRef && hstTaxRef.value) {
+    estPayload.TxnTaxDetail = {
+      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
+    };
+  }
 
   // Force explicit Email population from the resolved customer entity
   if (customerRef.email) {
     estPayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
+  } else if (customerEmail) {
+    estPayload.BillEmail = { Address: customerEmail.trim().toLowerCase() };
   }
 
   if (customerAddress) {
@@ -805,7 +808,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     ).join('\n');
 
     const addressStr = customerAddress?.line1 ? `\n📍 *Site:* ${customerAddress.line1}, ${customerAddress.city || ''}` : '';
-    const emailStr = customerRef.email ? `\n✉️ *Email:* ${customerRef.email}` : '';
+    const emailStr = (customerRef.email || customerEmail) ? `\n✉️ *Email:* ${customerRef.email || customerEmail}` : '';
 
     const estCard = `🧾 *TITAN OS | ESTIMATE #${estDocNumber} DRAFTED*\n` +
                     `──────────────────────────────\n` +
@@ -881,14 +884,19 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
       name: customerRef.name
     },
     GlobalTaxCalculation: "TaxExcluded",
-    TxnTaxDetail: {
-      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
-    },
     Line: qboLines
   };
 
+  if (hstTaxRef && hstTaxRef.value) {
+    invoicePayload.TxnTaxDetail = {
+      TxnTaxCodeRef: { value: String(hstTaxRef.value) }
+    };
+  }
+
   if (customerRef.email) {
     invoicePayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
+  } else if (customerEmail) {
+    invoicePayload.BillEmail = { Address: customerEmail.trim().toLowerCase() };
   }
 
   if (customerAddress) {
