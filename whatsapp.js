@@ -174,7 +174,7 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   // message first, then immediately follow up with a short interactive menu.
   if (safeBodyText.length > 950) {
     await sendWhatsAppMessage(config, cleanDestination, safeBodyText);
-    safeBodyText = "⚡ *Action Required:*\nDocument drafted successfully. Please select an operational command below to execute:";
+    safeBodyText = "⚡ *Action Required:*\nDocument drafted. Please select an operational command below to execute:";
   }
 
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
