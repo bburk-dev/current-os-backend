@@ -525,16 +525,16 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Resilient write to Inbound Messages 2 (Field name schema safe, avoids 422 errors)
+    // Resilient write to Inbound Messages 2 (Strictly safe fields, avoids 422 errors)
     airtableWriteWithAutoDrop('Inbound Messages 2', {
       'Message ID': messageId,
       'Message Type': message.type || 'text',
-      'Body': message.text?.body || message.caption || message.interactive?.button_reply?.title || `[${message.type || 'media'}]`,
+      'Raw Text': message.text?.body || message.caption || message.interactive?.button_reply?.title || `[${message.type || 'media'}]`,
       'Worker': worker?.id ? [worker.id] : []
     }).catch(() => {});
 
     // ================================================================
-    // A. INTERACTIVE BUTTON & LIST REPLIES (ONE-TAP ACTIONS)
+    // A. INTERACTIVE BUTTON & LIST REPLIES (ONE-TAP ZERO-UI ACTIONS)
     // ================================================================
     const interactiveButtonId = message.interactive?.button_reply?.id || '';
     if (interactiveButtonId) {
@@ -550,7 +550,7 @@ app.post('/webhook', async (req, res) => {
           if (emailRes) {
             await dispatchOutboundWhatsApp(dispatchTarget, `✅ *Estimate Dispatched:*\nOfficial QuickBooks PDF delivered directly to client's email inbox.`);
           } else {
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send email. Verify client email address.`);
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send email. Verify that a valid client email is registered.`);
           }
         } catch (emailErr) {
           console.error('[QBO Send Estimate Error]:', emailErr.message);
@@ -616,8 +616,8 @@ app.post('/webhook', async (req, res) => {
                 SalesItemLineDetail: {
                   Qty: line.SalesItemLineDetail?.Qty || 1,
                   UnitPrice: drawAmt,
-                  ItemRef: line.SalesItemLineDetail?.ItemRef || defaultItemRef,
-                  TaxCodeRef: line.SalesItemLineDetail?.TaxCodeRef || defaultTaxRef
+                  ItemRef: line.SalesItemLineDetail?.ItemRef || { value: String(defaultItemRef.value) },
+                  TaxCodeRef: line.SalesItemLineDetail?.TaxCodeRef || { value: String(defaultTaxRef.value) }
                 }
               });
             }
@@ -631,14 +631,17 @@ app.post('/webhook', async (req, res) => {
               SalesItemLineDetail: {
                 Qty: 1,
                 UnitPrice: drawAmt,
-                ItemRef: defaultItemRef,
-                TaxCodeRef: defaultTaxRef
+                ItemRef: { value: String(defaultItemRef.value) },
+                TaxCodeRef: { value: String(defaultTaxRef.value) }
               }
             });
           }
 
           const invPayload = {
-            CustomerRef: estimate.CustomerRef,
+            CustomerRef: {
+              value: String(estimate.CustomerRef.value),
+              name: estimate.CustomerRef.name
+            },
             GlobalTaxCalculation: "TaxExcluded",
             Line: invLines,
             LinkedTxn: [
@@ -648,6 +651,9 @@ app.post('/webhook', async (req, res) => {
               }
             ]
           };
+
+          if (estimate.BillEmail) invPayload.BillEmail = estimate.BillEmail;
+          if (estimate.BillAddr) invPayload.BillAddr = estimate.BillAddr;
 
           const invRes = await finance.qboApiRequest(CONFIG, '/invoice', 'POST', invPayload);
           const inv = invRes?.Invoice;
