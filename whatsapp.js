@@ -23,6 +23,22 @@ const dailyEasterEggTracker = new Map();
 const userSessionMemory = new Map();
 const SESSION_TTL_MS = 15 * 60 * 1000;
 
+// Gate Taxonomy Mapping for Readability
+const GATE_NAMES = {
+  1: "Foundation Slab",
+  2: "Steel Frame",
+  3: "Mesh Panels",
+  4: "Glass Seating",
+  5: "Light Fixtures",
+  6: "Turf Layout",
+  7: "Turf Gluing",
+  8: "Sand Infill",
+  9: "Net & Posts",
+  10: "Access Doors",
+  11: "Electrical Wiring",
+  12: "Site Handover"
+};
+
 function getSessionContext(fromPhone) {
   const cleanPhone = String(fromPhone).replace(/\D/g, '');
   const session = userSessionMemory.get(cleanPhone);
@@ -157,6 +173,60 @@ async function sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText, r
   return false;
 }
 
+// NEW: Send Media (Images/Video) for Joy Cannon
+async function sendWhatsAppMedia(config, toTarget, mediaUrl, mimeType, caption = '', retries = 2) {
+  const phoneNumberId = config?.meta?.phoneNumberId || process.env.META_PHONE_NUMBER_ID;
+  const accessToken = config?.meta?.accessToken || process.env.META_ACCESS_TOKEN;
+  const graphApiUrl = config?.meta?.graphApiUrl || 'https://graph.facebook.com/v21.0';
+
+  if (!toTarget || !mediaUrl || !phoneNumberId || !accessToken) return false;
+  
+  let cleanDestination = String(toTarget).replace(/\D/g, '');
+  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+
+  const isVideo = mimeType && mimeType.includes('video');
+  const typeKey = isVideo ? 'video' : 'image';
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: cleanDestination,
+    type: typeKey,
+    [typeKey]: {
+      link: mediaUrl,
+      caption: caption
+    }
+  };
+
+  const url = `${graphApiUrl}/${phoneNumberId}/messages`;
+
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        console.error(`WhatsApp Media dispatch failed (${res.status})`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      if (attempt <= retries) {
+        await new Promise(r => setTimeout(r, 1000 * attempt));
+      } else {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
 async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   const phoneNumberId = config?.meta?.phoneNumberId || process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID;
   const accessToken = config?.meta?.accessToken || process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
@@ -236,6 +306,23 @@ async function fanOutToSubscribers(config, phoneNumbersString, messageBody, butt
     } else {
       await sendWhatsAppMessage(config, target, messageBody);
     }
+  }
+}
+
+async function fanOutMediaToSubscribers(config, phoneNumbersString, mediaUrl, mimeType, caption) {
+  if (!phoneNumbersString) return;
+  
+  const rawNumbers = String(phoneNumbersString).split(',');
+  const cleanNumbers = rawNumbers.map(n => {
+      let num = n.replace(/\D/g, '').trim();
+      if (num.length === 10) num = '1' + num;
+      return num;
+  }).filter(n => n.length >= 10);
+  
+  const uniqueTargets = [...new Set(cleanNumbers)];
+
+  for (const target of uniqueTargets) {
+    await sendWhatsAppMedia(config, target, mediaUrl, mimeType, caption);
   }
 }
 
@@ -461,7 +548,6 @@ async function triageSpokenOrTextNLP(config, rawInput, activeSitesList = [], isA
   const boundSiteId = fromPhone ? (userActiveSiteMap.get(fromPhone) || session?.boundSiteId) : null;
   const boundSiteName = siteContext?.fields?.['Site Name'] || session?.siteName || (boundSiteId ? `Site ID ${boundSiteId}` : 'Bounce Padel General Fleet');
 
-  // TELEMETRY/READINESS INTENTS ADDED TO NLP RULES
   const intentPrompt = `You are the Titan OS Ambient Intelligence Scribe for Bounce Padel court operations and QuickBooks Online headless ERP.
 Your mission: Translate natural, informal, spoken voice memos and field text into structured operational and financial commands.
 
@@ -710,24 +796,28 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
 
   const verifiedArrayStr = Array.from(verifiedSet).sort((a,b)=>a-b).join(', ') || 'None';
 
+  // NEW: Robust Gemini Evaluation Prompt instructing it to auto-verify omitted scope (e.g. no lights)
   const evaluationPrompt = `You are the Lead Forensic Civil Engineer and Master Commissioning Agent for Bounce Padel courts worldwide.
 Analyze the provided visual sweep and ambient audio of site: "${siteName}".
 Workflow Mode: ${workflowMode}
 Previously Verified Milestones: [${verifiedArrayStr}]
 
 THE 12 ASYNCHRONOUS PADEL GATES TAXONOMY:
-- Gate 1: Concrete Slab Foundation
-- Gate 2: Structural Steel Columns & Ring Beam
-- Gate 3: Electro-welded Mesh & Pillars
-- Gate 4: Tempered Glass Panels Seating
-- Gate 5: Light Masts & LED Fixtures
-- Gate 6: Artificial Turf Carpet Layout
-- Gate 7: Turf Seam Gluing & Play-Lines
-- Gate 8: Silica Sand Infill
-- Gate 9: Regulation Net & Tension Posts
-- Gate 10: Player Access Doors & Hardware
-- Gate 11: Electrical Wiring & Lighting
-- Gate 12: Site Cleanliness & Handover
+1: Concrete Slab Foundation
+2: Structural Steel Columns & Ring Beam
+3: Electro-welded Mesh & Pillars
+4: Tempered Glass Panels Seating
+5: Light Masts & LED Fixtures
+6: Artificial Turf Carpet Layout
+7: Turf Seam Gluing & Play-Lines
+8: Silica Sand Infill
+9: Regulation Net & Tension Posts
+10: Player Access Doors & Hardware
+11: Electrical Wiring & Lighting
+12: Site Cleanliness & Handover
+
+CRITICAL SCOPE INSTRUCTION:
+If the operative explicitly states in the ambient audio that a certain component is missing from the scope of work or not applicable (e.g., "this court does not have lights"), you MUST automatically add its corresponding gates (e.g., Gate 5, Gate 11) to the "completed_gates" array. This prevents the completion percentage from dragging unnecessarily.
 
 Return STRICTLY JSON:
 {
@@ -836,14 +926,15 @@ Return STRICTLY JSON:
       ? `\n⚠️ *${isSpanish ? 'Obstáculos' : 'Blockers'}:*\n` + evalResult.blockers_detected.map(b => `• ${b}`).join('\n')
       : '';
 
-    const verifiedProgressStr = verifiedList.length > 0 ? verifiedList.map(g => `G${g}`).join(', ') : 'None';
+    // NEW: Detailed Gate Mapping for field clarity
+    const verifiedProgressStr = verifiedList.length > 0 ? verifiedList.map(g => `${g}. ${whatsapp.GATE_NAMES[g] || 'Gate ' + g}`).join(', ') : 'None';
     const inProgressStr = inProgressList.length > 0 ? inProgressList.map(g => `G${g}`).join(', ') : 'None';
 
     const statusCard = `🎾 *TITAN OS | ${isSpanish ? 'VERIFICACIÓN PARALELA' : 'PARALLEL SWEEP CONFIRMED'}*\n` +
       `──────────────────────────────\n` +
       `🏟️ *${isSpanish ? 'Pista' : 'Court'}:* ${siteName}\n` +
       `👤 *${isSpanish ? 'Técnico' : 'Technician'}:* ${workerName}\n` +
-      `✅ *${isSpanish ? 'Hitos Completados' : 'Verified Gates'}:* ${verifiedProgressStr} (${Math.round((totalVerifiedCount / 12) * 100)}%)\n` +
+      `✅ *${isSpanish ? 'Hitos Completados' : 'Verified Gates'}:*\n${verifiedProgressStr}\n\n*Progress:* ${Math.round((totalVerifiedCount / 12) * 100)}%\n` +
       `⚙️ *${isSpanish ? 'En Progreso' : 'In Progress'}:* ${inProgressStr}\n` +
       `──────────────────────────────\n` +
       `📋 *${evalResult.headline}*\n` +
@@ -852,6 +943,26 @@ Return STRICTLY JSON:
       `👉 *${isSpanish ? 'Siguiente Acción' : 'Next Parallel Action'}:* ${evalResult.predictive_next_actions}`;
 
     await sendWhatsAppMessage(config, dispatchTarget, statusCard);
+
+    // ====================================================================
+    // THE JOY CANNON (Partner/Client Broadcaster)
+    // ====================================================================
+    const subscribers = site?.fields?.['Subscribers'] || site?.fields?.['WhatsApp Group ID'];
+    const justStarted = newlyCompleted.includes(1) && !prevNumbers.includes(1);
+    const justHitMid = newlyCompleted.includes(6) && !prevNumbers.includes(6);
+    const justFinished = newlyCompleted.includes(12) && !prevNumbers.includes(12);
+
+    if ((justStarted || justHitMid || justFinished) && subscribers) {
+      let stage = justStarted ? "🚀 PROJECT KICKOFF" : justHitMid ? "🔥 MIDWAY MILESTONE" : "🎉 PROJECT COMMISSIONED";
+      let joyMsg = `*TITAN OS | JOY CANNON*\n──────────────────────────────\n🏟️ *Court:* ${siteName}\n🎯 *Milestone:* ${stage}\n\n${evalResult.summary}`;
+      
+      if (signedMediaUrl && primaryVisualItem) {
+        // Dispatch visual multimedia natively if available
+        await fanOutMediaToSubscribers(config, subscribers, signedMediaUrl, primaryVisualItem.mimeType, joyMsg);
+      } else {
+        await fanOutToSubscribers(config, subscribers, joyMsg);
+      }
+    }
 
   } catch (err) {
     console.error('[Process Media Batch Error]:', err);
@@ -982,11 +1093,14 @@ module.exports = {
   userActiveSiteMap,
   dailyEasterEggTracker,
   userSessionMemory,
+  GATE_NAMES,
   getUserBoundSiteId,
   sendWhatsAppReaction,
   sendWhatsAppMessage,
+  sendWhatsAppMedia,
   sendWhatsAppButtons,
   fanOutToSubscribers,
+  fanOutMediaToSubscribers,
   isIndoorSite,
   geocodeAddressWithGoogle,
   resolveCoordinates,
