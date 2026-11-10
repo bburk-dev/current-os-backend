@@ -59,7 +59,6 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
     }
   };
   
-  // Prevent QBO HTTP 500 NullPointerException on empty POST requests
   if (body) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
@@ -87,11 +86,12 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
 }
 
 // ====================================================================
-// 1B. DYNAMIC CATALOG, TAX CODE & SEQUENTIAL NUMBER RESOLUTION
+// 1B. DYNAMIC CATALOG, TAX CODE, ACCOUNTS & NUMBER RESOLUTION
 // ====================================================================
 
 let cachedItems = null;
 let cachedTaxCodes = null;
+let cachedAccounts = null;
 
 async function getCachedCatalogItems(config) {
   if (cachedItems && cachedItems.length > 0) return cachedItems;
@@ -112,10 +112,46 @@ async function getCachedCatalogItems(config) {
   }
 }
 
+async function getCachedAccounts(config) {
+  if (cachedAccounts && cachedAccounts.length > 0) return cachedAccounts;
+  try {
+    const res = await qboApiRequest(config, `select * from Account where Active=true MAXRESULTS 200`);
+    cachedAccounts = res?.QueryResponse?.Account || [];
+    return cachedAccounts;
+  } catch (err) {
+    console.warn('[QBO Accounts Discovery Error]:', err.message);
+    return [];
+  }
+}
+
+async function resolveQboExpenseAccount(config) {
+  const accounts = await getCachedAccounts(config);
+  if (!accounts || accounts.length === 0) return { value: "1", name: "Job Expenses" };
+
+  const matched = accounts.find(a => a.AccountType === 'Expense' && /job|construction|project|material|supply/i.test(a.Name)) ||
+                  accounts.find(a => a.AccountType === 'Expense') ||
+                  accounts.find(a => a.AccountType === 'Cost of Goods Sold') ||
+                  accounts[0];
+
+  return { value: String(matched.Id), name: matched.Name };
+}
+
+async function resolveQboPaymentAccount(config) {
+  const accounts = await getCachedAccounts(config);
+  if (!accounts || accounts.length === 0) return { value: "1", name: "Cash on Hand" };
+
+  const matched = accounts.find(a => a.AccountType === 'Bank' && /checking|operating|cash/i.test(a.Name)) ||
+                  accounts.find(a => a.AccountType === 'Bank') ||
+                  accounts.find(a => a.AccountType === 'Other Current Asset') ||
+                  accounts[0];
+
+  return { value: String(matched.Id), name: matched.Name };
+}
+
 async function getDefaultQboItemRef(config) {
   const items = await getCachedCatalogItems(config);
   if (items && items.length > 0) {
-    const preferred = items.find(i => i.Type === 'Service') || items[0];
+    const preferred = items.find(i => i.Type === 'Service' && !/shoe|racket|racquet|ball|apparel|bag/i.test(i.Name)) || items[0];
     return { value: String(preferred.Id), name: preferred.Name };
   }
   return { value: "1", name: "Services" };
@@ -129,22 +165,31 @@ async function resolveCategoryItemRef(config, categoryName, descriptionContext =
   const desc = String(descriptionContext || '').toLowerCase();
   let matched = null;
 
+  // Filter out merchandise, retail products, shoes, apparel, and rackets
+  const structuralItems = items.filter(i => {
+    const n = (i.Name || '').toLowerCase();
+    return !/shoe|sneaker|racket|racquet|ball|shirt|pant|short|apparel|hat|cap|bag|overgrip|clothing/i.test(n);
+  });
+
+  const searchPool = structuralItems.length > 0 ? structuralItems : items;
+
   if (cat.includes('court') || cat.includes('padel') || desc.includes('panoramic')) {
-    matched = items.find(i => /court|padel|panoramic/i.test(i.Name || '') && !/pickleball|glass|turf|sand|mesh|lights/i.test(i.Name || '')) ||
-              items.find(i => /court/i.test(i.Name || '') && !/pickleball|glass/i.test(i.Name || ''));
+    matched = searchPool.find(i => /panoramic\s*court|padel\s*court|court\s*structure|panoramic/i.test(i.Name || '')) ||
+              searchPool.find(i => /court/i.test(i.Name || '') && !/pickleball|glass|turf|sand|mesh|lights/i.test(i.Name || '')) ||
+              searchPool.find(i => /padel/i.test(i.Name || '') && !/pickleball|glass|turf|sand|mesh|lights/i.test(i.Name || ''));
   } else if (cat.includes('install') || desc.includes('erect') || desc.includes('assembly')) {
-    matched = items.find(i => /install|assembly|labour|labor/i.test(i.Name || '') && !/delivery|logistics|freight/i.test(i.Name || '')) ||
-              items.find(i => /install/i.test(i.Description || ''));
+    matched = searchPool.find(i => /install|assembly|labour|labor/i.test(i.Name || '') && !/delivery|logistics|freight/i.test(i.Name || '')) ||
+              searchPool.find(i => /install/i.test(i.Description || ''));
   } else if (cat.includes('delivery') || cat.includes('freight') || desc.includes('forklift')) {
-    matched = items.find(i => /delivery|freight|shipping|transport|logistics/i.test(i.Name || '')) ||
-              items.find(i => /delivery|freight|logistics/i.test(i.Description || ''));
+    matched = searchPool.find(i => /delivery|freight|shipping|transport|logistics/i.test(i.Name || '')) ||
+              searchPool.find(i => /delivery|freight|logistics/i.test(i.Description || ''));
   }
 
   if (!matched) {
-    matched = items.find(i => i.Type === 'Service' && !/pickleball|glass/i.test(i.Name || '')) ||
-              items.find(i => i.Type === 'NonInventory') ||
-              items.find(i => /service|sales/i.test(i.Name || '')) ||
-              items[0];
+    matched = searchPool.find(i => i.Type === 'Service' && !/pickleball|glass/i.test(i.Name || '')) ||
+              searchPool.find(i => i.Type === 'NonInventory') ||
+              searchPool.find(i => /service|sales/i.test(i.Name || '')) ||
+              searchPool[0];
   }
 
   return { value: String(matched.Id), name: matched.Name };
@@ -166,7 +211,6 @@ async function resolveQboTaxCode(config, isTaxable = false) {
   }
 
   if (isTaxable) {
-    // Explicitly target the Canadian AST Tax Code ID for HST ON
     const hstCode = cachedTaxCodes.find(t => t.Name === 'H' || t.Name === 'HST ON')
                     || cachedTaxCodes.find(t => /HST|13%/i.test(t.Name) && t.Taxable === true)
                     || cachedTaxCodes.find(t => t.Taxable === true && t.Name === 'TAX')
@@ -174,7 +218,6 @@ async function resolveQboTaxCode(config, isTaxable = false) {
                     || cachedTaxCodes[0];
     return { value: String(hstCode.Id) };
   } else {
-    // Explicitly target standard Canadian Exempt codes
     const exemptCode = cachedTaxCodes.find(t => t.Name === 'E' || t.Name === 'Exempt')
                        || cachedTaxCodes.find(t => /exempt|zero|0%|non/i.test(t.Name))
                        || cachedTaxCodes.find(t => t.Taxable === false)
@@ -323,12 +366,8 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
     if (airtableWriteWithAutoDrop) {
       const airtablePayload = {
         'Workflow Mode': 'EXPENSE',
-        'Headline': `${vendorName} Receipt`,
-        'Summary': `Logged $${totalAmount.toFixed(2)} at ${vendorName} (${categoryName}) submitted by ${submitterName}.`,
-        'Action Items': `Review and approve QBO expense synchronization.`,
-        'Total Amount': totalAmount,
-        'Category': categoryName,
-        'Status': 'Logged'
+        'Action Items': `Review and approve QBO expense synchronization: $${totalAmount.toFixed(2)} at ${vendorName} (${categoryName}).`,
+        'Last Note': `[RECEIPT LOGGED] $${totalAmount.toFixed(2)} at ${vendorName} (${categoryName}) submitted by ${submitterName}.`
       };
 
       if (workerRecord?.id) airtablePayload['Worker'] = [workerRecord.id];
@@ -339,9 +378,12 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
     let qboStatusText = "Dispatched to QuickBooks";
     if (config.qbo.companyId && config.qbo.accessToken) {
       try {
+        const paymentAccount = await resolveQboPaymentAccount(config);
+        const expenseAccount = await resolveQboExpenseAccount(config);
+
         const purchasePayload = {
           PaymentType: "Cash",
-          AccountRef: { name: "Cash on Hand", value: "1" },
+          AccountRef: paymentAccount,
           EntityRef: { name: vendorName, type: "Vendor" },
           TotalAmt: totalAmount,
           Line: [{
@@ -349,7 +391,7 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
             DetailType: "AccountBasedExpenseLineDetail",
             Description: `${categoryName} - ${vendorName} (Submitted by ${submitterName})`,
             AccountBasedExpenseLineDetail: {
-              AccountRef: { name: "Job Expenses", value: "1" }
+              AccountRef: expenseAccount
             }
           }]
         };
@@ -571,7 +613,6 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
     };
   }
   
-  // Provision Net-New Customer Record in QBO
   const payload = { 
     DisplayName: clientName.trim(),
     PrintOnCheckName: clientName.trim()
@@ -623,18 +664,18 @@ A field operative has verbally dictated an estimate through a voice memo:
 
 TASK:
 1. Extract the Customer's Full Name, Email Address, and Street Address:
-   - Respect exact letter-by-letter spelling (e.g., "Burk, B-U-R-K" -> "Wendy Burk", "Catherine with a C" -> "Catherine").
-   - Extract spelled-out emails (e.g., "b-o-b b-u-r-k @ gmail.com" -> "bobburk@gmail.com").
-   - Extract street address, city, and province/state (e.g., "88 Catherine with a C Ave, Aurora Ontario" -> "88 Catherine Ave", city: "Aurora", province: "ON").
-2. Deconstruct the order into individual, highly professional construction line items.
+   - Respect exact letter-by-letter spelling.
+   - Extract spelled-out emails.
+   - Extract street address, city, and province/state.
+2. Deconstruct the order into individual construction line items.
 3. For each line item:
    - Identify category: "COURT", "INSTALLATION", "DELIVERY", or "ACCESSORY".
-   - CRITICAL INSTRUCTION FOR DESCRIPTIONS: DO NOT hallucinate or generate generic architectural copy. You MUST extract the EXACT, VERBATIM line item descriptions from the attached "Sample Estimate_3.pdf" for the corresponding category, preserving all newlines and bullet points.
-     - For "COURT", copy the full text starting from "Panoramic Padel Court - BLACK" down to "Mondo XN Super Turf - Green".
-     - For "INSTALLATION", describe turnkey physical court assembly and mechanical erection.
-     - For "DELIVERY", output EXACTLY this string with bullet points: "ALL INCLUSIVE\n• Delivery to final installation\n• Forklift 12K to unload\n• Unloading team and tools"
+   - Extract the EXACT line item descriptions from the technical specifications for the corresponding category:
+     - For "COURT", describe the Panoramic Padel Court steel structure, mesh, 12mm glass, LED lighting, silica sand, and turf.
+     - For "INSTALLATION", describe turnkey physical assembly.
+     - For "DELIVERY", output: "ALL INCLUSIVE\n• Delivery to final installation\n• Forklift 12K to unload\n• Unloading team and tools"
    - Extract unit price and line total.
-   - Determine taxability: mark "taxable": true ONLY if "plus HST", "add tax", or standard taxable is implied. Mark "taxable": false if the operative explicitly says "tax exempt" or "zero cost".
+   - Determine taxability: mark "taxable": true ONLY if "plus HST", "add tax", or standard taxable is implied. Mark "taxable": false if explicitly exempt.
 
 OUTPUT STRICTLY JSON:
 {
@@ -685,7 +726,7 @@ OUTPUT STRICTLY JSON:
     throw new Error("Gemini returned invalid line items schema.");
   } catch (err) {
     console.error('[Finance RAG Multi-Line Error]:', err.message);
-    return null; // Strict fail-safe: Prevents hallucinated fallbacks on API errors
+    return null;
   }
 }
 
@@ -716,8 +757,6 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
 
   const hstTaxRef = await resolveQboTaxCode(config, true);
   const exemptTaxRef = await resolveQboTaxCode(config, false);
-  
-  console.log(`[QBO Tax] Resolved HST TaxRef: ${hstTaxRef.value}, Exempt TaxRef: ${exemptTaxRef.value}`);
 
   let computedSubtotal = 0;
   const qboLines = [];
@@ -751,14 +790,12 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
     Line: qboLines
   };
 
-  // Enforce global Canadian Tax Detail requirement to trigger AST Engine
   if (hstTaxRef && hstTaxRef.value) {
     estPayload.TxnTaxDetail = {
       TxnTaxCodeRef: { value: String(hstTaxRef.value) }
     };
   }
 
-  // Force explicit Email population from the resolved customer entity or the raw NLP intent
   if (customerRef.email) {
     estPayload.BillEmail = { Address: customerRef.email.trim().toLowerCase() };
   } else if (customerEmail) {
@@ -967,7 +1004,6 @@ async function handleInvoiceApproval(config, nlp, dispatchTarget, sendWhatsAppMe
   await sendWhatsAppButtons(config, dispatchTarget, invCard, buttons);
 }
 
-// Direct Email Dispatcher without opening QBO
 async function sendQboTransactionEmail(config, txnType, txnId, targetEmail = null) {
   const endpoint = targetEmail 
     ? `/${txnType}/${txnId}/send?sendTo=${encodeURIComponent(targetEmail)}`
