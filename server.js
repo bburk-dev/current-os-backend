@@ -699,7 +699,7 @@ app.post('/webhook', async (req, res) => {
     if (interactiveButtonId) {
       console.log(`[Button Action] Intercepted button tap: ${interactiveButtonId} from ${dispatchTarget}`);
 
-      // NEW: Intercept Airtable Automation "Reply via Email" Button
+      // Intercept Airtable Automation "Reply via Email" Button
       if (interactiveButtonId === 'DRAFT_REPLY' || interactiveButtonId === 'REPLY_VIA_EMAIL') {
         const existingSession = draftingSessions.get(fromPhone) || {};
         draftingSessions.set(fromPhone, { active: true, context: existingSession.context || null });
@@ -906,7 +906,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (audioBuffer) {
-        // NEW: Intercept Voice Note for Drafting Mode
+        // Intercept Voice Note for Drafting Mode
         if (draftingSessions.has(fromPhone) && draftingSessions.get(fromPhone).active) {
            const draftCtx = draftingSessions.get(fromPhone).context;
            draftingSessions.delete(fromPhone); // Clear state immediately
