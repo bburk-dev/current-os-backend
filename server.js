@@ -308,7 +308,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
         throw new Error(`HTTP ${res.status}: ${errorMsg}`);
       }
       
-      metrics.incrementMetric('database_mutations');
+      if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
       return await res.json();
     } catch (err) {
       if (attempt === retries) {
@@ -584,7 +584,7 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
 
-  metrics.incrementMetric('messages_processed'); // TELEMETRY LOG
+  if (metrics && metrics.incrementMetric) metrics.incrementMetric('messages_processed'); // TELEMETRY LOG
 
   // Atomic Single-Threaded Deduplication Lock
   const now = Date.now();
@@ -638,6 +638,21 @@ app.post('/webhook', async (req, res) => {
     const interactiveButtonId = message.interactive?.button_reply?.id || '';
     if (interactiveButtonId) {
       console.log(`[Button Action] Intercepted button tap: ${interactiveButtonId} from ${dispatchTarget}`);
+
+      // NEW: Intercept Multi-Site Selection Binding
+      if (interactiveButtonId.startsWith('BIND_SITE_')) {
+        const selectedSiteId = interactiveButtonId.replace('BIND_SITE_', '');
+        const allSites = await getCachedSites();
+        const selectedSite = allSites.find(s => s.id === selectedSiteId);
+        if (selectedSite) {
+          const userLat = whatsapp.lastDroppedCoordinates?.get(fromPhone)?.lat;
+          const userLon = whatsapp.lastDroppedCoordinates?.get(fromPhone)?.lon;
+          await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, 0, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
+        } else {
+          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to bind to selected site.`);
+        }
+        return;
+      }
 
       if (interactiveButtonId.startsWith('QBO_EMAIL_EST_')) {
         const estId = interactiveButtonId.replace('QBO_EMAIL_EST_', '');
@@ -756,7 +771,7 @@ app.post('/webhook', async (req, res) => {
           const invoiceNum = inv?.DocNumber || inv?.Id || 'Issued';
           const invTotal = inv?.TotalAmt ? parseFloat(inv.TotalAmt).toFixed(2) : '0.00';
           
-          metrics.incrementMetric('invoices_generated'); // TELEMETRY LOG
+          if (metrics && metrics.incrementMetric) metrics.incrementMetric('invoices_generated'); // TELEMETRY LOG
 
           const successCard = `🧾 *TITAN OS | PROGRESS DRAW INVOICE ISSUED*\n` +
                               `──────────────────────────────\n` +
@@ -807,7 +822,7 @@ app.post('/webhook', async (req, res) => {
       const mediaId = mediaObj?.id;
       const mimeType = mediaObj?.mime_type || 'audio/ogg';
       
-      metrics.incrementMetric('voice_commands'); // TELEMETRY LOG
+      if (metrics && metrics.incrementMetric) metrics.incrementMetric('voice_commands'); // TELEMETRY LOG
 
       if (whatsapp.sendWhatsAppReaction) {
         whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '🎙️').catch(() => {});
@@ -841,7 +856,7 @@ app.post('/webhook', async (req, res) => {
           if (spokenTriage.intent === 'CREATE_ESTIMATE') {
             if (finance && finance.handleEstimateCreation) {
               await finance.handleEstimateCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
-              metrics.incrementMetric('estimates_generated');
+              if (metrics && metrics.incrementMetric) metrics.incrementMetric('estimates_generated');
               return;
             }
           }
@@ -856,7 +871,7 @@ app.post('/webhook', async (req, res) => {
           if (spokenTriage.intent === 'CREATE_INVOICE') {
             if (finance && finance.handleInvoiceCreation) {
               await finance.handleInvoiceCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
-              metrics.incrementMetric('invoices_generated');
+              if (metrics && metrics.incrementMetric) metrics.incrementMetric('invoices_generated');
               return;
             }
           }
@@ -884,7 +899,7 @@ app.post('/webhook', async (req, res) => {
           if (spokenTriage.intent === 'ORACLE_QUERY') {
             if (oracle && oracle.handleOracleQuery) {
               await oracle.handleOracleQuery(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-              metrics.incrementMetric('oracle_queries');
+              if (metrics && metrics.incrementMetric) metrics.incrementMetric('oracle_queries');
               return;
             }
           }
@@ -896,7 +911,7 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // Handle Readines/Metrics via Voice
+          // Handle Readiness/Metrics via Voice
           if (spokenTriage.intent === 'METRICS_QUERY') {
             const userRole = String(callerIdentity.role || '').trim().toLowerCase();
             if (userRole !== 'admin') {
@@ -926,7 +941,7 @@ app.post('/webhook', async (req, res) => {
                  'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
                  'Last Intent': 'GENERAL_UPDATE'
                }, boundSite.id);
-               metrics.incrementMetric('sites_updated');
+               if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
                await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
                return;
             }
@@ -966,8 +981,15 @@ app.post('/webhook', async (req, res) => {
         }
         nearby.sort((a, b) => a.distance - b.distance);
 
-        if (nearby.length > 0 && whatsapp.bindSiteContext) {
+        // NEW: Multi-Site Selection Interceptor
+        if (nearby.length === 1 && whatsapp.bindSiteContext) {
           await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
+        } else if (nearby.length > 1) {
+          const buttons = nearby.slice(0, 3).map((n) => ({
+            id: `BIND_SITE_${n.site.id}`,
+            title: String(n.site.fields['Site Name']).substring(0, 20)
+          }));
+          await dispatchOutboundButtons(dispatchTarget, `📍 Multiple courts detected within 800m. Please select your active work zone:`, buttons);
         } else {
           console.log(`[Site Engine] Unmapped location pin dropped at (${userLat.toFixed(5)}, ${userLon.toFixed(5)}) by ${dispatchTarget}`);
           
@@ -998,6 +1020,56 @@ app.post('/webhook', async (req, res) => {
       const lTxt = txt.toLowerCase();
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
+
+      // ------------------------------------------------------------------
+      // DIRECT SLASH COMMAND & NAVIGATION PREEMPTION (ZERO TOKEN COST)
+      // ------------------------------------------------------------------
+
+      if (lTxt === '/help' || lTxt === 'help') {
+        const helpMenu = `🛠️ *TITAN OS | COMMAND CENTER*\n` +
+                         `━━━━━━━━━━━━━━━━━━━━\n` +
+                         `*👷 Field Installation*\n` +
+                         `• Drop a 📍 Location Pin to check in.\n` +
+                         `• Send photos/videos to log progress.\n` +
+                         `• Send voice notes to log issues.\n\n` +
+                         `*🚚 Logistics & Navigation*\n` +
+                         `• \`/map [Site Name]\` or "directions to [Site]"\n\n` +
+                         `*📊 Project Management*\n` +
+                         `• \`/readiness [Site Name]\`\n` +
+                         `• \`/status [Site Name]\`\n\n` +
+                         `*💰 Finance & Exec*\n` +
+                         `• \`/metrics\`\n` +
+                         `• "What is my 30+ AR?"\n` +
+                         `• "Create an estimate for [Client]..."`;
+        return await dispatchOutboundWhatsApp(dispatchTarget, helpMenu);
+      }
+
+      if (lTxt.startsWith('/map ') || lTxt.includes('directions to')) {
+         const targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+         
+         const allSites = await getCachedSites();
+         const targetSite = allSites.find(s => 
+           s.fields['Site Name'] && 
+           s.fields['Site Name'].toLowerCase().includes(targetSiteName.toLowerCase())
+         );
+
+         if (targetSite && targetSite.fields['Latitude'] && targetSite.fields['Longitude']) {
+           const lat = targetSite.fields['Latitude'];
+           const lon = targetSite.fields['Longitude'];
+           const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
+           
+           const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                           `──────────────────────────────\n` +
+                           `🏟️ *Destination:* ${targetSite.fields['Site Name']}\n` +
+                           `🌐 *Coordinates:* \`${lat.toFixed(5)}, ${lon.toFixed(5)}\`\n` +
+                           `──────────────────────────────\n` +
+                           `Tap below for active turn-by-turn routing:\n\n${mapsUrl}`;
+           
+           return await dispatchOutboundWhatsApp(dispatchTarget, navCard);
+         } else {
+           return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Could not locate GPS coordinates for site "${targetSiteName}".`);
+         }
+      }
 
       // NEW: Telemetry Report Intent
       if (lTxt === '/metrics' || lTxt === '/telemetry') {
@@ -1104,7 +1176,7 @@ app.post('/webhook', async (req, res) => {
       if (triage?.intent === 'CREATE_ESTIMATE' || lTxt.includes('build an estimate') || lTxt.includes('create estimate') || lTxt.startsWith('/estimate')) {
         if (finance && finance.handleEstimateCreation) {
           await finance.handleEstimateCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
-          metrics.incrementMetric('estimates_generated');
+          if (metrics && metrics.incrementMetric) metrics.incrementMetric('estimates_generated');
           return;
         }
       }
@@ -1119,7 +1191,7 @@ app.post('/webhook', async (req, res) => {
       if (triage?.intent === 'CREATE_INVOICE' || lTxt.includes('create invoice') || lTxt.includes('direct invoice') || lTxt.startsWith('/invoice')) {
         if (finance && finance.handleInvoiceCreation) {
           await finance.handleInvoiceCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
-          metrics.incrementMetric('invoices_generated');
+          if (metrics && metrics.incrementMetric) metrics.incrementMetric('invoices_generated');
           return;
         }
       }
@@ -1134,7 +1206,7 @@ app.post('/webhook', async (req, res) => {
       if (triage?.intent === 'ORACLE_QUERY' || lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
         if (oracle && oracle.handleOracleQuery) {
           await oracle.handleOracleQuery(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-          metrics.incrementMetric('oracle_queries');
+          if (metrics && metrics.incrementMetric) metrics.incrementMetric('oracle_queries');
           return;
         }
       }
@@ -1159,7 +1231,7 @@ app.post('/webhook', async (req, res) => {
              'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
              'Last Intent': 'GENERAL_UPDATE'
            }, boundSite.id);
-           metrics.incrementMetric('sites_updated');
+           if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
            await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
            return;
         }
@@ -1174,7 +1246,7 @@ app.post('/webhook', async (req, res) => {
       const mediaId = mediaObj.id;
       const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
       
-      metrics.incrementMetric('photos_processed'); // TELEMETRY LOG
+      if (metrics && metrics.incrementMetric) metrics.incrementMetric('photos_processed'); // TELEMETRY LOG
 
       if (whatsapp.sendWhatsAppReaction) {
         whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
