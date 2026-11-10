@@ -328,7 +328,6 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 // 3. EXECUTIVE PROJECT MANAGEMENT, METEOROLOGY, & DRAFTING MODE
 // ====================================================================
 
-// NEW: Autonomous Dad Joke Fetcher
 async function fetchDadJoke() {
   try {
     const res = await fetch('https://icanhazdadjoke.com/', { headers: { 'Accept': 'application/json' } });
@@ -385,6 +384,8 @@ async function evaluateWeatherTripwires(lat, lon) {
 async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget) {
   await dispatchOutboundWhatsApp(dispatchTarget, `⏳ Computing virtual readiness matrix for ${siteNameStr}...`);
   
+  if (metrics && metrics.incrementMetric) metrics.incrementMetric('readiness_checks');
+
   const allSites = await getCachedSites();
   const site = allSites.find(s => 
     s.fields['Site Name'] && 
@@ -473,7 +474,6 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   await dispatchOutboundWhatsApp(dispatchTarget, card);
 }
 
-// NEW: Executive Drafting Mode Interceptor
 async function executeDraftingMode(config, rawText, audioBuffer, mimeType, draftContext, dispatchTarget) {
   await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Structuring professional executive response...");
   
@@ -644,9 +644,8 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = String(rawFrom).replace(/\D/g, '');
   const dispatchTarget = fromPhone;
 
-  if (metrics && metrics.incrementMetric) metrics.incrementMetric('messages_processed'); // TELEMETRY LOG
+  if (metrics && metrics.incrementMetric) metrics.incrementMetric('messages_processed');
 
-  // Atomic Single-Threaded Deduplication Lock
   const now = Date.now();
   if (processedMessageIds.has(messageId)) {
     console.log(`[Meta Ingress] 🛡️ Deduplicated messageId: ${messageId} (Already processed)`);
@@ -654,7 +653,6 @@ app.post('/webhook', async (req, res) => {
   }
   processedMessageIds.set(messageId, now);
 
-  // GC expired message hashes
   for (const [id, timestamp] of processedMessageIds.entries()) {
     if (now - timestamp > DEDUP_TTL_MS) processedMessageIds.delete(id);
   }
@@ -681,15 +679,14 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Fail-safe wrapper to prevent 422 Select Field rejections from crashing ingress
+    // Fixed: Omitted 'Worker' field to prevent Airtable HTTP 422 drop errors
     try {
       let safeMessageType = message.type || 'text';
-      if (safeMessageType === 'interactive') safeMessageType = 'text'; // Bypass Airtable Single Select schema mismatch
+      if (safeMessageType === 'interactive') safeMessageType = 'text';
       
       await airtableWriteWithAutoDrop('Inbound Messages 2', {
         'Message ID': messageId,
-        'Message Type': safeMessageType,
-        'Worker': worker?.id ? [worker.id] : []
+        'Message Type': safeMessageType
       });
     } catch (e) {
       console.warn('[Airtable Inbound Log Warning]:', e.message);
@@ -699,7 +696,6 @@ app.post('/webhook', async (req, res) => {
     if (interactiveButtonId) {
       console.log(`[Button Action] Intercepted button tap: ${interactiveButtonId} from ${dispatchTarget}`);
 
-      // Intercept Airtable Automation "Reply via Email" Button
       if (interactiveButtonId === 'DRAFT_REPLY' || interactiveButtonId === 'REPLY_VIA_EMAIL') {
         const existingSession = draftingSessions.get(fromPhone) || {};
         draftingSessions.set(fromPhone, { active: true, context: existingSession.context || null });
@@ -838,7 +834,7 @@ app.post('/webhook', async (req, res) => {
           const invoiceNum = inv?.DocNumber || inv?.Id || 'Issued';
           const invTotal = inv?.TotalAmt ? parseFloat(inv.TotalAmt).toFixed(2) : '0.00';
           
-          if (metrics && metrics.incrementMetric) metrics.incrementMetric('invoices_generated'); // TELEMETRY LOG
+          if (metrics && metrics.incrementMetric) metrics.incrementMetric('invoices_generated');
 
           const successCard = `🧾 *TITAN OS | PROGRESS DRAW INVOICE ISSUED*\n` +
                               `──────────────────────────────\n` +
@@ -889,7 +885,7 @@ app.post('/webhook', async (req, res) => {
       const mediaId = mediaObj?.id;
       const mimeType = mediaObj?.mime_type || 'audio/ogg';
       
-      if (metrics && metrics.incrementMetric) metrics.incrementMetric('voice_commands'); // TELEMETRY LOG
+      if (metrics && metrics.incrementMetric) metrics.incrementMetric('voice_commands');
 
       if (whatsapp.sendWhatsAppReaction) {
         whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '🎙️').catch(() => {});
@@ -906,10 +902,9 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (audioBuffer) {
-        // Intercept Voice Note for Drafting Mode
         if (draftingSessions.has(fromPhone) && draftingSessions.get(fromPhone).active) {
            const draftCtx = draftingSessions.get(fromPhone).context;
-           draftingSessions.delete(fromPhone); // Clear state immediately
+           draftingSessions.delete(fromPhone);
            await executeDraftingMode(CONFIG, null, audioBuffer, mimeType, draftCtx, dispatchTarget);
            return;
         }
@@ -1055,7 +1050,6 @@ app.post('/webhook', async (req, res) => {
         }
         nearby.sort((a, b) => a.distance - b.distance);
 
-        // Intercept Multi-Site Selection Binding & Apply Dad Joke via fetchDadJoke
         if (nearby.length === 1 && whatsapp.bindSiteContext) {
           await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke);
         } else if (nearby.length > 1) {
@@ -1095,14 +1089,9 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
 
-      // ------------------------------------------------------------------
-      // DIRECT COMMAND & DRAFTING MODE PREEMPTION
-      // ------------------------------------------------------------------
-
-      // Intercept Text for Drafting Mode
       if (draftingSessions.has(fromPhone) && draftingSessions.get(fromPhone).active && !interactiveButtonId) {
          const draftCtx = draftingSessions.get(fromPhone).context;
-         draftingSessions.delete(fromPhone); // Clear state immediately
+         draftingSessions.delete(fromPhone);
          await executeDraftingMode(CONFIG, txt, null, null, draftCtx, dispatchTarget);
          return;
       }
@@ -1326,7 +1315,7 @@ app.post('/webhook', async (req, res) => {
       const mediaId = mediaObj.id;
       const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
       
-      if (metrics && metrics.incrementMetric) metrics.incrementMetric('photos_processed'); // TELEMETRY LOG
+      if (metrics && metrics.incrementMetric) metrics.incrementMetric('photos_processed');
 
       if (whatsapp.sendWhatsAppReaction) {
         whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
@@ -1405,7 +1394,6 @@ app.post('/webhook', async (req, res) => {
                   if (parsedCheck.is_receipt === true) isReceipt = true;
                   if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
                   
-                  // NEW: Intercept Message Screenshot and Present Draft Reply Button
                   if (isScreenshot) {
                     draftingSessions.set(dispatchTarget, { active: false, context: parsedCheck.ocr_text });
                     const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
