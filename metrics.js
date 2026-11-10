@@ -1,8 +1,8 @@
 /**
  * TITAN OS V6.0.22 — OPERATIONAL TELEMETRY LAYER
  * Module: metrics.js
- * Purpose: Grounded tracking of empirical system activity and estimated
- *          administrative / operational hours eliminated.
+ * Purpose: Grounded tracking of empirical system activity and defensible
+ *          operational leverage metrics.
  */
 
 const telemetry = {
@@ -20,7 +20,7 @@ const telemetry = {
 };
 
 const MINUTES_SAVED_PER_ACTION = 15; 
-const AUDITS_PER_ESTIMATED_SITE_VISIT = 3;
+const AUDITS_PER_LIKELY_VISIT = 3;
 
 function incrementMetric(metricName, count = 1) {
   if (telemetry.hasOwnProperty(metricName)) {
@@ -36,8 +36,8 @@ function getTelemetryReport() {
      telemetry.sites_updated) * MINUTES_SAVED_PER_ACTION
   ) / 60;
 
-  const estimatedVisitsSaved = Math.floor(
-    (telemetry.remote_audits_completed + telemetry.readiness_checks) / AUDITS_PER_ESTIMATED_SITE_VISIT
+  const likelyVisitsAvoided = Math.floor(
+    (telemetry.remote_audits_completed + telemetry.readiness_checks) / AUDITS_PER_LIKELY_VISIT
   );
 
   return `📊 *TITAN OS | OPERATIONAL TELEMETRY*\n` +
@@ -54,9 +54,9 @@ function getTelemetryReport() {
          `• Invoices & Draws Sealed: ${telemetry.invoices_generated}\n` +
          `• Core Database Mutations: ${telemetry.database_mutations}\n` +
          `──────────────────────────────\n` +
-         `*Quantified Operational Value*\n` +
+         `*Quantified Operational Leverage*\n` +
          `⏱️ Admin Hours Eliminated: ~${adminHoursSaved.toFixed(1)} hrs\n` +
-         `🚗 Estimated Site Visits Avoided: ~${estimatedVisitsSaved}\n` +
+         `🚗 Likely Site Visits Avoided: ~${likelyVisitsAvoided}\n` +
          `──────────────────────────────\n` +
          `_Orchestrator Uptime: ${((Date.now() - telemetry.bootTime) / 1000 / 60 / 60).toFixed(1)} hrs_`;
 }
