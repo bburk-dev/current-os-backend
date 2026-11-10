@@ -60,6 +60,13 @@ function updateSessionContext(fromPhone, updates = {}) {
   });
 }
 
+function generateProgressBar(percentage) {
+  const totalBars = 10;
+  const filledBars = Math.round((percentage / 100) * totalBars);
+  const emptyBars = Math.max(0, totalBars - filledBars);
+  return '█'.repeat(filledBars) + '░'.repeat(emptyBars);
+}
+
 // ====================================================================
 // 2. OUTBOUND MESSAGING (META GRAPH API V21.0)
 // ====================================================================
@@ -173,7 +180,6 @@ async function sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText, r
   return false;
 }
 
-// NEW: Send Media (Images/Video) for Joy Cannon
 async function sendWhatsAppMedia(config, toTarget, mediaUrl, mimeType, caption = '', retries = 2) {
   const phoneNumberId = config?.meta?.phoneNumberId || process.env.META_PHONE_NUMBER_ID;
   const accessToken = config?.meta?.accessToken || process.env.META_ACCESS_TOKEN;
@@ -239,7 +245,6 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
 
   let safeBodyText = textBody;
   
-  // DEFENSIVE INTERCEPTOR: Meta Graph API hard-limits interactive body text to 1024 characters.
   if (safeBodyText.length > 950) {
     await sendWhatsAppMessage(config, cleanDestination, safeBodyText);
     safeBodyText = "⚡ *Action Required:*\nDocument drafted. Please select an operational command below to execute:";
@@ -277,7 +282,6 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
     });
 
     if (!res.ok) {
-      // Final Fallback if Meta still rejects the payload for any API drift reason
       const fallbackText = `${safeBodyText}\n\n` + buttons.map(b => `👉 *${b.title}*`).join('\n');
       return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
     }
@@ -288,15 +292,17 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   }
 }
 
-async function fanOutToSubscribers(config, phoneNumbersString, messageBody, buttons = []) {
+async function fanOutToSubscribers(config, phoneNumbersString, messageBody, buttons = [], excludePhone = null) {
   if (!phoneNumbersString) return;
   
   const rawNumbers = String(phoneNumbersString).split(',');
+  const cleanExclude = excludePhone ? String(excludePhone).replace(/\D/g, '') : null;
+
   const cleanNumbers = rawNumbers.map(n => {
       let num = n.replace(/\D/g, '').trim();
       if (num.length === 10) num = '1' + num;
       return num;
-  }).filter(n => n.length >= 10);
+  }).filter(n => n.length >= 10 && (!cleanExclude || (n !== cleanExclude && !cleanExclude.endsWith(n) && !n.endsWith(cleanExclude))));
   
   const uniqueTargets = [...new Set(cleanNumbers)];
 
@@ -309,15 +315,17 @@ async function fanOutToSubscribers(config, phoneNumbersString, messageBody, butt
   }
 }
 
-async function fanOutMediaToSubscribers(config, phoneNumbersString, mediaUrl, mimeType, caption) {
+async function fanOutMediaToSubscribers(config, phoneNumbersString, mediaUrl, mimeType, caption, excludePhone = null) {
   if (!phoneNumbersString) return;
   
   const rawNumbers = String(phoneNumbersString).split(',');
+  const cleanExclude = excludePhone ? String(excludePhone).replace(/\D/g, '') : null;
+
   const cleanNumbers = rawNumbers.map(n => {
       let num = n.replace(/\D/g, '').trim();
       if (num.length === 10) num = '1' + num;
       return num;
-  }).filter(n => n.length >= 10);
+  }).filter(n => n.length >= 10 && (!cleanExclude || (n !== cleanExclude && !cleanExclude.endsWith(n) && !n.endsWith(cleanExclude))));
   
   const uniqueTargets = [...new Set(cleanNumbers)];
 
@@ -404,37 +412,31 @@ function evaluateWeatherTripwires(weather) {
   const dewDelta = weather.temp - weather.dewPoint;
 
   if (weather.weatherCode >= 95 && weather.weatherCode <= 99) {
-    criticalAlerts.push(`⛈️ *SEVERE WEATHER / LIGHTNING:* Evacuate court frame. Immediate safety stand-down.`);
+    criticalAlerts.push(`⛈️ *SEVERE WEATHER:* Evacuate court frame. Immediate safety stand-down.`);
   }
   if (weather.windGusts > 60) {
-    criticalAlerts.push(`🌪️ *EXTREME WIND HAZARD (${weather.windGusts} km/h):* Secure loose materials. Frame and glass hazard.`);
+    criticalAlerts.push(`🌪️ *HIGH WIND (${weather.windGusts} km/h):* Secure loose materials. Frame/glass hazard.`);
   }
   if (weather.temp < 10) {
-    criticalAlerts.push(`❄️ *TURF GLUE CURE HOLD (${weather.temp}°C):* Polyurethane adhesive failure risk. Do not glue turf seams.`);
+    criticalAlerts.push(`❄️ *TURF GLUE HOLD (${weather.temp}°C):* Polyurethane cure failure risk.`);
   }
 
   if (weather.windGusts > 37 && weather.windGusts <= 60) {
-    holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h):* Suction cup glass installation prohibited.`);
+    holds.push(`⛔ *WIND HOLD (${weather.windGusts} km/h):* Glass seating prohibited.`);
   } else if (weather.windGusts > 28) {
     warnings.push(`💨 *WIND WARNING (${weather.windGusts} km/h):* Approach glass seating with caution.`);
   }
 
   if (weather.humidity > 85 || dewDelta <= 2.5) {
-    holds.push(`💧 *CONDENSATION HOLD:* Dew delta is ${dewDelta.toFixed(1)}°C (Humidity: ${weather.humidity}%). Substrate moisture will ruin adhesive bond.`);
+    holds.push(`💧 *CONDENSATION HOLD:* Dew delta is ${dewDelta.toFixed(1)}°C (Humidity: ${weather.humidity}%). Moisture will ruin adhesive bond.`);
   }
 
   if (weather.isRainingOrStorm || weather.precip > 0) {
     holds.push(`🌧️ *RAIN HOLD:* Active rain detected. Hold outdoor gluing, glass, and mesh.`);
-  } else if (weather.precipProbability4h > 40) {
-    warnings.push(`🌦️ *RAIN PROBABILITY (${weather.precipProbability4h}% in 4h):* Keep tarps staged over open turf rolls.`);
   }
 
   if (weather.isRainingOrStorm || weather.precip > 0 || weather.humidity > 90) {
-    holds.push(`⏳ *SAND INFILL HOLD:* Wet conditions detected. Silica sand must strictly be applied to dry turf.`);
-  }
-
-  if (weather.temp > 35) {
-    warnings.push(`☀️ *HIGH HEAT ALERT (${weather.temp}°C):* Adhesive pot-life drops to <5 minutes. Mandatory crew shade rest cycles.`);
+    holds.push(`⏳ *SAND INFILL HOLD:* Wet conditions detected. Silica sand must be applied dry.`);
   }
 
   const isNominal = holds.length === 0 && criticalAlerts.length === 0 && warnings.length === 0;
@@ -443,13 +445,13 @@ function evaluateWeatherTripwires(weather) {
   if (criticalAlerts.length > 0) summaryText += `\n` + criticalAlerts.join('\n');
   if (holds.length > 0) summaryText += `\n` + holds.join('\n');
   if (warnings.length > 0) summaryText += `\n` + warnings.join('\n');
-  if (isNominal) summaryText += `\n🟢 *Conditions Clear:* Wind (${weather.windSpeed} km/h), Temp (${weather.temp}°C), and moisture clear for work.`;
+  if (isNominal) summaryText += `\n🟢 *Conditions Clear:* Wind (${weather.windSpeed} km/h), Temp (${weather.temp}°C). Clear for work.`;
 
   return { criticalAlerts, holds, warnings, nominal: isNominal, summaryText };
 }
 
 // ====================================================================
-// 4. IDENTITY & LOCATION RESOLUTION (THE GOD SCHEMA)
+// 4. IDENTITY & LOCATION RESOLUTION
 // ====================================================================
 
 async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtableWriteWithAutoDrop, autoPersistSiteId = null) {
@@ -521,7 +523,7 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
     `──────────────────────────────\n` +
     `📊 *Gate Status:* ${site.fields['Current Gate'] || 'Active'}\n` +
     (arrivalWeather ? `\n🌤️ *Site Telemetry:*${arrivalWeather}\n` : '') +
-    `\n👉 Ready for parallel sweeps, punch list updates, or material checkouts.`;
+    `\n👉 Ready for video sweeps, punch list updates, or material checkouts.`;
 
   const prefLang = worker?.fields?.['Language'] || callerIdentity?.language || 'English';
   const todayStr = new Date().toISOString().split('T')[0];
@@ -536,7 +538,7 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 }
 
 // ====================================================================
-// 5. AMBIENT VOICE-TO-LEDGER NLP INTENT CLASSIFICATION (GEMINI 2.5 PRO)
+// 5. AMBIENT VOICE-TO-LEDGER NLP INTENT CLASSIFICATION
 // ====================================================================
 
 async function triageSpokenOrTextNLP(config, rawInput, activeSitesList = [], isAudio = false, audioItems = [], fromPhone = null, siteContext = null) {
@@ -555,35 +557,30 @@ ACTIVE REGISTERED SITES: [${siteListStr}]
 ACTIVE BOUND SITE CONTEXT: "${boundSiteName}"
 
 RULES FOR INTENT RECOGNITION:
-1. CREATE_ESTIMATE: (Operative wants to quote, estimate, or price a build, court, or service).
-   - EXTRACT:
-     * qbo_customer_name: Look for a client, club, or site name. IF NO CLIENT IS MENTIONED, use ACTIVE BOUND SITE CONTEXT: "${boundSiteName}". IF THE SPEAKER SPELLS A NAME OUT (e.g. "B-U-R-K"), OUTPUT THE EXACT SPELLED WORD.
-     * qbo_customer_email: Extract the exact email address if spoken (e.g. "bobburk@gmail.com").
-     * qbo_amount: Extract numeric value (e.g. 70000, 65000). Handle "70k" -> 70000, "setenta mil" -> 70000.
-     * apply_tax: true if "plus HST", "add tax", "plus tax", "mas tax" is mentioned; otherwise false.
-2. CONVERT_ESTIMATE: (Operative wants to convert an existing estimate into a partial or full progress draw / invoice).
-3. CREATE_INVOICE: (Operative wants to bill or invoice DIRECTLY without prior estimate).
-4. CHANGE_ORDER: (Scope modification, client addition, or extra physical work requested in the field).
-5. AR_LOOKUP: (Queries regarding accounts receivable, overdue invoices, balances).
-6. ORACLE_QUERY: (Engineering specifications, drawings, loads).
-7. INVENTORY_QUERY: (Material counts, depletion logs).
-8. READINESS_QUERY: (Executive queries asking if a site is ready to mobilize, start, or if materials/crew are available. E.g., "Are we ready for Aurora?").
-9. METRICS_QUERY: (Queries asking for system telemetry, stats, usage numbers, or hours saved).
-10. CHECKIN / GENERAL_UPDATE: (Operational site notes, status reports).
+1. CREATE_ESTIMATE: Operative wants to quote, estimate, or price a build, court, or service.
+2. CONVERT_ESTIMATE: Operative wants to convert an existing estimate into a partial or full progress draw / invoice.
+3. CREATE_INVOICE: Operative wants to bill or invoice DIRECTLY without prior estimate.
+4. CHANGE_ORDER: Scope modification, client addition, or extra physical work requested in the field.
+5. AR_LOOKUP: Queries regarding accounts receivable, overdue invoices, balances.
+6. ORACLE_QUERY: Engineering specifications, drawings, loads.
+7. INVENTORY_QUERY: Material counts, depletion logs.
+8. READINESS_QUERY: Executive queries asking if a site is ready to mobilize.
+9. METRICS_QUERY: Queries asking for system telemetry, stats, usage numbers, or hours saved.
+10. CHECKIN / GENERAL_UPDATE: Operational site notes, status reports.
 
 CRITICAL INSTRUCTION FOR TRANSCRIPT:
-You MUST output the EXACT, FULL, VERBATIM word-for-word transcript of the audio in the 'transcript_en' field. Do NOT summarize it. If a word is spelled out letter-by-letter (e.g. "Burke, B-U-R-K"), you MUST correct the spelling in the transcript to match the spoken letters exactly ("Wendy Burk").
+Output the EXACT, FULL, VERBATIM transcript of the audio in 'transcript_en'. Never summarize. If a name is spelled out, reflect it accurately.
 
-Return STRICTLY a JSON object with this schema:
+Return STRICTLY JSON:
 {
   "intent": "CREATE_ESTIMATE" | "CONVERT_ESTIMATE" | "CREATE_INVOICE" | "CHANGE_ORDER" | "AR_LOOKUP" | "ORACLE_QUERY" | "INVENTORY_QUERY" | "READINESS_QUERY" | "METRICS_QUERY" | "CHECKIN" | "GENERAL_UPDATE",
-  "qbo_customer_name": "string (resolved client/site name, correct spelling if spelled out)",
-  "qbo_customer_email": "string (extract email address if spoken, else null)",
+  "qbo_customer_name": "string or null",
+  "qbo_customer_email": "string or null",
   "qbo_amount": number or null,
   "qbo_estimate_number": "string or null",
   "qbo_invoice_percentage": number or null,
   "apply_tax": boolean,
-  "transcript_en": "string (CRITICAL: Full verbatim word-for-word transcript. Never summarize.)"
+  "transcript_en": "string"
 }`;
 
   const contentParts = [{ text: intentPrompt }];
@@ -650,7 +647,7 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   const payload = {
     system_instruction: { 
       parts: [{ 
-        text: `Classify the physical environment. Is this a padel court? (CRITICAL: A bare concrete foundation slab, earthworks, or pre-existing tennis court being prepped for construction MUST be classified as a valid padel court environment for Gate 1). Output JSON {"is_padel_court": boolean, "detected_scene": string}` 
+        text: `Classify the physical environment. Is this a padel court? (A bare concrete foundation slab or pre-existing court being prepped MUST be classified as a valid padel court environment for Gate 1). Output JSON {"is_padel_court": boolean, "detected_scene": string}` 
       }] 
     },
     contents: [
@@ -662,7 +659,7 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
               data: mediaItem.buffer.toString('base64')
             }
           },
-          { text: "Examine ONLY visual frames. Disregard any audio. Is this physically inside or at the apron of a padel court? Remember, a plain concrete foundation is a valid padel court environment for Gate 1." }
+          { text: "Examine visual frames only. Is this physically inside or at the apron of a padel court?" }
         ]
       }
     ],
@@ -686,8 +683,6 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
     const visualTruth = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
     
     if (visualTruth.is_padel_court === false) {
-      console.log(`[Vision Ingress] Component/macro detail detected (${visualTruth.detected_scene}). Logging to site record.`);
-      
       const bypassNotes = `[COMPONENT LOG]: \nDetected: ${visualTruth.detected_scene || 'Hardware / Component Detail'}\nNote: ${batchText || 'Field photo logged.'}`;
       
       const targetSite = targetedSiteOverride || site;
@@ -698,11 +693,11 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
         }, targetSite.id);
       }
       
-      const fieldCard = `📸 *TITAN OS | COMPONENT DETAIL ARCHIVED*\n` +
+      const fieldCard = `📸 *TITAN OS | COMPONENT ARCHIVED*\n` +
         `──────────────────────────────\n` +
-        `🔍 *Captured:* ${visualTruth.detected_scene || 'Structural hardware / detail'}\n` +
-        `✅ *Action:* Logged to the court ledger.\n\n` +
-        `_Tip: Whenever you want to clear a structural milestone, pan back to show the court frame in context._`;
+        `🔍 *Detail:* ${visualTruth.detected_scene || 'Structural component'}\n` +
+        `✅ *Action:* Logged to court ledger.\n\n` +
+        `_Tip: Pan back to show the full frame to clear structural milestones._`;
         
       await sendWhatsAppMessage(config, dispatchTarget, fieldCard);
     }
@@ -756,8 +751,7 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
   const site = batch.site;
   const worker = batch.worker;
   const callerIdentity = batch.callerIdentity;
-  const workerName = callerIdentity?.name || worker?.fields?.['Full Name'] || 'Field Tech';
-  const workerLang = callerIdentity?.language || worker?.fields?.['Language'] || 'English';
+  const workerName = callerIdentity?.name || worker?.fields?.['Full Name'] || 'Tech';
 
   console.log(`[Media Engine] Initiating Asynchronous Multi-Gate Sweep on ${batch.items.length} items for ${site?.fields?.['Site Name'] || 'Unbound Court'}`);
 
@@ -772,9 +766,7 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
       site,
       airtableWriteWithAutoDrop
     );
-    if (truth.is_padel_court === false) {
-      return; 
-    }
+    if (truth.is_padel_court === false) return; 
   }
 
   let signedMediaUrl = null;
@@ -783,7 +775,7 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
   }
 
   const workflowMode = site?.fields?.['Workflow Mode'] || 'INSTALLATION';
-  const siteName = site?.fields?.['Site Name'] || 'Active Build';
+  const siteName = site?.fields?.['Site Name'] || 'Active Court';
   const currentGateRaw = site?.fields?.['Current Gate'] || '0';
 
   const prevNumbers = (String(currentGateRaw).match(/\b([1-9]|1[0-2])\b/g) || []).map(Number);
@@ -796,13 +788,12 @@ async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracl
 
   const verifiedArrayStr = Array.from(verifiedSet).sort((a,b)=>a-b).join(', ') || 'None';
 
-  // NEW: Robust Gemini Evaluation Prompt instructing it to auto-verify omitted scope (e.g. no lights)
-  const evaluationPrompt = `You are the Lead Forensic Civil Engineer and Master Commissioning Agent for Bounce Padel courts worldwide.
-Analyze the provided visual sweep and ambient audio of site: "${siteName}".
+  const evaluationPrompt = `You are the Lead Forensic Civil Engineer for Bounce Padel courts worldwide.
+Analyze the visual sweep and audio transcript for site: "${siteName}".
 Workflow Mode: ${workflowMode}
 Previously Verified Milestones: [${verifiedArrayStr}]
 
-THE 12 ASYNCHRONOUS PADEL GATES TAXONOMY:
+THE 12 PADEL GATES TAXONOMY:
 1: Concrete Slab Foundation
 2: Structural Steel Columns & Ring Beam
 3: Electro-welded Mesh & Pillars
@@ -816,18 +807,17 @@ THE 12 ASYNCHRONOUS PADEL GATES TAXONOMY:
 11: Electrical Wiring & Lighting
 12: Site Cleanliness & Handover
 
-CRITICAL SCOPE INSTRUCTION:
-If the operative explicitly states in the ambient audio that a certain component is missing from the scope of work or not applicable (e.g., "this court does not have lights"), you MUST automatically add its corresponding gates (e.g., Gate 5, Gate 11) to the "completed_gates" array. This prevents the completion percentage from dragging unnecessarily.
+CRITICAL SCOPE RULE:
+If the operative states in audio/text that a scope item is omitted or not applicable (e.g., "court does not have lights"), automatically add those gates (e.g., Gate 5 and 11) to "completed_gates" so they do not penalize progress.
 
 Return STRICTLY JSON:
 {
   "completed_gates": array of integers,
   "in_progress_gates": array of integers,
   "is_clean": boolean,
-  "blockers_detected": array of strings,
+  "punch_list_items": array of strings,
   "headline": string,
-  "summary": string,
-  "predictive_next_actions": string
+  "summary": string
 }`;
 
   const geminiParts = [{ text: evaluationPrompt }];
@@ -856,7 +846,7 @@ Return STRICTLY JSON:
       })
     });
 
-    if (!aiRes.ok) throw new Error(`Gemini Gate Evaluation failed (${aiRes.status}): ${await aiRes.text()}`);
+    if (!aiRes.ok) throw new Error(`Gemini Gate Evaluation failed (${aiRes.status})`);
 
     const aiData = await aiRes.json();
     const rawAiText = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -869,20 +859,18 @@ Return STRICTLY JSON:
 
     if (!evalResult.is_clean) {
       verifiedSet.delete(12);
-      if (!evalResult.blockers_detected.some(b => /clean|debris|trash|herramienta|basura/i.test(b))) {
-        evalResult.blockers_detected.push("Active tools or debris detected on court slab. Cleanliness hold engaged.");
-      }
     }
 
     const verifiedList = Array.from(verifiedSet).sort((a, b) => a - b);
     const totalVerifiedCount = verifiedList.length;
     const highestGate = verifiedList.length > 0 ? Math.max(...verifiedList) : 0;
-    const inProgressList = (evalResult.in_progress_gates || []).filter(g => !verifiedSet.has(g));
+    const progressPct = Math.round((totalVerifiedCount / 12) * 100);
+    const progressBar = generateProgressBar(progressPct);
 
     const allTwelveVerified = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].every(g => verifiedSet.has(g));
     let newWorkflowMode = workflowMode;
     let newSiteStatus = site?.fields?.['Site Status'] || 'ACTIVE';
-    if (allTwelveVerified && (!evalResult.blockers_detected || evalResult.blockers_detected.length === 0)) {
+    if (allTwelveVerified) {
       newWorkflowMode = 'MAINTENANCE';
       newSiteStatus = 'ACTIVE';
     }
@@ -891,13 +879,14 @@ Return STRICTLY JSON:
       ? 'Gate 12 - Commissioned' 
       : `Gate ${highestGate} (${totalVerifiedCount}/12 Verified)`;
 
+    // INOC / Backend Persistence (Complete Detail Retained)
     if (typeof airtableWriteWithAutoDrop === 'function') {
       const reportPayload = {
         'Workflow Mode': newWorkflowMode,
         'Headline': evalResult.headline || `Milestone Verification (${totalVerifiedCount}/12)`,
-        'Summary': evalResult.summary || 'Parallel multimodal court inspection successfully logged.',
-        'Action Items': evalResult.predictive_next_actions || 'Continue parallel construction sequence.',
-        'Status': evalResult.blockers_detected?.length > 0 ? 'Action Required' : 'Verified'
+        'Summary': evalResult.summary || 'Parallel multimodal court inspection logged.',
+        'Action Items': (evalResult.punch_list_items || []).join('; ') || 'Proceed to next installation phase.',
+        'Status': evalResult.punch_list_items?.length > 0 ? 'Action Required' : 'Verified'
       };
 
       if (site?.id) reportPayload['Site'] = [site.id];
@@ -910,64 +899,65 @@ Return STRICTLY JSON:
           'Current Gate': gateString,
           'Workflow Mode': newWorkflowMode,
           'Site Status': newSiteStatus,
-          'Last Note': `[PARALLEL SWEEP] Verified: [${verifiedList.join(', ')}]. Active: [${inProgressList.join(', ') || 'None'}]. Logged by ${workerName}.`
+          'Last Note': `[FIELD VERIFIED] Progress: ${progressPct}%. Verified: [${verifiedList.join(', ')}].`
         }, site.id);
       }
     }
 
     updateSessionContext(dispatchTarget, {
       lastSiteId: site?.id,
-      verifiedGates: verifiedList,
-      inProgressGates: inProgressList
+      verifiedGates: verifiedList
     });
 
-    const isSpanish = String(workerLang).toLowerCase().includes('span');
-    const blockersText = evalResult.blockers_detected?.length > 0
-      ? `\n⚠️ *${isSpanish ? 'Obstáculos' : 'Blockers'}:*\n` + evalResult.blockers_detected.map(b => `• ${b}`).join('\n')
-      : '';
+    // Ergonomic Installer Visual Card
+    const latestVerifiedNames = verifiedList.map(g => `✅ ${GATE_NAMES[g] || 'Gate ' + g}`).join('\n');
+    const punchListLines = (evalResult.punch_list_items || []).map(p => `• ${p}`).join('\n');
+    const punchSection = punchListLines ? `\n📌 *Pending Adjustments:*\n${punchListLines}\n` : '';
 
-    // NEW: Detailed Gate Mapping for field clarity
-    const verifiedProgressStr = verifiedList.length > 0 ? verifiedList.map(g => `${g}. ${GATE_NAMES[g] || 'Gate ' + g}`).join(', ') : 'None';
-    const inProgressStr = inProgressList.length > 0 ? inProgressList.map(g => `G${g}`).join(', ') : 'None';
-
-    // REMOVED HAZARD ICON - Replaced with Status Note
-    const statusCard = `🎾 *TITAN OS | ${isSpanish ? 'VERIFICACIÓN PARALELA' : 'PARALLEL SWEEP CONFIRMED'}*\n` +
+    const installerCard = `🎾 *TITAN OS | PROGRESS CONFIRMED*\n` +
       `──────────────────────────────\n` +
-      `🏟️ *${isSpanish ? 'Pista' : 'Court'}:* ${siteName}\n` +
-      `👤 *${isSpanish ? 'Técnico' : 'Technician'}:* ${workerName}\n` +
-      `✅ *${isSpanish ? 'Hitos Completados' : 'Verified Gates'}:*\n${verifiedProgressStr}\n\n*Progress:* ${Math.round((totalVerifiedCount / 12) * 100)}%\n` +
-      `⚙️ *${isSpanish ? 'En Progreso' : 'In Progress'}:* ${inProgressStr}\n` +
+      `🏟️ *Court:* ${siteName}\n` +
+      `👤 *Tech:* ${workerName}\n` +
+      `📊 *Build Progress:* ${progressBar} *${progressPct}%*\n` +
       `──────────────────────────────\n` +
-      `📋 *Status Note:*\n` +
-      `_${evalResult.summary}_\n` +
-      blockersText + `\n\n` +
-      `👉 *${isSpanish ? 'Siguiente Acción' : 'Next Parallel Action'}:* ${evalResult.predictive_next_actions}`;
+      `*Completed Milestones:*\n` +
+      `${latestVerifiedNames}\n` +
+      punchSection +
+      `──────────────────────────────\n` +
+      `📋 *Status Note:* ${evalResult.headline || 'Work verified.'}`;
 
-    await sendWhatsAppMessage(config, dispatchTarget, statusCard);
+    // Dispatch directly to Installer
+    await sendWhatsAppMessage(config, dispatchTarget, installerCard);
 
     // ====================================================================
-    // THE JOY CANNON (Partner/Client Broadcaster)
+    // THE JOY CANNON (External Stakeholders Only - Excludes Active Tech)
     // ====================================================================
-    const subscribers = site?.fields?.['Subscribers'] || site?.fields?.['WhatsApp Group ID'];
+    const subscribers = site?.fields?.['Subscribers'];
     const justStarted = newlyCompleted.includes(1) && !prevNumbers.includes(1);
     const justHitMid = newlyCompleted.includes(6) && !prevNumbers.includes(6);
-    const justFinished = newlyCompleted.includes(12) && !prevNumbers.includes(12);
+    const justFinished = (allTwelveVerified || newlyCompleted.includes(12)) && !prevNumbers.includes(12);
 
-    if ((justStarted || justHitMid || justFinished) && subscribers) {
-      let stage = justStarted ? "🚀 PROJECT KICKOFF" : justHitMid ? "🔥 MIDWAY MILESTONE" : "🎉 PROJECT COMMISSIONED";
-      let joyMsg = `*TITAN OS | JOY CANNON*\n──────────────────────────────\n🏟️ *Court:* ${siteName}\n🎯 *Milestone:* ${stage}\n\n${evalResult.summary}`;
-      
+    if (subscribers && (justStarted || justHitMid || justFinished)) {
+      let stage = justFinished ? "🎉 PROJECT COMMISSIONED" : justHitMid ? "🔥 MIDWAY MILESTONE" : "🚀 PROJECT KICKOFF";
+      let joyCaption = `✨ *TITAN OS | MILESTONE UPDATE*\n` +
+                       `──────────────────────────────\n` +
+                       `🏟️ *Court:* ${siteName}\n` +
+                       `🎯 *Status:* ${stage}\n` +
+                       `📊 *Progress:* ${progressBar} *${progressPct}%*\n` +
+                       `──────────────────────────────\n` +
+                       `${evalResult.summary}`;
+
+      // Asymmetric execution: Dispatches to stakeholders, excludes technician
       if (signedMediaUrl && primaryVisualItem) {
-        // Dispatch visual multimedia natively if available
-        await fanOutMediaToSubscribers(config, subscribers, signedMediaUrl, primaryVisualItem.mimeType, joyMsg);
+        await fanOutMediaToSubscribers(config, subscribers, signedMediaUrl, primaryVisualItem.mimeType, joyCaption, dispatchTarget);
       } else {
-        await fanOutToSubscribers(config, subscribers, joyMsg);
+        await fanOutToSubscribers(config, subscribers, joyCaption, [], dispatchTarget);
       }
     }
 
   } catch (err) {
     console.error('[Process Media Batch Error]:', err);
-    await sendWhatsAppMessage(config, dispatchTarget, `📋 *Status Note:*\nField inspection successfully logged to ledger. Engineering sync active.`);
+    await sendWhatsAppMessage(config, dispatchTarget, `📋 *Status Note:*\nInspection logged to the master ledger. Continuing sequence.`);
   }
 }
 
@@ -987,11 +977,7 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
     const ccEmails = extractEmails(emailPayload.cc);
     
     const targetEmails = [...new Set([...senderEmails, ...ccEmails])];
-    
-    if (targetEmails.length === 0) {
-      console.warn('[Email Handler] No valid sender/CC emails extracted.');
-      return;
-    }
+    if (targetEmails.length === 0) return;
 
     const contacts = typeof getCachedContacts === 'function' ? await getCachedContacts() : [];
     const targetPhones = [];
@@ -1009,57 +995,36 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
       }
     });
 
-    if (targetPhones.length === 0) {
-       console.log(`[Email Handler] No WhatsApp-routable phone numbers found in Contacts for: ${targetEmails.join(', ')}`);
-       return;
-    }
-
-    const participants = knownNames.length > 0 ? knownNames.join(' and ') : 'colleagues';
-    console.log(`[Email Handler] Resolved WhatsApp targets for: ${participants} (${targetPhones.join(', ')})`);
+    if (targetPhones.length === 0) return;
 
     const prompt = `You are the executive assistant for Bob Burk. 
 An email was just received from: ${emailPayload.from}.
-The subject is: "${emailPayload.subject}".
+Subject: "${emailPayload.subject}".
 
-Here is the body of the email:
+Body:
 """
 ${emailPayload.text || emailPayload.html}
 """
 
-Task: Draft a warm, professional, and concise reply from Bob Burk addressing the sender and any individuals introduced in the email. 
-If this is an introduction, explicitly welcome the new connection and offer to serve as a resource for anything related to padel courts. Mention that Bob is currently stateside but readily available via call, text, or WhatsApp at 437-928-7172.
-
-RULES:
-1. Do NOT include a subject line in the output.
-2. Sign off simply as "Best regards, Bob Burk". Do NOT include any titles like "Founder, Bounce Padel" or company names in the sign-off.
-3. Keep the tone conversational but highly professional.`;
+Task: Draft a warm, professional, and concise reply from Bob Burk. 
+Sign off simply as "Best regards, Bob Burk". Do NOT include company titles.`;
 
     const geminiEndpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
     const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
 
-    const payload = {
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2 }
-    };
-
     const res = await fetch(`${geminiEndpoint}?key=${geminiApiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2 }
+      })
     });
 
-    if (!res.ok) {
-       console.error('[Email Handler] Gemini drafting failed:', await res.text());
-       return;
-    }
-
+    if (!res.ok) return;
     const data = await res.json();
     const generatedReply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!generatedReply) {
-       console.error('[Email Handler] Gemini returned an empty response.');
-       return;
-    }
+    if (!generatedReply) return;
 
     const formattedDispatch = `📧 *TITAN OS | INBOUND EMAIL RELAY*\n` +
                               `──────────────────────────────\n` +
@@ -1071,9 +1036,6 @@ RULES:
     for (const phone of targetPhones) {
       await sendWhatsAppMessage(config, phone, formattedDispatch);
     }
-    
-    console.log(`[Email Handler] Successfully dispatched email response to ${targetPhones.length} recipients.`);
-
   } catch (err) {
     console.error('[Email Handler Exception]:', err.message);
   }
