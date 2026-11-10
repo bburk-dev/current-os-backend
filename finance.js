@@ -682,47 +682,11 @@ OUTPUT STRICTLY JSON:
     if (parsed.line_items && parsed.line_items.length > 0) {
       return parsed;
     }
+    throw new Error("Gemini returned invalid line items schema.");
   } catch (err) {
     console.error('[Finance RAG Multi-Line Error]:', err.message);
+    return null; // Strict fail-safe: Prevents hallucinated fallbacks on API errors
   }
-
-  const cleanEmailMatch = rawInput.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
-  const spelledEmailMatch = rawInput.match(/b[\s-]*o[\s-]*b[\s-]*b[\s-]*u[\s-]*r[\s-]*k\s*@\s*gmail\.com/i);
-  const resolvedEmail = cleanEmailMatch ? cleanEmailMatch[1] : (spelledEmailMatch ? "bobburk@gmail.com" : null);
-
-  return {
-    customer: { 
-      name: "Wendy Burk", 
-      email: resolvedEmail, 
-      address: { line1: "88 Catherine Ave", city: "Aurora", province: "ON", country: "Canada" } 
-    },
-    line_items: [
-      {
-        category: "COURT",
-        description: "Panoramic Padel Court - BLACK\nMain steel structure around glass HSS 2\"x6\"x.01\"\nMain steel structure around mesh panels HSS 2\"x4\"x0125\"\nMesh panels made of:\n1.5\"x.100\" square tube\n1/8\" formed plate\n2\"x2\"x1/8\" Welded wire mesh\nFasteners:\nAll required stainless fasteners for assembly.\nLights - 4 posts and 8 LED lights\nGlass: 1995mmx2995mmx12mmx18 pieces of tempered glass per court (All glass certified by US Safety Glazing Certification Council (SGCC), and in alignment with the American National Standards Institute (ANSI) accreditation.)\nSAND: 3300 pounds silica sand\nMondo XN Super Turf - Green",
-        quantity: 1,
-        unit_price: 70000,
-        amount: 70000,
-        taxable: true
-      },
-      {
-        category: "INSTALLATION",
-        description: "Turnkey professional installation services, including the complete mechanical erection and physical assembly of the padel court structure, glass panels, mesh, turf, and lighting systems by a certified in-house crew.",
-        quantity: 1,
-        unit_price: 0,
-        amount: 0,
-        taxable: false
-      },
-      {
-        category: "DELIVERY",
-        description: "ALL INCLUSIVE\n• Delivery to final installation\n• Forklift 12K to unload\n• Unloading team and tools",
-        quantity: 1,
-        unit_price: 2000,
-        amount: 2000,
-        taxable: false
-      }
-    ]
-  };
 }
 
 // ====================================================================
@@ -736,8 +700,12 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   const fallbackAmount = nlp.qbo_amount || 70000;
 
   const compiled = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
+  
+  if (!compiled) {
+    return await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to parse structural scope from audio. Please try dictating the estimate details again.`);
+  }
 
-  const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'Wendy Burk';
+  const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'New Client';
   const customerEmail = nlp.qbo_customer_email || compiled.customer?.email || nlp.email || null;
   const customerAddress = compiled.customer?.address || null;
 
@@ -861,7 +829,11 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
 
   const compiled = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
 
-  const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'Wendy Burk';
+  if (!compiled) {
+    return await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to parse structural scope from audio. Please try dictating the invoice details again.`);
+  }
+
+  const customerNameTarget = compiled.customer?.name || nlp.qbo_customer_name || nlp.referenced_entity_name || 'New Client';
   const customerEmail = nlp.qbo_customer_email || compiled.customer?.email || nlp.email || null;
   const customerAddress = compiled.customer?.address || null;
 
