@@ -328,6 +328,20 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 // 3. EXECUTIVE PROJECT MANAGEMENT, METEOROLOGY, & DRAFTING MODE
 // ====================================================================
 
+// NEW: Autonomous Dad Joke Fetcher
+async function fetchDadJoke() {
+  try {
+    const res = await fetch('https://icanhazdadjoke.com/', { headers: { 'Accept': 'application/json' } });
+    if (res.ok) {
+      const data = await res.json();
+      return `\n\n🎁 *Morning Bonus:* ${data.joke}`;
+    }
+  } catch (e) {
+    console.warn('[Easter Egg] Failed to fetch dad joke, using fallback.');
+  }
+  return '\n\n🎁 *Morning Bonus:* Keep up the great work!';
+}
+
 async function evaluateWeatherTripwires(lat, lon) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 4000);
@@ -700,7 +714,7 @@ app.post('/webhook', async (req, res) => {
         if (selectedSite) {
           const userLat = whatsapp.lastDroppedCoordinates?.get(fromPhone)?.lat;
           const userLon = whatsapp.lastDroppedCoordinates?.get(fromPhone)?.lon;
-          await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, 0, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
+          await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, 0, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke);
         } else {
           await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to bind to selected site.`);
         }
@@ -1041,8 +1055,9 @@ app.post('/webhook', async (req, res) => {
         }
         nearby.sort((a, b) => a.distance - b.distance);
 
+        // Intercept Multi-Site Selection Binding & Apply Dad Joke via fetchDadJoke
         if (nearby.length === 1 && whatsapp.bindSiteContext) {
-          await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
+          await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke);
         } else if (nearby.length > 1) {
           const buttons = nearby.slice(0, 3).map((n) => ({
             id: `BIND_SITE_${n.site.id}`,
