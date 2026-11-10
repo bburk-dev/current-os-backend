@@ -6,7 +6,7 @@
  *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
  *          Conversational Clarification Engine, Ambient Multi-Turn Memory,
  *          RBAC Bouncer, Zero-UI Site Provisioning, Virtual Readiness,
- *          and Executive Drafting Mode (Screenshot to Voice Reply).
+ *          Executive Drafting Mode, and Field Intelligence Synthesis.
  */
 
 // ====================================================================
@@ -543,7 +543,7 @@ function startFridayNewsletterCron() {
 }
 
 async function dispatchExecutiveNewsletter() {
-  console.log('[Newsletter Engine] Compiling Friday Executive Briefing...');
+  console.log('[Newsletter Engine] Compiling Friday Executive Briefing & Field Intelligence...');
   
   const sites = await getCachedSites(true);
   const assignments = await getCachedOpenAssignments(true);
@@ -552,12 +552,12 @@ async function dispatchExecutiveNewsletter() {
   const nominalMaintenance = sites.filter(s => s.fields['Workflow Mode'] === 'MAINTENANCE' && s.fields['Site Status'] !== 'WINTERIZED_CLOSED').length;
   const openTickets = assignments.length;
   
-  let darkMatterContent = 'No anomalies detected this week.';
+  let darkMatterContent = '• No actionable field intelligence signals detected this week.';
   
   if (CONFIG.supabase.url && CONFIG.supabase.serviceRoleKey) {
     try {
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?created_at=gte.${sevenDaysAgo}&order=created_at.desc&limit=10`;
+      const url = `${CONFIG.supabase.url}/rest/v1/${CONFIG.supabase.tableDarkMatter}?created_at=gte.${sevenDaysAgo}&order=created_at.desc&limit=50`;
       
       const res = await fetch(url, {
         method: 'GET',
@@ -568,26 +568,67 @@ async function dispatchExecutiveNewsletter() {
       });
       
       if (res.ok) {
-        const vault = await res.json();
-        if (vault && vault.length > 0) {
-          darkMatterContent = vault.slice(0, 5).map(dm => 
-            `• *${dm.site_name}* (${dm.category}): ${dm.distilled_context || dm.raw_text}`
-          ).join('\n');
+        const rawVault = await res.json();
+        
+        if (rawVault && rawVault.length > 0) {
+          if (rawVault.length < 8) {
+             darkMatterContent = rawVault.slice(0, 5).map(dm => 
+               `• *[${dm.site_name || 'Fleet'}]* ${dm.distilled_context || dm.raw_text}`
+             ).join('\n');
+          } else {
+            const chatterContext = rawVault.map(v => `[${v.site_name || 'Fleet'}] ${v.distilled_context || v.raw_text}`).join('\n');
+            
+            const radarPrompt = `You are the Lead Operations Director for Bounce Padel.
+Review the following unstructured field notes and exhaust chatter collected across all court sites over the past 7 days:
+"""
+${chatterContext}
+"""
+
+Synthesize this data into the "FIELD INTELLIGENCE SIGNAL" for the Friday Executive Briefing. 
+Your goal is to surface things management would never have heard otherwise (e.g., installer preferences, recurring material friction, tooling complaints).
+
+Identify actionable signals across these categories ONLY if evidence exists:
+1. Most Discussed Material / Hardware (e.g., preference for stainless vs galvanized)
+2. Most Discussed Installation Friction (e.g., missing parts, difficult assembly steps)
+3. Most Discussed Inventory Issue
+4. Most Discussed Supplier Observation (e.g., packaging damage)
+
+Rules:
+- Be concise, direct, and bulleted.
+- Only report signals that have actual evidence in the chatter. If a category has no evidence, do not list it.
+- Focus on organic friction, not standard operational updates.
+- Do NOT output preamble, intro, or conclusion.`;
+
+            const aiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: radarPrompt }] }],
+                generationConfig: { temperature: 0.2 }
+              })
+            });
+
+            if (aiRes.ok) {
+              const aiData = await aiRes.json();
+              const extractedText = aiData.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+              if (extractedText) darkMatterContent = extractedText;
+            }
+          }
         }
       }
     } catch (e) {
-      console.error('[Newsletter Engine] Supabase fetch failed', e);
+      console.error('[Newsletter Engine] Field Intelligence compilation failed:', e.message);
     }
   }
   
   const msg = `📊 *TITAN OS | WEEKLY EXECUTIVE BRIEFING*\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
-              `*KPI ROLLUP*\n` +
+              `*FLEET CAPACITY*\n` +
               `🏗️ Active Installs Underway: ${activeBuilds}\n` +
               `🎾 Maintained VIP Assets: ${nominalMaintenance}\n` +
               `🛠️ Open Fleet Work Orders: ${openTickets}\n` +
               `━━━━━━━━━━━━━━━━━━━━\n` +
-              `🌑 *DARK MATTER LOG (Last 7 Days)*\n` +
+              `🌑 *FIELD INTELLIGENCE SIGNAL (7-Day Exhaust)*\n` +
               `${darkMatterContent}\n\n` +
               `_Generated autonomously. Have a great weekend._`;
               
@@ -679,7 +720,6 @@ app.post('/webhook', async (req, res) => {
 
     const worker = callerIdentity.workerRecord;
 
-    // Fixed: Omitted 'Worker' field to prevent Airtable HTTP 422 drop errors
     try {
       let safeMessageType = message.type || 'text';
       if (safeMessageType === 'interactive') safeMessageType = 'text';
