@@ -149,8 +149,10 @@ function getOracleFileURIs() {
 async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = null, sendWhatsAppMessage, isRetry = false) {
   let fileList = (oracleFileURIs && oracleFileURIs.length > 0) ? oracleFileURIs : activeOracleURIs;
 
+  // NEW: Autonomous Defensive Catch - If memory is empty, force a synchronous refresh before answering.
   if (!fileList || fileList.length === 0) {
-    console.log('[Oracle Engine] Memory empty. Triggering emergency knowledge sync...');
+    console.log('[Oracle Engine] Memory empty on inbound query. Triggering emergency knowledge sync...');
+    await sendWhatsAppMessage(dispatchTarget, "⏳ Initializing Technical Oracle blueprints. One moment...");
     fileList = await syncOracleDocs(config);
   }
 
@@ -237,7 +239,7 @@ Question: "${userQuery}"`;
     if (!res.ok) {
       const errTxt = await res.text();
 
-      // 4. Autonomous 48-Hour TTL Self-Healing Guard
+      // Autonomous 48-Hour TTL Self-Healing Guard
       const isExpiredFile = res.status === 400 && (errTxt.includes('File') || errTxt.includes('expired') || errTxt.includes('not found'));
       if (isExpiredFile && !isRetry) {
         console.warn('[Oracle Engine] ⚠️ Detected expired Gemini File API URIs (48h TTL limit). Resyncing automatically...');
