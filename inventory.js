@@ -7,6 +7,7 @@
  */
 
 const fetch = globalThis.fetch || require('node-fetch');
+const metrics = require('./metrics'); // TELEMETRY LAYER INTEGRATION
 
 // In-memory Cache-Aside Storage
 let inventoryCache = [];
@@ -110,6 +111,7 @@ async function writeAirtableInventory(config, recordId, fields) {
       });
 
       if (res.ok) {
+        if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
         return await res.json();
       }
 
@@ -301,6 +303,8 @@ JSON SCHEMA:
     if (!res.ok) throw new Error(`Gemini API HTTP ${res.status}`);
     const data = await res.json();
     const rawJSON = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    // Defensive extraction to strip markdown formatting if Gemini hallucinates backticks
     return JSON.parse(rawJSON.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
   } catch (err) {
     console.error('[Inventory AI Parse Error]:', err.message);
@@ -505,6 +509,7 @@ async function checkLowStockRadar(config, dispatchTarget) {
 
 /**
  * Automates the depletion of bulk BOM items when structural gates are cleared.
+ * Highly resilient against new Gate Names formatting (e.g. "2. Steel Frame").
  */
 async function processMilestoneBOMDeduction(config, siteRecord, clearedGate) {
   const siteName = siteRecord.fields['Site Name'] || 'Unknown Site';
@@ -515,9 +520,13 @@ async function processMilestoneBOMDeduction(config, siteRecord, clearedGate) {
   
   const items = await refreshInventoryCache(config);
   let deductedItems = [];
+  
+  // Make gate parsing robust to string variations (e.g., "Gate 2", "2. Steel Frame", or just 2)
+  const gateStr = String(clearedGate).toLowerCase();
 
-  if (clearedGate === 'Gate 2') {
-    console.log(`⚙️ [BOM Engine] Gate 2 cleared at ${siteName}. Deducting Steel & Fasteners.`);
+  // Gate 2: Steel Frame
+  if (gateStr === '2' || gateStr.includes('gate 2') || gateStr.includes('steel')) {
+    console.log(`⚙️ [BOM Engine] Gate 2 (Steel) cleared at ${siteName}. Deducting Steel & Fasteners.`);
     
     for (const item of items) {
       const f = item.fields;
@@ -534,8 +543,10 @@ async function processMilestoneBOMDeduction(config, siteRecord, clearedGate) {
     }
   }
   
-  if (clearedGate === 'Gate 4') {
-    console.log(`⚙️ [BOM Engine] Gate 4 cleared at ${siteName}. Shifting Glass/Turf from Committed to Consumed.`);
+  // Gate 4: Glass Seating or Gate 6: Turf Layout
+  if (gateStr === '4' || gateStr.includes('gate 4') || gateStr.includes('glass') || 
+      gateStr === '6' || gateStr.includes('gate 6') || gateStr.includes('turf')) {
+    console.log(`⚙️ [BOM Engine] Gate ${clearedGate} cleared at ${siteName}. Shifting specific materials from Committed to Consumed.`);
     
     for (const item of items) {
       const f = item.fields;
@@ -545,7 +556,11 @@ async function processMilestoneBOMDeduction(config, siteRecord, clearedGate) {
       const committed = Number(f['Committed'] ?? 0);
       const bomQty = Number(f['Standard BOM Qty'] ?? 0);
 
-      if (['Glass', 'Turf'].includes(category) && bomQty > 0) {
+      // Only deduct Glass if it's Gate 4, Turf if it's Gate 6
+      const isGlassMatch = (gateStr.includes('4') || gateStr.includes('glass')) && category.includes('Glass');
+      const isTurfMatch = (gateStr.includes('6') || gateStr.includes('turf')) && category.includes('Turf');
+
+      if ((isGlassMatch || isTurfMatch) && bomQty > 0) {
         const newQty = Math.max(0, qty - bomQty);
         const newCommitted = Math.max(0, committed - bomQty);
         
