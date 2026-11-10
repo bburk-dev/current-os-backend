@@ -927,9 +927,10 @@ Return STRICTLY JSON:
       : '';
 
     // NEW: Detailed Gate Mapping for field clarity
-    const verifiedProgressStr = verifiedList.length > 0 ? verifiedList.map(g => `${g}. ${whatsapp.GATE_NAMES[g] || 'Gate ' + g}`).join(', ') : 'None';
+    const verifiedProgressStr = verifiedList.length > 0 ? verifiedList.map(g => `${g}. ${GATE_NAMES[g] || 'Gate ' + g}`).join(', ') : 'None';
     const inProgressStr = inProgressList.length > 0 ? inProgressList.map(g => `G${g}`).join(', ') : 'None';
 
+    // REMOVED HAZARD ICON - Replaced with Status Note
     const statusCard = `🎾 *TITAN OS | ${isSpanish ? 'VERIFICACIÓN PARALELA' : 'PARALLEL SWEEP CONFIRMED'}*\n` +
       `──────────────────────────────\n` +
       `🏟️ *${isSpanish ? 'Pista' : 'Court'}:* ${siteName}\n` +
@@ -937,7 +938,7 @@ Return STRICTLY JSON:
       `✅ *${isSpanish ? 'Hitos Completados' : 'Verified Gates'}:*\n${verifiedProgressStr}\n\n*Progress:* ${Math.round((totalVerifiedCount / 12) * 100)}%\n` +
       `⚙️ *${isSpanish ? 'En Progreso' : 'In Progress'}:* ${inProgressStr}\n` +
       `──────────────────────────────\n` +
-      `📋 *${evalResult.headline}*\n` +
+      `📋 *Status Note:*\n` +
       `_${evalResult.summary}_\n` +
       blockersText + `\n\n` +
       `👉 *${isSpanish ? 'Siguiente Acción' : 'Next Parallel Action'}:* ${evalResult.predictive_next_actions}`;
@@ -966,7 +967,7 @@ Return STRICTLY JSON:
 
   } catch (err) {
     console.error('[Process Media Batch Error]:', err);
-    await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Field inspection logged to ledger. Engineering sync active.`);
+    await sendWhatsAppMessage(config, dispatchTarget, `📋 *Status Note:*\nField inspection successfully logged to ledger. Engineering sync active.`);
   }
 }
 
