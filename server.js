@@ -5,7 +5,8 @@
  *          Atomic Message Deduplication, Conversational Voice Estimates,
  *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
  *          Conversational Clarification Engine, Ambient Multi-Turn Memory,
- *          RBAC Bouncer, Zero-UI Site Provisioning, and Virtual Readiness.
+ *          RBAC Bouncer, Zero-UI Site Provisioning, Virtual Readiness,
+ *          and Executive Drafting Mode (Screenshot to Voice Reply).
  */
 
 // ====================================================================
@@ -33,7 +34,7 @@ const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
-const metrics = require('./metrics'); // NEW: Telemetry Layer
+const metrics = require('./metrics'); // Telemetry Layer
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -106,6 +107,9 @@ const pendingNewSiteRequests = new Map();
 // In-Memory Message Deduplication Store (Guaranteed Singleton)
 const processedMessageIds = new Map();
 const DEDUP_TTL_MS = 300 * 1000;
+
+// In-Memory Drafting State (For Voice-Drafting Replies)
+const draftingSessions = new Map();
 
 const memoryCache = {
   sites: null,
@@ -321,7 +325,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 }
 
 // ====================================================================
-// 3. EXECUTIVE PROJECT MANAGEMENT & METEOROLOGICAL TELEMETRY
+// 3. EXECUTIVE PROJECT MANAGEMENT, METEOROLOGY, & DRAFTING MODE
 // ====================================================================
 
 async function evaluateWeatherTripwires(lat, lon) {
@@ -364,7 +368,6 @@ async function evaluateWeatherTripwires(lat, lon) {
   }
 }
 
-// NEW: Virtual Site Readiness Engine (No Database Duplication)
 async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget) {
   await dispatchOutboundWhatsApp(dispatchTarget, `⏳ Computing virtual readiness matrix for ${siteNameStr}...`);
   
@@ -383,14 +386,12 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   const lat = site.fields['Latitude'];
   const lon = site.fields['Longitude'];
 
-  // 1. Crew Assignment Check
   const openAssignments = await getCachedOpenAssignments();
   const siteAssignments = openAssignments.filter(a => a.fields['Site'] && a.fields['Site'].includes(siteId));
   const hasCrew = siteAssignments.some(a => a.fields['Worker'] && a.fields['Worker'].length > 0);
   let crewStatus = hasCrew ? `✅ Crew Assigned` : `❌ No Crew Assigned`;
   let confidenceScore = 100;
 
-  // 2. Weather Check
   let weatherStatus = `❓ Unknown Weather`;
   if (lat && lon) {
     const weather = await evaluateWeatherTripwires(lat, lon);
@@ -400,7 +401,6 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
     confidenceScore -= 10;
   }
 
-  // 3. Finance Check (QBO Query via finance.js)
   let financeStatus = `❓ Deposit Pending`;
   try {
     const qboCustomer = await finance.findOrCreateQboCustomer(config, siteName);
@@ -419,11 +419,10 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
     confidenceScore -= 10;
   }
 
-  // 4. Critical Inventory Validation (Virtual Check against cached stock)
   let inventoryStatus = `✅ Core Materials Ready`;
   if (inventory && inventory.refreshInventoryCache) {
     const stock = await inventory.refreshInventoryCache(config);
-    const criticalItems = ['Glass', 'Steel', 'Turf', 'Neoprene', 'Entrance']; // Condensed Tier 1
+    const criticalItems = ['Glass', 'Steel', 'Turf', 'Neoprene', 'Entrance']; 
     const missing = [];
     
     for (const crit of criticalItems) {
@@ -432,7 +431,7 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
         const qty = Number(match.fields['Quantity on hand'] || match.fields['Quantity'] || 0);
         if (qty <= 0) missing.push(crit);
       } else {
-         missing.push(crit); // Count as missing if not in ledger
+         missing.push(crit); 
       }
     }
     
@@ -442,7 +441,6 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
     }
   }
 
-  // 5. Compute Overall Status
   const isReady = hasCrew && (weatherStatus.includes('✅')) && (financeStatus.includes('✅')) && (inventoryStatus.includes('✅'));
   const overall = isReady ? `✅ *READY TO MOBILIZE*` : `❌ *NOT READY*`;
 
@@ -459,6 +457,54 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
                `*Confidence:* ${confidenceScore}%`;
 
   await dispatchOutboundWhatsApp(dispatchTarget, card);
+}
+
+// NEW: Executive Drafting Mode Interceptor
+async function executeDraftingMode(config, rawText, audioBuffer, mimeType, draftContext, dispatchTarget) {
+  await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Structuring professional executive response...");
+  
+  const prompt = `You are a professional executive assistant for Bob Burk. 
+  The user has provided a raw dictation (via voice or text) intended to reply to a specific message or email.
+  Your task is to transcribe and meticulously clean it up into a highly professional, warm, and structured reply.
+  - Remove all filler words (ahhs, umms, pauses, hesitations, etc.).
+  - Fix grammar and conversational flow.
+  - Make it sound decisive, polite, and professional.
+  - Do not include subject lines, brackets, or placeholder headers.
+  - Output ONLY the final polished message text.
+  
+  Original Message Context being replied to:
+  """
+  ${draftContext || 'No context provided.'}
+  """
+  
+  ${rawText ? `Raw Text Input:\n"${rawText}"` : 'Please process the attached audio dictation.'}`;
+  
+  const parts = [{ text: prompt }];
+  if (audioBuffer) {
+    parts.push({ inline_data: { mime_type: mimeType, data: audioBuffer.toString('base64') } });
+  }
+  
+  try {
+    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        generationConfig: { temperature: 0.2 }
+      })
+    });
+    
+    if (!res.ok) throw new Error(`Gemini Draft failed: ${res.status}`);
+    const data = await res.json();
+    const draftedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    const finalMsg = `✅ *Drafted Response:*\n──────────────────────────────\n${draftedText.trim()}\n──────────────────────────────\n_You can now copy and forward this text, or log it to the CRM._`;
+    
+    await dispatchOutboundWhatsApp(dispatchTarget, finalMsg);
+  } catch (e) {
+    console.error('[Drafting Mode Error]:', e.message);
+    await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to draft response: ${e.message}`);
+  }
 }
 
 function startFridayNewsletterCron() {
@@ -639,7 +685,14 @@ app.post('/webhook', async (req, res) => {
     if (interactiveButtonId) {
       console.log(`[Button Action] Intercepted button tap: ${interactiveButtonId} from ${dispatchTarget}`);
 
-      // NEW: Intercept Multi-Site Selection Binding
+      // NEW: Intercept Airtable Automation "Reply via Email" Button
+      if (interactiveButtonId === 'DRAFT_REPLY' || interactiveButtonId === 'REPLY_VIA_EMAIL') {
+        const existingSession = draftingSessions.get(fromPhone) || {};
+        draftingSessions.set(fromPhone, { active: true, context: existingSession.context || null });
+        await dispatchOutboundWhatsApp(dispatchTarget, `🎙️ *Drafting Mode Active*\nSend a voice note or text message now to draft your reply. I will remove ahhs, umms, and structure it professionally.`);
+        return;
+      }
+
       if (interactiveButtonId.startsWith('BIND_SITE_')) {
         const selectedSiteId = interactiveButtonId.replace('BIND_SITE_', '');
         const allSites = await getCachedSites();
@@ -839,6 +892,14 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (audioBuffer) {
+        // NEW: Intercept Voice Note for Drafting Mode
+        if (draftingSessions.has(fromPhone) && draftingSessions.get(fromPhone).active) {
+           const draftCtx = draftingSessions.get(fromPhone).context;
+           draftingSessions.delete(fromPhone); // Clear state immediately
+           await executeDraftingMode(CONFIG, null, audioBuffer, mimeType, draftCtx, dispatchTarget);
+           return;
+        }
+
         const allSites = await getCachedSites();
         const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
         const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
@@ -911,7 +972,6 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          // Handle Readiness/Metrics via Voice
           if (spokenTriage.intent === 'METRICS_QUERY') {
             const userRole = String(callerIdentity.role || '').trim().toLowerCase();
             if (userRole !== 'admin') {
@@ -981,7 +1041,6 @@ app.post('/webhook', async (req, res) => {
         }
         nearby.sort((a, b) => a.distance - b.distance);
 
-        // NEW: Multi-Site Selection Interceptor
         if (nearby.length === 1 && whatsapp.bindSiteContext) {
           await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, async () => { return '\n\n🎁 *Morning Bonus:* Keep up the great work!'; });
         } else if (nearby.length > 1) {
@@ -1022,8 +1081,16 @@ app.post('/webhook', async (req, res) => {
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
 
       // ------------------------------------------------------------------
-      // DIRECT SLASH COMMAND & NAVIGATION PREEMPTION (ZERO TOKEN COST)
+      // DIRECT COMMAND & DRAFTING MODE PREEMPTION
       // ------------------------------------------------------------------
+
+      // Intercept Text for Drafting Mode
+      if (draftingSessions.has(fromPhone) && draftingSessions.get(fromPhone).active && !interactiveButtonId) {
+         const draftCtx = draftingSessions.get(fromPhone).context;
+         draftingSessions.delete(fromPhone); // Clear state immediately
+         await executeDraftingMode(CONFIG, txt, null, null, draftCtx, dispatchTarget);
+         return;
+      }
 
       if (lTxt === '/help' || lTxt === 'help') {
         const helpMenu = `🛠️ *TITAN OS | COMMAND CENTER*\n` +
@@ -1071,7 +1138,6 @@ app.post('/webhook', async (req, res) => {
          }
       }
 
-      // NEW: Telemetry Report Intent
       if (lTxt === '/metrics' || lTxt === '/telemetry') {
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
@@ -1080,7 +1146,6 @@ app.post('/webhook', async (req, res) => {
         return await dispatchOutboundWhatsApp(dispatchTarget, metrics.getTelemetryReport());
       }
 
-      // NEW: Virtual Site Readiness Intent
       if (lTxt.startsWith('/readiness')) {
         const siteNameStr = txt.replace(/^\/readiness\s*/i, '').trim();
         if (!siteNameStr) {
@@ -1297,11 +1362,13 @@ app.post('/webhook', async (req, res) => {
             const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware|bill|store/i.test(i.caption || ''));
             
             let isReceipt = hasReceiptKeyword;
+            let isScreenshot = false;
             
-            if (!hasVideo && !isReceipt && currentBatch.items.length > 0) {
+            if (!hasVideo && currentBatch.items.length > 0) {
               try {
                 const firstImg = currentBatch.items[0];
-                const checkPrompt = "Determine if this image is a paper financial receipt/invoice/store bill OR a construction/padel court scene. Return JSON strictly: {\"is_receipt\": boolean}";
+                const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
+                
                 const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -1320,12 +1387,19 @@ app.post('/webhook', async (req, res) => {
                 if (checkRes.ok) {
                   const checkData = await checkRes.json();
                   const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-                  if (parsedCheck.is_receipt === true) {
-                    isReceipt = true;
+                  if (parsedCheck.is_receipt === true) isReceipt = true;
+                  if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
+                  
+                  // NEW: Intercept Message Screenshot and Present Draft Reply Button
+                  if (isScreenshot) {
+                    draftingSessions.set(dispatchTarget, { active: false, context: parsedCheck.ocr_text });
+                    const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
+                    await dispatchOutboundButtons(dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?`, buttons);
+                    return;
                   }
                 }
               } catch (e) {
-                console.warn('[Batch Triage] Fast receipt classifier bypassed:', e.message);
+                console.warn('[Batch Triage] Fast visual classifier bypassed:', e.message);
               }
             }
 
