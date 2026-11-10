@@ -592,6 +592,7 @@ Identify actionable signals across these categories ONLY if evidence exists:
 2. Most Discussed Installation Friction (e.g., missing parts, difficult assembly steps)
 3. Most Discussed Inventory Issue
 4. Most Discussed Supplier Observation (e.g., packaging damage)
+5. Knowledge Gaps (e.g., Repeated technical questions, spec inquiries, or missing documentation that Titan/Oracle could not answer).
 
 Rules:
 - Be concise, direct, and bulleted.
