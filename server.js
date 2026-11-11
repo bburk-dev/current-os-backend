@@ -478,20 +478,20 @@ async function executeDraftingMode(config, rawText, audioBuffer, mimeType, draft
   await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Structuring professional executive response...");
   
   const prompt = `You are a professional executive assistant for Bob Burk. 
-The user has provided a raw dictation (via voice or text) intended to reply to a specific message or email.
-Your task is to transcribe and meticulously clean it up into a highly professional, warm, and structured reply.
-- Remove all filler words (ahhs, umms, pauses, hesitations, etc.).
-- Fix grammar and conversational flow.
-- Make it sound decisive, polite, and professional.
-- Do not include subject lines, brackets, or placeholder headers.
-- Output ONLY the final polished message text.
-
-Original Message Context being replied to:
-"""
-${draftContext || 'No context provided.'}
-"""
-
-${rawText ? `Raw Text Input:\n"${rawText}"` : 'Please process the attached audio dictation.'}`;
+  The user has provided a raw dictation (via voice or text) intended to reply to a specific message or email.
+  Your task is to transcribe and meticulously clean it up into a highly professional, warm, and structured reply.
+  - Remove all filler words (ahhs, umms, pauses, hesitations, etc.).
+  - Fix grammar and conversational flow.
+  - Make it sound decisive, polite, and professional.
+  - Do not include subject lines, brackets, or placeholder headers.
+  - Output ONLY the final polished message text.
+  
+  Original Message Context being replied to:
+  """
+  ${draftContext || 'No context provided.'}
+  """
+  
+  ${rawText ? `Raw Text Input:\n"${rawText}"` : 'Please process the attached audio dictation.'}`;
   
   const parts = [{ text: prompt }];
   if (audioBuffer) {
@@ -533,6 +533,8 @@ function startFridayNewsletterCron() {
   
   const nextFriday = new Date(estDate.getFullYear(), estDate.getMonth(), estDate.getDate() + daysUntilFriday, 16, 0, 0, 0);
   const msUntilNextFriday = nextFriday - estDate;
+  
+  console.log(`[Newsletter Cron] Scheduled for ${msUntilNextFriday / 1000 / 60 / 60} hours from now.`);
   
   setTimeout(async () => {
     await dispatchExecutiveNewsletter();
@@ -1102,7 +1104,8 @@ app.post('/webhook', async (req, res) => {
                        
                        Extract ANY field updates requested by the user.
                        Return ONLY a valid JSON object where the keys are the exact field names being updated and the values are the new data.
-                       You may extract ANY field mentioned (e.g., "Turf Color", "Turf Supplier", "Lights", "Site Status", "Workflow Mode", "Environment", "Substrate", etc.).
+                       You may extract ANY field mentioned. 
+                       Examples of valid keys include (but are not limited to): "Turf Colour", "Supplier", "Lights", "Site Status", "Workflow Mode", "Environment", "Substrate".
                        Do not include fields that were not explicitly mentioned for updating. Return {} if none are found.`;
                        
                        const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
@@ -1128,10 +1131,28 @@ app.post('/webhook', async (req, res) => {
                                try {
                                    const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
                                    const extractedFields = JSON.parse(cleanJsonStr);
-                                   for (const [key, value] of Object.entries(extractedFields)) {
+                                   
+                                   // 🚨 AIRTABLE SCHEMA NORMALIZER 🚨
+                                   for (let [key, value] of Object.entries(extractedFields)) {
                                        if (value !== null && value !== undefined && value !== '') {
-                                           payloadToPatch[key] = value;
-                                           updatedList.push(`${key}: *${value}*`);
+                                           let k = key;
+                                           let v = String(value).trim();
+                                           
+                                           // Reconcile common aliases to precise Airtable column headers
+                                           if (/turf color/i.test(k)) k = 'Turf Colour';
+                                           if (/turf supplier/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
+                                           if (/structure color/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
+                                           
+                                           // Force Title Case for Single Select drop-downs to bypass 422 errors
+                                           if (v.toLowerCase() === 'green') v = 'Green';
+                                           if (v.toLowerCase() === 'blue') v = 'Blue';
+                                           if (v.toLowerCase() === 'terracotta') v = 'Terracotta';
+                                           if (v.toLowerCase() === 'black') v = 'Black';
+                                           if (v.toLowerCase() === 'mondo') v = 'Mondo';
+                                           if (v.toLowerCase() === 'real turf' || v.toLowerCase() === 'realturf') v = 'Real Turf';
+                                           
+                                           payloadToPatch[k] = v;
+                                           updatedList.push(`${k}: *${v}*`);
                                        }
                                    }
                                } catch (parseErr) {
@@ -1440,7 +1461,7 @@ app.post('/webhook', async (req, res) => {
         // DYNAMIC R/W INTERCEPTION (Text)
         const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
         const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || lTxt.includes('update');
-        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished') || isUpdate);
+        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished'));
         
         if (isQuestion || isUpdate || isActionable) {
            console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
@@ -1492,7 +1513,8 @@ app.post('/webhook', async (req, res) => {
                    
                    Extract ANY field updates requested by the user.
                    Return ONLY a valid JSON object where the keys are the exact field names being updated and the values are the new data.
-                   You may extract ANY field mentioned (e.g., "Turf Color", "Turf Supplier", "Lights", "Site Status", "Workflow Mode", "Environment", "Substrate", etc.).
+                   You may extract ANY field mentioned.
+                   Examples of valid keys include: "Turf Colour", "Supplier", "Lights", "Site Status", "Workflow Mode", "Environment", "Substrate".
                    Do not include fields that were not explicitly mentioned for updating. Return {} if none are found.`;
                    
                    const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
@@ -1518,10 +1540,25 @@ app.post('/webhook', async (req, res) => {
                            try {
                                const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
                                const extractedFields = JSON.parse(cleanJsonStr);
-                               for (const [key, value] of Object.entries(extractedFields)) {
+                               
+                               for (let [key, value] of Object.entries(extractedFields)) {
                                    if (value !== null && value !== undefined && value !== '') {
-                                       payloadToPatch[key] = value;
-                                       updatedFieldsList.push(`${key}: *${value}*`);
+                                       let k = key;
+                                       let v = String(value).trim();
+                                       
+                                       if (/turf color/i.test(k)) k = 'Turf Colour';
+                                       if (/turf supplier/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
+                                       if (/structure color/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
+                                       
+                                       if (v.toLowerCase() === 'green') v = 'Green';
+                                       if (v.toLowerCase() === 'blue') v = 'Blue';
+                                       if (v.toLowerCase() === 'terracotta') v = 'Terracotta';
+                                       if (v.toLowerCase() === 'black') v = 'Black';
+                                       if (v.toLowerCase() === 'mondo') v = 'Mondo';
+                                       if (v.toLowerCase() === 'real turf' || v.toLowerCase() === 'realturf') v = 'Real Turf';
+                                       
+                                       payloadToPatch[k] = v;
+                                       updatedFieldsList.push(`${k}: *${v}*`);
                                    }
                                }
                            } catch (parseErr) {
@@ -1558,123 +1595,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    if (message.type === 'video' || message.type === 'image') {
-      const mediaObj = message[message.type];
-      const mediaId = mediaObj.id;
-      const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
-      
-      if (metrics && metrics.incrementMetric) metrics.incrementMetric('photos_processed');
-
-      if (whatsapp.sendWhatsAppReaction) {
-        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
-      }
-
-      let mediaBuffer = null;
-      if (CONFIG.meta.accessToken && mediaId) {
-        const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-        const metaMediaData = await metaMediaRes.json().catch(() => ({}));
-        if (metaMediaRes.ok && metaMediaData?.url) {
-          const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
-        }
-      }
-
-      if (!mediaBuffer) {
-        console.warn(`[Media Ingress] Failed to download media buffer for id: ${mediaId}`);
-        return;
-      }
-
-      const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
-
-      if (whatsapp.mediaDebounceQueues) {
-        if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
-          whatsapp.mediaDebounceQueues.set(queueKey, {
-            items: [],
-            timer: null,
-            site,
-            worker,
-            dispatchTarget,
-            callerIdentity
-          });
-        }
-
-        const queue = whatsapp.mediaDebounceQueues.get(queueKey);
-        queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
-        
-        if (queue.timer) clearTimeout(queue.timer);
-        queue.timer = setTimeout(async () => {
-          const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
-          whatsapp.mediaDebounceQueues.delete(queueKey);
-          if (!currentBatch || currentBatch.items.length === 0) return;
-          
-          console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
-
-          try {
-            const hasVideo = currentBatch.items.some(i => i.type === 'video');
-            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware|bill|store/i.test(i.caption || ''));
-            
-            let isReceipt = hasReceiptKeyword;
-            let isScreenshot = false;
-            
-            if (!hasVideo && currentBatch.items.length > 0) {
-              try {
-                const firstImg = currentBatch.items[0];
-                const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
-                
-                const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    contents: [{
-                      role: 'user',
-                      parts: [
-                        { text: checkPrompt },
-                        { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } }
-                      ]
-                    }],
-                    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-                  })
-                });
-
-                if (checkRes.ok) {
-                  const checkData = await checkRes.json();
-                  const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-                  if (parsedCheck.is_receipt === true) isReceipt = true;
-                  if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
-                  
-                  if (isScreenshot) {
-                    draftingSessions.set(dispatchTarget, { active: false, context: parsedCheck.ocr_text });
-                    const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
-                    await dispatchOutboundButtons(dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?`, buttons);
-                    return;
-                  }
-                }
-              } catch (e) {
-                console.warn('[Batch Triage] Fast visual classifier bypassed:', e.message);
-              }
-            }
-
-            if (!hasVideo && isReceipt) {
-              if (finance && finance.handleReceiptUpload) {
-                await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
-                return;
-              }
-            }
-
-            if (whatsapp && whatsapp.processMediaBatch) {
-              await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
-            } else if (finance && finance.handleReceiptUpload) {
-              await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
-            }
-          } catch (batchErr) {
-            console.error('[Batch Engine Failure]:', batchErr);
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
-          }
-        }, 3500);
-      }
-      return;
-    }
-    
   } catch (err) {
     console.error('[Runtime Exception in /webhook]:', err);
   }
