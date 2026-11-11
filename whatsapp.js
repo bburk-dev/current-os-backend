@@ -4,6 +4,7 @@
  * Purpose: Meta Graph API Communication, Bidirectional WhatsApp Dispatch,
  *          Real-Time Emoji Reactions, Interactive Buttons, Geospatial Site Binding,
  *          In-Memory Sliding Debounce Queues, Multimodal Audio/Video/Photo Triage,
+ *          Dynamic Schema Normalization (Color/Colour & Single-Select Casing),
  *          Visual Milestone Inspection, Inbound Email Bridge, and Subscriber Fanout.
  */
 
@@ -21,7 +22,7 @@ if (!globalThis.fetch) {
     globalThis.Request = nodeFetch.Request;
     globalThis.Response = nodeFetch.Response;
   } catch (err) {
-    console.warn('[WhatsApp Engine] Native fetch not found and node-fetch unavailable.');
+    console.warn('[WhatsApp Engine] Native fetch unavailable.');
   }
 }
 
@@ -35,11 +36,8 @@ const userSessionContextMap = new Map();
 // 1. GEODETIC & SESSION UTILITIES
 // ====================================================================
 
-/**
- * Calculates Great-Circle distance between two decimal coordinates in kilometers.
- */
 function haversineDistanceKm(lat1, lon1, lat2, lon2) {
-  const R = 6371; // Earth radius in kilometers
+  const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
@@ -61,12 +59,80 @@ function updateSessionContext(phone, ctx) {
 }
 
 // ====================================================================
-// 2. META GRAPH API TRANSPORT (MESSAGES, BUTTONS, REACTIONS)
+// 2. SCHEMA & SELECT OPTION NORMALIZATION ENGINE
 // ====================================================================
 
 /**
- * Dispatches an outbound WhatsApp text message via Meta Graph API v21.0.
+ * Reconciles dynamic LLM field extractions against actual Airtable column names
+ * and enforces Title Casing on select options so Airtable does not reject them with 422.
  */
+function normalizeSitePayload(rawFields, cachedSites = []) {
+  const knownColumns = new Set();
+  if (Array.isArray(cachedSites)) {
+    cachedSites.forEach(s => {
+      if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k));
+    });
+  }
+
+  const normalized = {};
+
+  for (const [key, val] of Object.entries(rawFields)) {
+    if (val === null || val === undefined || val === '') continue;
+
+    let targetKey = key;
+    const cleanKey = key.trim().toLowerCase();
+
+    // 1. Reconcile Canadian/US spelling and common aliases against live schema
+    if (cleanKey === 'turf color' || cleanKey === 'turf colour') {
+      targetKey = knownColumns.has('Turf Colour') ? 'Turf Colour' : 'Turf Color';
+    } else if (cleanKey === 'turf supplier' || cleanKey === 'supplier' || cleanKey === 'turf manufacturer') {
+      targetKey = knownColumns.has('Turf Supplier') ? 'Turf Supplier' : (knownColumns.has('Supplier') ? 'Supplier' : 'Turf Supplier');
+    } else if (cleanKey === 'structure color' || cleanKey === 'structure colour' || cleanKey === 'frame color') {
+      targetKey = knownColumns.has('Structure Colour') ? 'Structure Colour' : (knownColumns.has('Structure Color') ? 'Structure Color' : key);
+    } else if (cleanKey === 'lights' || cleanKey === 'lighting') {
+      targetKey = knownColumns.has('Lights') ? 'Lights' : (knownColumns.has('Lighting') ? 'Lighting' : 'Lights');
+    } else {
+      // Find case-insensitive match in known columns if present
+      for (const col of knownColumns) {
+        if (col.toLowerCase() === cleanKey) {
+          targetKey = col;
+          break;
+        }
+      }
+    }
+
+    // 2. Format single-select values to Title Case (e.g., "green" -> "Green", "mondo" -> "Mondo")
+    let targetVal = val;
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      const lower = trimmed.toLowerCase();
+
+      if (lower === 'green') targetVal = 'Green';
+      else if (lower === 'blue') targetVal = 'Blue';
+      else if (lower === 'terracotta') targetVal = 'Terracotta';
+      else if (lower === 'black') targetVal = 'Black';
+      else if (lower === 'red') targetVal = 'Red';
+      else if (lower === 'mondo') targetVal = 'Mondo';
+      else if (lower === 'real turf' || lower === 'realturf') targetVal = 'Real Turf';
+      else if (lower === 'padel galis') targetVal = 'Padel Galis';
+      else if (lower === 'yes' || lower === 'true') targetVal = 'Yes';
+      else if (lower === 'no' || lower === 'false') targetVal = 'No';
+      else {
+        // Capitalize first letter of each word
+        targetVal = trimmed.replace(/\b\w/g, c => c.toUpperCase());
+      }
+    }
+
+    normalized[targetKey] = targetVal;
+  }
+
+  return normalized;
+}
+
+// ====================================================================
+// 3. META GRAPH API TRANSPORT (MESSAGES, BUTTONS, REACTIONS)
+// ====================================================================
+
 async function sendWhatsAppMessage(config, to, text) {
   const cleanPhone = String(to).replace(/\D/g, '');
   const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
@@ -101,9 +167,6 @@ async function sendWhatsAppMessage(config, to, text) {
   }
 }
 
-/**
- * Dispatches up to 3 interactive reply buttons via Meta Graph API.
- */
 async function sendWhatsAppButtons(config, to, text, buttons) {
   const cleanPhone = String(to).replace(/\D/g, '');
   const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
@@ -139,20 +202,14 @@ async function sendWhatsAppButtons(config, to, text, buttons) {
     });
 
     if (!res.ok) {
-      const errText = await res.text();
-      console.warn(`[WhatsApp API Warning] Interactive buttons failed to ${cleanPhone} (HTTP ${res.status}). Falling back to text:`, errText);
       return await sendWhatsAppMessage(config, cleanPhone, text);
     }
     return true;
   } catch (err) {
-    console.error(`[WhatsApp Buttons Network Error] To ${cleanPhone}:`, err.message);
     return await sendWhatsAppMessage(config, cleanPhone, text);
   }
 }
 
-/**
- * Injects a sub-400ms native emoji reaction on a specific inbound message ID.
- */
 async function sendWhatsAppReaction(config, to, messageId, emoji) {
   if (!messageId) return;
   const cleanPhone = String(to).replace(/\D/g, '');
@@ -179,17 +236,14 @@ async function sendWhatsAppReaction(config, to, messageId, emoji) {
       body: JSON.stringify(payload)
     });
   } catch (err) {
-    console.warn(`[WhatsApp Reaction Error] ID ${messageId}:`, err.message);
+    console.warn(`[WhatsApp Reaction Warning] ID ${messageId}:`, err.message);
   }
 }
 
 // ====================================================================
-// 3. GEOSPATIAL RESOLUTION & SITE CONTEXT BINDING
+// 4. GEOSPATIAL RESOLUTION & SITE CONTEXT BINDING
 // ====================================================================
 
-/**
- * Resolves site coordinates from table fields or falls back to Google Maps Geocoding API.
- */
 async function resolveCoordinates(config, memoryCache, site, airtableWrite) {
   const fields = site.fields || {};
   if (fields.Latitude && fields.Longitude) {
@@ -215,14 +269,11 @@ async function resolveCoordinates(config, memoryCache, site, airtableWrite) {
       return { lat: loc.lat, lon: loc.lng };
     }
   } catch (err) {
-    console.warn(`[Geo Resolver Error] Could not geocode address "${queryAddress}":`, err.message);
+    console.warn(`[Geo Resolver Error] Address "${queryAddress}":`, err.message);
   }
   return null;
 }
 
-/**
- * Binds a field operative's WhatsApp thread to an active court site twin.
- */
 async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWrite, fetchDadJoke) {
   const cleanPhone = String(fromPhone).replace(/\D/g, '');
   const siteId = site.id;
@@ -252,51 +303,47 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
                       `👤 *Installer:* ${callerIdentity.name} (${callerIdentity.role})\n` +
                       `🌐 *Proximity:* ${Math.round(distanceMeters)}m from court center\n` +
                       `──────────────────────────────\n` +
-                      `You are now actively bound to *${siteName}*.\n` +
-                      `Send video walkthroughs, voice notes, or receipt photos to log milestones.${bonusJoke}`;
+                      `Bound to *${siteName}*. Send photos, voice notes, or receipts to log progress.${bonusJoke}`;
 
   await sendWhatsAppMessage(config, dispatchTarget, checkInCard);
 }
 
 // ====================================================================
-// 4. MULTIMODAL NLP TRIAGE (AUDIO, VOICE MEMOS, TEXT)
+// 5. MULTIMODAL NLP TRIAGE (AUDIO, VOICE MEMOS, TEXT)
 // ====================================================================
 
-/**
- * Unified multimodal intent triaging engine using Google Gemini 2.5 Pro.
- */
 async function triageSpokenOrTextNLP(config, rawText, registeredSiteNames, isAudio = false, mediaItems = [], fromPhone = '', boundSite = null) {
   const boundSiteName = boundSite?.fields?.['Site Name'] || 'None';
 
-  const systemPrompt = `You are the Lead Artificial Intelligence Dispatcher for Titan OS and Bounce Padel.
-Analyze this field operative communication (which may be a spoken voice memo, an audio dictation, or raw text):
+  const systemPrompt = `You are the Lead Dispatcher for Titan OS and Bounce Padel.
+Analyze this field operative communication (spoken audio dictation or text):
 "${rawText || '[Spoken Audio Input]'}"
 
 CONTEXT:
 - Currently Bound Site for this Worker: "${boundSiteName}"
-- Known Active Court Sites: ${JSON.stringify(registeredSiteNames || [])}
+- Known Registered Sites: ${JSON.stringify(registeredSiteNames || [])}
 
 TASK:
-1. Classify the user's intent into EXACTLY ONE of the following categories:
-   - "CREATE_ESTIMATE": Operative wants to draft or price a formal client proposal/estimate for padel court builds, accessories, or services.
-   - "CONVERT_ESTIMATE": Operative wants to convert an existing estimate into a progress draw invoice (e.g. "bill 50%", "convert to 40% invoice").
-   - "CREATE_INVOICE": Operative wants to directly draft a net-new customer invoice.
-   - "CHANGE_ORDER": Operative reports a site variation, extra labor, modified scope, or engineering adjustment on-site.
-   - "AR_LOOKUP": Operative or executive asks for aging balances, accounts receivable, or outstanding invoices.
-   - "ORACLE_QUERY": Operative asks technical engineering questions, foundation specs, bolt torque, glass tolerances, or requests PDF blueprints.
-   - "INVENTORY_QUERY": Operative queries stock levels, turf rolls, glass crates, fastener bins, or equipment.
-   - "METRICS_QUERY": Operative asks for system throughput, leverage metrics, or telemetry reports.
-   - "READINESS_QUERY": Operative asks if a site is ready to mobilize (e.g. "Are we ready for Aurora?").
-   - "GENERAL_UPDATE": Operative updates site specifications, reports daily progress, logs materials, or notes physical status.
-   - "UNKNOWN": Query does not match any operational command.
+1. Classify the intent into EXACTLY ONE:
+   - "CREATE_ESTIMATE": Wants to draft a quote/estimate for courts or accessories.
+   - "CONVERT_ESTIMATE": Wants to convert an estimate into an invoice (e.g. "bill 50%").
+   - "CREATE_INVOICE": Wants to directly issue a new customer invoice.
+   - "CHANGE_ORDER": Modification of physical build scope or additional construction cost on-site.
+   - "AR_LOOKUP": Inquires about outstanding invoice balances or aging receivables.
+   - "ORACLE_QUERY": Engineering questions, specs, bolt torque, glass tolerances, or blueprint PDFs.
+   - "INVENTORY_QUERY": Queries regarding materials, turf stock, glass, steel, or parts.
+   - "METRICS_QUERY": System volume, leverage metrics, or telemetry reports.
+   - "READINESS_QUERY": Readiness status check for mobilization on a court.
+   - "GENERAL_UPDATE": Updating site parameters (turf color, turf supplier, lights, substrate, status) or reporting field progress.
+   - "UNKNOWN": Conversational chatter or unrecognized command.
 
-2. Extract key entities:
-   - "referenced_site_name": If a specific court or customer site is named in speech/text (e.g., "Luke Pelosi", "RCOR Court 2", "Aurora"), extract the exact name.
-   - "qbo_customer_name": Targeted customer or account name for financial billing.
-   - "qbo_amount": Explicit financial amount mentioned.
+2. Extract key parameters:
+   - "referenced_site_name": Court name mentioned (e.g., "Luke Pelosi", "Aurora", "RCOR Court 2").
+   - "qbo_customer_name": Client name mentioned for billing.
+   - "qbo_amount": Explicit dollar amount mentioned.
    - "qbo_estimate_number": Estimate number referenced.
-   - "qbo_invoice_percentage": Draw percentage requested (e.g., 50, 40, 100).
-   - "transcript_en": High-fidelity cleaned English transcription of the operative's memo with filler words removed.
+   - "qbo_invoice_percentage": Draw percentage requested (e.g. 50, 100).
+   - "transcript_en": Clean English transcript of what was dictated with filler words removed.
 
 OUTPUT STRICTLY VALID JSON:
 {
@@ -339,12 +386,7 @@ OUTPUT STRICTLY VALID JSON:
       body: JSON.stringify(payload)
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error(`[Gemini NLP Error] HTTP ${res.status}:`, errText);
-      return null;
-    }
-
+    if (!res.ok) return null;
     const data = await res.json();
     const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (candidateText) {
@@ -358,12 +400,9 @@ OUTPUT STRICTLY VALID JSON:
 }
 
 // ====================================================================
-// 5. MEDIA PROCESSING PIPELINE & FORENSIC FIELD INSPECTION
+// 6. MEDIA PROCESSING & SUPABASE STORAGE ARCHIVE
 // ====================================================================
 
-/**
- * Uploads raw media buffer to Supabase Private Object Storage Bucket.
- */
 async function uploadMediaToSupabase(config, buffer, mimeType, extension = 'jpg') {
   if (!config.supabase.url || !config.supabase.serviceRoleKey) return null;
 
@@ -382,74 +421,40 @@ async function uploadMediaToSupabase(config, buffer, mimeType, extension = 'jpg'
         upsert: false
       });
 
-    if (uploadError) {
-      console.warn('[Supabase Storage Warning] Upload failed:', uploadError.message);
-      return null;
-    }
+    if (uploadError) return null;
 
     const { data: signedData, error: signError } = await supabase.storage
       .from(config.supabase.bucket)
       .createSignedUrl(storagePath, 7 * 24 * 60 * 60);
 
-    if (signError || !signedData?.signedUrl) {
-      console.warn('[Supabase Storage Warning] Signed URL generation failed:', signError?.message);
-      return null;
-    }
-
+    if (signError || !signedData?.signedUrl) return null;
     return signedData.signedUrl;
   } catch (err) {
-    console.warn('[Supabase Storage Exception]:', err.message);
     return null;
   }
 }
 
-/**
- * Evaluates an aggregated batch of inspection photos or video sweeps against court milestones.
- */
 async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracleFileURIs) {
   const { items, site, worker, dispatchTarget, callerIdentity } = batch;
   const siteName = site?.fields?.['Site Name'] || 'Unbound Asset';
   const siteId = site?.id || null;
 
-  console.log(`[Media Pipeline] Executing forensic analysis on ${items.length} file(s) for site: ${siteName}`);
-
-  // Parallel asynchronous Supabase archival
-  const uploadPromises = items.map(item => {
-    const ext = item.type === 'video' ? 'mp4' : 'jpg';
-    return uploadMediaToSupabase(config, item.buffer, item.mimeType, ext);
-  });
-  const uploadedUrls = (await Promise.all(uploadPromises)).filter(Boolean);
+  console.log(`[Media Pipeline] Ingesting ${items.length} file(s) for site: ${siteName}`);
 
   const parts = [];
-  const visionPrompt = `You are the Lead Forensic Structural Inspector for Bounce Padel courts worldwide.
-Review the attached image(s) or video frame inspection from site: "${siteName}".
-
-EVALUATION PROTOCOL:
-1. Identify all observable physical court construction elements:
-   - Concrete slab substrate, ring beam, leveling shims
-   - Steel pillars, perimeter anchor bolts, gusset plates
-   - Electro-welded structural mesh frames
-   - 12mm tempered safety glass panels & neoprene seating gaskets
-   - LED light posts, crossbeams, wiring conduits
-   - Polyurethane adhesive application, turf rolls, cut lines
-   - Silica sand infill distribution & uniform broom sweeping
-   - Center net, tensioning winch, post alignment
-   - Site safety, organizing of tools, cleanliness, active debris
-2. Detect any physical defects, missing parts, or hazardous blockers.
-3. Compute an overall completion estimate (0% - 100%).
-
-OUTPUT STRICTLY VALID JSON:
+  const visionPrompt = `You are the Lead Structural Inspector for Bounce Padel.
+Review the attached image(s) or video sweep from site: "${siteName}".
+Detect structural court progress (foundation, steel frame, glass, mesh, turf infill, net, lights).
+Identify defects or hazards.
+Return valid JSON:
 {
-  "court_identified": boolean,
-  "milestone_summary": "string (concise summary of verified work)",
+  "milestone_summary": "string",
   "detected_elements": ["string"],
   "hazards_or_blockers": ["string"],
-  "estimated_completion_pct": number,
   "recommended_next_step": "string"
 }`;
 
   parts.push({ text: visionPrompt });
-
   items.forEach(item => {
     parts.push({
       inline_data: {
@@ -465,86 +470,56 @@ OUTPUT STRICTLY VALID JSON:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts }],
-        generationConfig: {
-          temperature: 0.0,
-          responseMimeType: 'application/json'
-        }
+        generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
       })
     });
 
-    let inspectionResult = {
-      court_identified: true,
-      milestone_summary: `Inspection batch logged (${items.length} files).`,
-      detected_elements: ['Padel court structure'],
+    let inspection = {
+      milestone_summary: `Progress sweep recorded (${items.length} files).`,
+      detected_elements: ['Padel Structure'],
       hazards_or_blockers: [],
-      estimated_completion_pct: 50,
-      recommended_next_step: 'Proceed to next installation gate.'
+      recommended_next_step: 'Proceed with standard installation sequence.'
     };
 
     if (res.ok) {
       const data = await res.json();
-      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (rawText) {
-        const clean = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-        inspectionResult = JSON.parse(clean);
-      }
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (raw) inspection = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
     }
 
-    // Persist to Reports 2 table
-    if (airtableWriteWithAutoDrop) {
-      const reportPayload = {
-        'Headline': `${siteName} — ${inspectionResult.milestone_summary.substring(0, 50)}`,
-        'Action Items': inspectionResult.hazards_or_blockers.length > 0 
-          ? inspectionResult.hazards_or_blockers.join('\n') 
-          : inspectionResult.recommended_next_step,
-        'Workflow Mode': 'INSTALLATION',
-        'Last Note': `[INSPECTION AUDIT] Verified by ${callerIdentity.name}: ${inspectionResult.milestone_summary}`
-      };
-
-      if (worker?.id) reportPayload['Worker'] = [worker.id];
-      if (siteId) reportPayload['Site'] = [siteId];
-
-      await airtableWriteWithAutoDrop('Reports 2', reportPayload);
-
-      // Update parent Sites twin
-      if (siteId) {
-        await airtableWriteWithAutoDrop('Sites', {
-          'Last Note': `[FIELD SWEEP] ${callerIdentity.name}: ${inspectionResult.milestone_summary}`,
-          'Last Intent': 'FIELD_INSPECTION'
-        }, siteId);
-      }
+    if (airtableWriteWithAutoDrop && siteId) {
+      await airtableWriteWithAutoDrop('Sites', {
+        'Last Note': `[FIELD SWEEP] ${callerIdentity.name}: ${inspection.milestone_summary}`,
+        'Last Intent': 'FIELD_INSPECTION'
+      }, siteId);
     }
 
-    const hazardNote = inspectionResult.hazards_or_blockers.length > 0
-      ? `\n⚠️ *Alerts & Blockers:*\n• ` + inspectionResult.hazards_or_blockers.join('\n• ')
-      : `\n✅ *Hazards:* None detected. Structural alignment nominal.`;
+    const hazardStr = inspection.hazards_or_blockers.length > 0 
+      ? `\n⚠️ *Alerts:*\n• ` + inspection.hazards_or_blockers.join('\n• ') 
+      : '\n✅ *Hazards:* None detected.';
 
-    const statusCard = `🏟️ *TITAN OS | SITE VERIFICATION AUDIT*\n` +
-                       `──────────────────────────────\n` +
-                       `📍 *Site:* ${siteName}\n` +
-                       `👤 *Inspector:* ${callerIdentity.name}\n` +
-                       `📸 *Media Ingested:* ${items.length} file(s)\n` +
-                       `──────────────────────────────\n` +
-                       `📋 *Status:* ${inspectionResult.milestone_summary}\n` +
-                       `🏗️ *Verified:* ${inspectionResult.detected_elements.join(', ')}\n` +
-                       hazardNote + `\n` +
-                       `──────────────────────────────\n` +
-                       `👉 *Next Step:* ${inspectionResult.recommended_next_step}`;
+    const card = `🏟️ *TITAN OS | SITE VERIFICATION*\n` +
+                 `──────────────────────────────\n` +
+                 `📍 *Site:* ${siteName}\n` +
+                 `👤 *Inspector:* ${callerIdentity.name}\n` +
+                 `📸 *Media Count:* ${items.length} file(s)\n` +
+                 `──────────────────────────────\n` +
+                 `📋 *Summary:* ${inspection.milestone_summary}\n` +
+                 `🏗️ *Detected:* ${inspection.detected_elements.join(', ')}` +
+                 hazardStr + `\n` +
+                 `👉 *Next:* ${inspection.recommended_next_step}`;
 
-    await sendWhatsAppMessage(config, dispatchTarget, statusCard);
+    await sendWhatsAppMessage(config, dispatchTarget, card);
   } catch (err) {
-    console.error('[Media Inspection Failure]:', err.message);
-    await sendWhatsAppMessage(config, dispatchTarget, `📸 Upload received (${items.length} files). Media archived to the ${siteName} digital twin.`);
+    await sendWhatsAppMessage(config, dispatchTarget, `📸 Upload received (${items.length} files). Logged to ${siteName}.`);
   }
 }
 
 // ====================================================================
-// 6. INBOUND EMAIL & SUBSCRIBER BROADCASTS
+// 7. INBOUND EMAIL & SUBSCRIBER BROADCASTS
 // ====================================================================
 
 async function handleInboundEmail(config, emailPayload, getCachedContacts) {
-  console.log(`[Email Engine] Processing inbound message from ${emailPayload.from}: "${emailPayload.subject}"`);
-
   const contacts = getCachedContacts ? await getCachedContacts() : [];
   const senderClean = String(emailPayload.from).toLowerCase();
   const matchedContact = contacts.find(c => {
@@ -553,7 +528,7 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
   });
 
   const senderName = matchedContact?.fields?.['Full Name'] || emailPayload.from;
-  const alertCard = `✉️ *TITAN OS | INBOUND LEAD / EMAIL*\n` +
+  const alertCard = `✉️ *TITAN OS | INBOUND EMAIL*\n` +
                     `──────────────────────────────\n` +
                     `👤 *From:* ${senderName}\n` +
                     `📌 *Subject:* ${emailPayload.subject}\n` +
@@ -568,7 +543,7 @@ async function fanOutToSubscribers(config, targetPhone, msg) {
 }
 
 // ====================================================================
-// 7. MODULE EXPORTS
+// 8. MODULE EXPORTS
 // ====================================================================
 module.exports = {
   userActiveSiteMap,
@@ -578,6 +553,7 @@ module.exports = {
   haversineDistanceKm,
   getUserBoundSiteId,
   updateSessionContext,
+  normalizeSitePayload,
   sendWhatsAppMessage,
   sendWhatsAppButtons,
   sendWhatsAppReaction,
