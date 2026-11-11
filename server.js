@@ -1218,9 +1218,9 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    const rawText = message.text?.body || message.interactive?.button_reply?.title || '';
-    if (message.type === 'text' || message.type === 'interactive' || rawText) {
-      const txt = rawText.trim();
+    const inboundPayloadText = message.text?.body || message.interactive?.button_reply?.title || '';
+    if (message.type === 'text' || message.type === 'interactive' || inboundPayloadText) {
+      const txt = inboundPayloadText.trim();
       const lTxt = txt.toLowerCase();
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
@@ -1602,9 +1602,9 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    const rawText = message.text?.body || message.interactive?.button_reply?.title || '';
-    if (message.type === 'text' || message.type === 'interactive' || rawText) {
-      const txt = rawText.trim();
+    const inboundPayloadText = message.text?.body || message.interactive?.button_reply?.title || '';
+    if (message.type === 'text' || message.type === 'interactive' || inboundPayloadText) {
+      const txt = inboundPayloadText.trim();
       const lTxt = txt.toLowerCase();
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
@@ -1742,9 +1742,7 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Text Engine] Evaluated Intent: ${triage?.intent || 'UNKNOWN'} | Client: ${triage?.qbo_customer_name || 'None'}`);
 
-      const isARQuery = triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar');
-
-      if (isARQuery) {
+      if (triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar')) {
         console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget} (Role: ${callerIdentity.role})`);
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
@@ -1924,123 +1922,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    if (message.type === 'video' || message.type === 'image') {
-      const mediaObj = message[message.type];
-      const mediaId = mediaObj.id;
-      const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
-      
-      if (metrics && metrics.incrementMetric) metrics.incrementMetric('photos_processed');
-
-      if (whatsapp.sendWhatsAppReaction) {
-        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
-      }
-
-      let mediaBuffer = null;
-      if (CONFIG.meta.accessToken && mediaId) {
-        const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-        const metaMediaData = await metaMediaRes.json().catch(() => ({}));
-        if (metaMediaRes.ok && metaMediaData?.url) {
-          const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
-        }
-      }
-
-      if (!mediaBuffer) {
-        console.warn(`[Media Ingress] Failed to download media buffer for id: ${mediaId}`);
-        return;
-      }
-
-      const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
-
-      if (whatsapp.mediaDebounceQueues) {
-        if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
-          whatsapp.mediaDebounceQueues.set(queueKey, {
-            items: [],
-            timer: null,
-            site,
-            worker,
-            dispatchTarget,
-            callerIdentity
-          });
-        }
-
-        const queue = whatsapp.mediaDebounceQueues.get(queueKey);
-        queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
-        
-        if (queue.timer) clearTimeout(queue.timer);
-        queue.timer = setTimeout(async () => {
-          const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
-          whatsapp.mediaDebounceQueues.delete(queueKey);
-          if (!currentBatch || currentBatch.items.length === 0) return;
-          
-          console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
-
-          try {
-            const hasVideo = currentBatch.items.some(i => i.type === 'video');
-            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware|bill|store/i.test(i.caption || ''));
-            
-            let isReceipt = hasReceiptKeyword;
-            let isScreenshot = false;
-            
-            if (!hasVideo && currentBatch.items.length > 0) {
-              try {
-                const firstImg = currentBatch.items[0];
-                const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
-                
-                const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    contents: [{
-                      role: 'user',
-                      parts: [
-                        { text: checkPrompt },
-                        { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } }
-                      ]
-                    }],
-                    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-                  })
-                });
-
-                if (checkRes.ok) {
-                  const checkData = await checkRes.json();
-                  const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-                  if (parsedCheck.is_receipt === true) isReceipt = true;
-                  if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
-                  
-                  if (isScreenshot) {
-                    draftingSessions.set(dispatchTarget, { active: false, context: parsedCheck.ocr_text });
-                    const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
-                    await dispatchOutboundButtons(dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?`, buttons);
-                    return;
-                  }
-                }
-              } catch (e) {
-                console.warn('[Batch Triage] Fast visual classifier bypassed:', e.message);
-              }
-            }
-
-            if (!hasVideo && isReceipt) {
-              if (finance && finance.handleReceiptUpload) {
-                await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
-                return;
-              }
-            }
-
-            if (whatsapp && whatsapp.processMediaBatch) {
-              await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
-            } else if (finance && finance.handleReceiptUpload) {
-              await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
-            }
-          } catch (batchErr) {
-            console.error('[Batch Engine Failure]:', batchErr);
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
-          }
-        }, 3500);
-      }
-      return;
-    }
-    
   } catch (err) {
     console.error('[Runtime Exception in /webhook]:', err);
   }
@@ -2180,10 +2061,8 @@ app.get('/health', (req, res) => {
 // 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
 // ====================================================================
 
-function bootServer(port, retries = 5) {
-  const listener = app.listen(port, '0.0.0.0');
-
-  listener.once('listening', async () => {
+function startServer(port, retries = 5) {
+  const server = app.listen(port, '0.0.0.0', async () => {
     console.log(`[Core Engine] System online and listening on PORT ${port}`);
     try {
       await getCachedSites();
@@ -2201,7 +2080,7 @@ function bootServer(port, retries = 5) {
     }
   });
 
-  listener.once('error', (err) => {
+  server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.warn(`[Core Engine] Port ${port} is currently locked by the OS (EADDRINUSE).`);
       if (retries === 0) {
@@ -2210,7 +2089,7 @@ function bootServer(port, retries = 5) {
       }
       console.log(`[Core Engine] Retrying port bind in 1.5 seconds... (${retries} attempts left)`);
       setTimeout(() => {
-        bootServer(port, retries - 1);
+        startServer(port, retries - 1);
       }, 1500);
     } else {
       console.error('[Core Engine] Fatal listener error:', err);
@@ -2220,7 +2099,7 @@ function bootServer(port, retries = 5) {
 
   process.on('SIGTERM', () => {
     console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
-    listener.close(() => {
+    server.close(() => {
       process.exit(0);
     });
   });
@@ -2248,7 +2127,7 @@ if (require.main === module || !globalThis.__TITAN_BOOTED__) {
     setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
   }
 
-  bootServer(PORT);
+  startServer(PORT);
 }
 
 module.exports = app;
