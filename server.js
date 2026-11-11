@@ -1796,7 +1796,12 @@ app.get('/health', (req, res) => {
 // 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
 // ====================================================================
 
-process.on('uncaughtException', (err) => console.error('[CRITICAL] Uncaught Exception:', err));
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+  // FATAL: We must exit on uncaught exceptions so the container can cleanly reboot and release ports.
+  process.exit(1);
+});
+
 process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
 console.log(`====================================================================`);
