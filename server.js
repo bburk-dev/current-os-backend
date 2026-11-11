@@ -938,7 +938,7 @@ app.post('/webhook', async (req, res) => {
         const metaMediaData = await metaMediaRes.json().catch(() => ({}));
         if (metaMediaRes.ok && metaMediaData?.url) {
           const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+          if (mediaBufferRes.ok) audioBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
         }
       }
 
@@ -1796,7 +1796,9 @@ app.get('/health', (req, res) => {
 // 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
 // ====================================================================
 
-if (require.main === module) {
+if (!globalThis.__TITAN_BOOTED__) {
+  globalThis.__TITAN_BOOTED__ = true;
+
   process.on('uncaughtException', (err) => {
     console.error('[CRITICAL] Uncaught Exception:', err);
     process.exit(1);
@@ -1836,7 +1838,6 @@ if (require.main === module) {
     }
   });
 
-  // Force clean shutdown on termination signals
   process.on('SIGTERM', () => {
     console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
     server.close(() => {
