@@ -323,7 +323,7 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
   const parts = [{ text: prompt }];
   batch.items.forEach(item => {
     parts.push({
-      inlineData: { mimeType: item.mimeType, data: item.buffer.toString('base64') }
+      inline_data: { mime_type: item.mimeType, data: item.buffer.toString('base64') }
     });
   });
 
