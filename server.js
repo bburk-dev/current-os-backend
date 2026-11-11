@@ -28,6 +28,7 @@ try { require('dotenv').config(); } catch (e) {}
 
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
+const cluster = require('cluster');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
@@ -1494,7 +1495,9 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Text Engine] Evaluated Intent: ${triage?.intent || 'UNKNOWN'} | Client: ${triage?.qbo_customer_name || 'None'}`);
 
-      if (triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar')) {
+      const isARQuery = triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar');
+
+      if (isARQuery) {
         console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget} (Role: ${callerIdentity.role})`);
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
@@ -1562,7 +1565,7 @@ app.post('/webhook', async (req, res) => {
         // DYNAMIC R/W INTERCEPTION (Text)
         const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
         const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || lTxt.includes('update');
-        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished'));
+        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished') || isUpdate);
         
         if (isQuestion || isUpdate || isActionable) {
            console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
