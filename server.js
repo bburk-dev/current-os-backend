@@ -1250,14 +1250,32 @@ app.post('/webhook', async (req, res) => {
                                    const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
                                    const extractedFields = JSON.parse(cleanJsonStr);
                                    
-                                   // NORMALIZE KEYS & TITLE CASE VALUES AGAINST CACHED SCHEMA
-                                   const normalizedFields = whatsapp.normalizeSitePayload 
-                                     ? whatsapp.normalizeSitePayload(extractedFields, allSites)
-                                     : extractedFields;
-
-                                   for (let [key, value] of Object.entries(normalizedFields)) {
-                                       payloadToPatch[key] = value;
-                                       updatedList.push(`${key}: *${value}*`);
+                                   // 🚨 AIRTABLE SCHEMA NORMALIZER 🚨
+                                   for (let [key, value] of Object.entries(extractedFields)) {
+                                       if (value !== null && value !== undefined && value !== '') {
+                                           let k = key;
+                                           let v = String(value).trim();
+                                           
+                                           // Reconcile common aliases to precise Airtable column headers
+                                           if (/turf color/i.test(k)) k = 'Turf Colour';
+                                           if (/turf supplier/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
+                                           if (/structure color/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
+                                           
+                                           // Typecast Booleans to proper strings for Single Select if applicable, or proper boolean for checkboxes
+                                           if (v.toLowerCase() === 'true' || v.toLowerCase() === 'yes') v = 'Yes';
+                                           if (v.toLowerCase() === 'false' || v.toLowerCase() === 'no') v = 'No';
+                                           
+                                           // Force Title Case for specific Single Select drop-downs to bypass 422 errors
+                                           if (v.toLowerCase() === 'green') v = 'Green';
+                                           if (v.toLowerCase() === 'blue') v = 'Blue';
+                                           if (v.toLowerCase() === 'terracotta') v = 'Terracotta';
+                                           if (v.toLowerCase() === 'black') v = 'Black';
+                                           if (v.toLowerCase() === 'mondo') v = 'Mondo';
+                                           if (v.toLowerCase() === 'real turf' || v.toLowerCase() === 'realturf') v = 'Real Turf';
+                                           
+                                           payloadToPatch[k] = v;
+                                           updatedList.push(`${k}: *${v}*`);
+                                       }
                                    }
                                } catch (parseErr) {
                                    console.warn('[Dynamic Extraction Parse Error]', parseErr.message);
@@ -1645,14 +1663,32 @@ app.post('/webhook', async (req, res) => {
                                const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
                                const extractedFields = JSON.parse(cleanJsonStr);
                                
-                               // NORMALIZE KEYS & TITLE CASE VALUES AGAINST CACHED SCHEMA
-                               const normalizedFields = whatsapp.normalizeSitePayload 
-                                 ? whatsapp.normalizeSitePayload(extractedFields, allSites)
-                                 : extractedFields;
-
-                               for (let [key, value] of Object.entries(normalizedFields)) {
-                                   payloadToPatch[key] = value;
-                                   updatedFieldsList.push(`${key}: *${value}*`);
+                               // 🚨 AIRTABLE SCHEMA NORMALIZER 🚨
+                               for (let [key, value] of Object.entries(extractedFields)) {
+                                   if (value !== null && value !== undefined && value !== '') {
+                                       let k = key;
+                                       let v = String(value).trim();
+                                       
+                                       // Reconcile common aliases to precise Airtable column headers
+                                       if (/turf color/i.test(k)) k = 'Turf Colour';
+                                       if (/turf supplier/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
+                                       if (/structure color/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
+                                       
+                                       // Typecast Booleans to proper strings for Single Select if applicable, or proper boolean for checkboxes
+                                       if (v.toLowerCase() === 'true' || v.toLowerCase() === 'yes') v = 'Yes';
+                                       if (v.toLowerCase() === 'false' || v.toLowerCase() === 'no') v = 'No';
+                                       
+                                       // Force Title Case for specific Single Select drop-downs to bypass 422 errors
+                                       if (v.toLowerCase() === 'green') v = 'Green';
+                                       if (v.toLowerCase() === 'blue') v = 'Blue';
+                                       if (v.toLowerCase() === 'terracotta') v = 'Terracotta';
+                                       if (v.toLowerCase() === 'black') v = 'Black';
+                                       if (v.toLowerCase() === 'mondo') v = 'Mondo';
+                                       if (v.toLowerCase() === 'real turf' || v.toLowerCase() === 'realturf') v = 'Real Turf';
+                                       
+                                       payloadToPatch[k] = v;
+                                       updatedFieldsList.push(`${k}: *${v}*`);
+                                   }
                                }
                            } catch (parseErr) {
                                console.warn('[Dynamic Extraction Parse Error]', parseErr.message);
@@ -1750,25 +1786,39 @@ app.post('/api/telemetry/iot', async (req, res) => {
   }
 });
 
+// ====================================================================
+// G. COMMERCIAL EMAIL INGRESS (ZAPIER / MAKE WEBHOOK TARGET)
+// ====================================================================
 app.post('/api/inbound-email', async (req, res) => {
   res.sendStatus(200);
 
   try {
-    const emailPayload = {
-      from: req.body.from || '',
-      to: req.body.to || '',
-      cc: req.body.cc || '',
-      subject: req.body.subject || 'No Subject',
-      text: req.body.text || req.body.body_plain || '',
-      html: req.body.html || req.body.body_html || ''
-    };
+    // Aggressive payload traversing to handle different webhook providers
+    const b = req.body || {};
+    
+    // Check multiple common payload structures
+    const fromAddr = b.from || b.sender || b.From || '';
+    const subjectLine = b.subject || b.Subject || 'No Subject';
+    
+    // Prefer plain text, fallback to html, fallback to stripped text
+    const rawText = b.text || b.body_plain || b.TextBody || b.html || b.body_html || b.HtmlBody || '';
+    
+    // Strip basic HTML if we had to fallback
+    const cleanText = rawText.replace(/<[^>]*>?/gm, '').trim();
 
-    if (!emailPayload.from || (!emailPayload.text && !emailPayload.html)) {
-      console.warn('[Email Ingress] Ignored malformed email payload.');
+    if (!fromAddr || !cleanText) {
+      console.warn('[Email Ingress] Ignored malformed email payload:', JSON.stringify(b).substring(0, 100));
       return;
     }
 
-    console.log(`[Email Ingress] Processing email from ${emailPayload.from}: "${emailPayload.subject}"`);
+    console.log(`[Email Ingress] Processing email from ${fromAddr}: "${subjectLine}"`);
+    
+    const emailPayload = {
+      from: fromAddr,
+      subject: subjectLine,
+      text: cleanText
+    };
+
     if (whatsapp && whatsapp.handleInboundEmail) {
       await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
     }
