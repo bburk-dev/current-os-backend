@@ -39,8 +39,7 @@ const metrics = require('./metrics'); // Telemetry Layer
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
 // ====================================================================
-// CRITICAL FIX: Force port 10000 to avoid Render internal healthcheck conflicts on 3000
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 
 const CONFIG = {
   port: PORT,
@@ -939,7 +938,7 @@ app.post('/webhook', async (req, res) => {
         const metaMediaData = await metaMediaRes.json().catch(() => ({}));
         if (metaMediaRes.ok && metaMediaData?.url) {
           const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-          if (mediaBufferRes.ok) audioBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
         }
       }
 
@@ -1797,48 +1796,53 @@ app.get('/health', (req, res) => {
 // 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
 // ====================================================================
 
-process.on('uncaughtException', (err) => {
-  console.error('[CRITICAL] Uncaught Exception:', err);
-  // FATAL: We must exit on uncaught exceptions so the container can cleanly reboot and release ports.
-  process.exit(1);
-});
+if (require.main === module) {
+  process.on('uncaughtException', (err) => {
+    console.error('[CRITICAL] Uncaught Exception:', err);
+    process.exit(1);
+  });
+  
+  process.on('unhandledRejection', (reason) => {
+    console.error('[CRITICAL] Unhandled Rejection:', reason);
+  });
 
-process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
+  console.log(`====================================================================`);
+  console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`====================================================================`);
 
-console.log(`====================================================================`);
-console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
-console.log(`====================================================================`);
+  startFridayNewsletterCron();
 
-startFridayNewsletterCron();
+  if (oracle && oracle.syncOracleDocs) {
+    oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
+  }
 
-if (oracle && oracle.syncOracleDocs) {
-  oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-  setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
+  const server = app.listen(PORT, '0.0.0.0', async () => {
+    console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
+    try {
+      await getCachedSites();
+      await getCachedWorkers();
+      await getCachedContacts();
+      await getCachedOpenAssignments();
+      
+      if (inventory && inventory.refreshInventoryCache) {
+        await inventory.refreshInventoryCache(CONFIG);
+      }
+      
+      await hydrateQBOCache();
+
+    } catch (err) {
+      console.error(`[Cache Hydration Error]:`, err.message);
+    }
+  });
+
+  // Force clean shutdown on termination signals
+  process.on('SIGTERM', () => {
+    console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
+    server.close(() => {
+      process.exit(0);
+    });
+  });
 }
 
-const server = app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
-  try {
-    await getCachedSites();
-    await getCachedWorkers();
-    await getCachedContacts();
-    await getCachedOpenAssignments();
-    
-    if (inventory && inventory.refreshInventoryCache) {
-      await inventory.refreshInventoryCache(CONFIG);
-    }
-    
-    await hydrateQBOCache();
-
-  } catch (err) {
-    console.error(`[Cache Hydration Error]:`, err.message);
-  }
-});
-
-// Force clean shutdown on termination signals
-process.on('SIGTERM', () => {
-  console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
-  server.close(() => {
-    process.exit(0);
-  });
-});
+module.exports = app;
