@@ -1523,7 +1523,7 @@ app.post('/webhook', async (req, res) => {
                }
            }
            
-           // Fallback: Standard General Update Logic
+           // 3. Fallback General Update Logic
            await airtableWriteWithAutoDrop('Sites', {
              'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
              'Last Intent': 'GENERAL_UPDATE'
