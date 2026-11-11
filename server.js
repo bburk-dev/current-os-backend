@@ -938,7 +938,7 @@ app.post('/webhook', async (req, res) => {
         const metaMediaData = await metaMediaRes.json().catch(() => ({}));
         if (metaMediaRes.ok && metaMediaData?.url) {
           const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-          if (mediaBufferRes.ok) audioBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
         }
       }
 
@@ -1796,54 +1796,55 @@ app.get('/health', (req, res) => {
 // 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
 // ====================================================================
 
-if (!globalThis.__TITAN_BOOTED__) {
-  globalThis.__TITAN_BOOTED__ = true;
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+  process.exit(1);
+});
 
-  process.on('uncaughtException', (err) => {
-    console.error('[CRITICAL] Uncaught Exception:', err);
-    process.exit(1);
-  });
-  
-  process.on('unhandledRejection', (reason) => {
-    console.error('[CRITICAL] Unhandled Rejection:', reason);
-  });
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRITICAL] Unhandled Rejection:', reason);
+});
 
-  console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
-  console.log(`====================================================================`);
+console.log(`====================================================================`);
+console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+console.log(`====================================================================`);
 
-  startFridayNewsletterCron();
+startFridayNewsletterCron();
 
-  if (oracle && oracle.syncOracleDocs) {
-    oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
-  }
-
-  const server = app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
-    try {
-      await getCachedSites();
-      await getCachedWorkers();
-      await getCachedContacts();
-      await getCachedOpenAssignments();
-      
-      if (inventory && inventory.refreshInventoryCache) {
-        await inventory.refreshInventoryCache(CONFIG);
-      }
-      
-      await hydrateQBOCache();
-
-    } catch (err) {
-      console.error(`[Cache Hydration Error]:`, err.message);
-    }
-  });
-
-  process.on('SIGTERM', () => {
-    console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
-    server.close(() => {
-      process.exit(0);
-    });
-  });
+if (oracle && oracle.syncOracleDocs) {
+  oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+  setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
 }
+
+const listener = app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
+  try {
+    await getCachedSites();
+    await getCachedWorkers();
+    await getCachedContacts();
+    await getCachedOpenAssignments();
+    
+    if (inventory && inventory.refreshInventoryCache) {
+      await inventory.refreshInventoryCache(CONFIG);
+    }
+    
+    await hydrateQBOCache();
+  } catch (err) {
+    console.error(`[Cache Hydration Error]:`, err.message);
+  }
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.warn(`[Core Engine] Port ${PORT} is already in use. A listener is already active.`);
+  } else {
+    console.error('[Core Engine] Listener Error:', err);
+  }
+});
+
+process.on('SIGTERM', () => {
+  console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
+  listener.close(() => {
+    process.exit(0);
+  });
+});
 
 module.exports = app;
