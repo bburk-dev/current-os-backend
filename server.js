@@ -1040,28 +1040,64 @@ app.post('/webhook', async (req, res) => {
 
           if (spokenTriage.intent === 'UNKNOWN' || spokenTriage.intent === 'GENERAL_UPDATE') {
             const transcript = spokenTriage.transcript_en || '';
-            const isActionable = transcript.length > 10 && (transcript.includes('need') || transcript.includes('broken') || transcript.includes('missing') || transcript.includes('finished') || transcript.includes('update site'));
+            const transcriptLower = transcript.toLowerCase();
             
-            if (isActionable) {
+            // Dynamic DYNAMIC R/W INTERCEPTION (Audio)
+            const isQuestion = transcriptLower.includes('what') || transcriptLower.includes('who') || transcriptLower.includes('when') || transcriptLower.includes('how') || transcriptLower.includes('tell me') || transcript.includes('?');
+            const isUpdate = transcriptLower.includes('update site') || transcriptLower.includes('change site') || transcriptLower.includes('set site');
+            const isActionable = transcriptLower.length > 10 && (transcriptLower.includes('need') || transcriptLower.includes('broken') || transcriptLower.includes('missing') || transcriptLower.includes('finished'));
+            
+            if (isQuestion || isUpdate || isActionable) {
                if (!boundSite) {
                  if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
                  await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at?`);
                  return;
                }
 
-               // NEW: Dynamic Column Extraction via Gemini
-               if (transcript.toLowerCase().includes('update site')) {
-                   console.log(`[Text Engine] Site Update phrase detected. Extracting dynamic columns for ${boundSite.fields['Site Name']}...`);
+               // 1. DYNAMIC READ: Answer questions from Airtable Database
+               if (isQuestion && !isUpdate) {
+                   console.log(`[Audio Engine] Site Query phrase detected. Querying digital twin for ${boundSite.fields['Site Name']}...`);
                    try {
-                       const extractionPrompt = `You are extracting data to patch an Airtable database row for a construction site.
+                       const queryPrompt = `You are Titan OS, assisting a field worker.
+                       The user asked: "${transcript}"
+                       Here is the current database record for their active site (${boundSite.fields['Site Name']}):
+                       ${JSON.stringify(boundSite.fields, null, 2)}
+                       
+                       Answer their question accurately and concisely using ONLY the data provided above. If the data is missing or empty, state that it is not documented in the ledger. Do not hallucinate.`;
+                       
+                       const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                           method: 'POST',
+                           headers: { 'Content-Type': 'application/json' },
+                           body: JSON.stringify({
+                             contents: [{ role: 'user', parts: [{ text: queryPrompt }] }],
+                             generationConfig: { temperature: 0.2 }
+                           })
+                       });
+                       
+                       if (geminiRes.ok) {
+                           const aiData = await geminiRes.json();
+                           const answer = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
+                           if (answer) {
+                               await dispatchOutboundWhatsApp(dispatchTarget, `🏟️ *${boundSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
+                               return;
+                           }
+                       }
+                   } catch (e) {
+                       console.warn('[Site Query Failed]', e.message);
+                   }
+               }
+
+               // 2. DYNAMIC WRITE: Arbitrary Column Extraction
+               if (isUpdate) {
+                   console.log(`[Audio Engine] Site Update phrase detected. Extracting dynamic columns for ${boundSite.fields['Site Name']}...`);
+                   try {
+                       const extractionPrompt = `You are an AI extracting data to patch an Airtable database row for the 'Sites' table.
                        Read the following transcript: "${transcript}"
                        
-                       Extract any values that correspond to the following columns (return ONLY valid JSON):
-                       {
-                         "Turf Color": "The color of the turf mentioned (e.g. Green, Blue), or null if not mentioned",
-                         "Turf Supplier": "The name of the turf supplier mentioned (e.g. Mondo, SuperTurf), or null if not mentioned",
-                         "Lights": "The status or detail of the lights (e.g. Installed, 4 Poles, Pending), or null if not mentioned"
-                       }`;
+                       Extract ANY field updates requested by the user.
+                       Return ONLY a valid JSON object where the keys are the exact field names being updated and the values are the new data.
+                       You may extract ANY field mentioned (e.g., "Turf Color", "Turf Supplier", "Lights", "Site Status", "Workflow Mode", "Environment", "Substrate", etc.).
+                       Do not include fields that were not explicitly mentioned for updating. Return {} if none are found.`;
                        
                        const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
                            method: 'POST',
@@ -1081,16 +1117,23 @@ app.post('/webhook', async (req, res) => {
                            const aiData = await geminiRes.json();
                            const extractedJsonStr = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
                            if (extractedJsonStr) {
-                               const extractedFields = JSON.parse(extractedJsonStr);
-                               if (extractedFields["Turf Color"]) payloadToPatch["Turf Color"] = extractedFields["Turf Color"];
-                               if (extractedFields["Turf Supplier"]) payloadToPatch["Turf Supplier"] = extractedFields["Turf Supplier"];
-                               if (extractedFields["Lights"]) payloadToPatch["Lights"] = extractedFields["Lights"];
+                               try {
+                                   const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+                                   const extractedFields = JSON.parse(cleanJsonStr);
+                                   for (const [key, value] of Object.entries(extractedFields)) {
+                                       if (value !== null && value !== undefined && value !== '') {
+                                           payloadToPatch[key] = value;
+                                       }
+                                   }
+                               } catch (parseErr) {
+                                   console.warn('[Dynamic Extraction Parse Error]', parseErr.message);
+                               }
                            }
                        }
                        
                        await airtableWriteWithAutoDrop('Sites', payloadToPatch, boundSite.id);
                        if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-                       await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger and updated site specifications.`);
+                       await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger and dynamically updated specifications.`);
                        return;
                        
                    } catch (e) {
@@ -1098,7 +1141,7 @@ app.post('/webhook', async (req, res) => {
                    }
                }
                
-               // Fallback: Standard General Update Logic
+               // 3. Fallback General Update Logic
                await airtableWriteWithAutoDrop('Sites', {
                  'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
                  'Last Intent': 'GENERAL_UPDATE'
@@ -1381,9 +1424,13 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (!triage || triage.intent === 'UNKNOWN' || triage.intent === 'GENERAL_UPDATE') {
-        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished') || lTxt.includes('update site'));
         
-        if (isActionable) {
+        // DYNAMIC R/W INTERCEPTION (Text)
+        const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
+        const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site');
+        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished'));
+        
+        if (isQuestion || isUpdate || isActionable) {
            console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
            if (!boundSite) {
              if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: txt });
@@ -1391,19 +1438,50 @@ app.post('/webhook', async (req, res) => {
              return;
            }
 
-           // NEW: Dynamic Column Extraction via Gemini
-           if (lTxt.includes('update site')) {
+           // 1. DYNAMIC READ: Answer questions from Airtable Database
+           if (isQuestion && !isUpdate) {
+               console.log(`[Text Engine] Site Query phrase detected. Querying digital twin for ${boundSite.fields['Site Name']}...`);
+               try {
+                   const queryPrompt = `You are Titan OS, assisting a field worker.
+                   The user asked: "${txt}"
+                   Here is the current database record for their active site (${boundSite.fields['Site Name']}):
+                   ${JSON.stringify(boundSite.fields, null, 2)}
+                   
+                   Answer their question accurately and concisely using ONLY the data provided above. If the data is missing or empty, state that it is not documented in the ledger. Do not hallucinate.`;
+                   
+                   const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                       method: 'POST',
+                       headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify({
+                         contents: [{ role: 'user', parts: [{ text: queryPrompt }] }],
+                         generationConfig: { temperature: 0.2 }
+                       })
+                   });
+                   
+                   if (geminiRes.ok) {
+                       const aiData = await geminiRes.json();
+                       const answer = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
+                       if (answer) {
+                           await dispatchOutboundWhatsApp(dispatchTarget, `🏟️ *${boundSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
+                           return;
+                       }
+                   }
+               } catch (e) {
+                   console.warn('[Site Query Failed]', e.message);
+               }
+           }
+
+           // 2. DYNAMIC WRITE: Arbitrary Column Extraction
+           if (isUpdate) {
                console.log(`[Text Engine] Site Update phrase detected. Extracting dynamic columns for ${boundSite.fields['Site Name']}...`);
                try {
-                   const extractionPrompt = `You are extracting data to patch an Airtable database row for a construction site.
+                   const extractionPrompt = `You are an AI extracting data to patch an Airtable database row for the 'Sites' table.
                    Read the following transcript: "${txt}"
                    
-                   Extract any values that correspond to the following columns (return ONLY valid JSON):
-                   {
-                     "Turf Color": "The color of the turf mentioned (e.g. Green, Blue), or null if not mentioned",
-                     "Turf Supplier": "The name of the turf supplier mentioned (e.g. Mondo, SuperTurf), or null if not mentioned",
-                     "Lights": "The status or detail of the lights (e.g. Installed, 4 Poles, Pending), or null if not mentioned"
-                   }`;
+                   Extract ANY field updates requested by the user.
+                   Return ONLY a valid JSON object where the keys are the exact field names being updated and the values are the new data.
+                   You may extract ANY field mentioned (e.g., "Turf Color", "Turf Supplier", "Lights", "Site Status", "Workflow Mode", "Environment", "Substrate", etc.).
+                   Do not include fields that were not explicitly mentioned for updating. Return {} if none are found.`;
                    
                    const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
                        method: 'POST',
@@ -1423,16 +1501,23 @@ app.post('/webhook', async (req, res) => {
                        const aiData = await geminiRes.json();
                        const extractedJsonStr = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
                        if (extractedJsonStr) {
-                           const extractedFields = JSON.parse(extractedJsonStr);
-                           if (extractedFields["Turf Color"]) payloadToPatch["Turf Color"] = extractedFields["Turf Color"];
-                           if (extractedFields["Turf Supplier"]) payloadToPatch["Turf Supplier"] = extractedFields["Turf Supplier"];
-                           if (extractedFields["Lights"]) payloadToPatch["Lights"] = extractedFields["Lights"];
+                           try {
+                               const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+                               const extractedFields = JSON.parse(cleanJsonStr);
+                               for (const [key, value] of Object.entries(extractedFields)) {
+                                   if (value !== null && value !== undefined && value !== '') {
+                                       payloadToPatch[key] = value;
+                                   }
+                               }
+                           } catch (parseErr) {
+                               console.warn('[Dynamic Extraction Parse Error]', parseErr.message);
+                           }
                        }
                    }
                    
                    await airtableWriteWithAutoDrop('Sites', payloadToPatch, boundSite.id);
                    if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger and updated site specifications.`);
+                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger and dynamically updated specifications.`);
                    return;
                    
                } catch (e) {
@@ -1440,7 +1525,7 @@ app.post('/webhook', async (req, res) => {
                }
            }
            
-           // Fallback: Standard General Update Logic
+           // 3. Fallback General Update Logic
            await airtableWriteWithAutoDrop('Sites', {
              'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
              'Last Intent': 'GENERAL_UPDATE'
