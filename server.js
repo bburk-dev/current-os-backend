@@ -921,6 +921,123 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
+    if (message.type === 'video' || message.type === 'image' || message.type === 'document') {
+      const mediaObj = message[message.type];
+      const mediaId = mediaObj.id;
+      const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
+      
+      if (metrics && metrics.incrementMetric) metrics.incrementMetric('photos_processed');
+
+      if (whatsapp.sendWhatsAppReaction) {
+        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
+      }
+
+      let mediaBuffer = null;
+      if (CONFIG.meta.accessToken && mediaId) {
+        const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+        const metaMediaData = await metaMediaRes.json().catch(() => ({}));
+        if (metaMediaRes.ok && metaMediaData?.url) {
+          const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+        }
+      }
+
+      if (!mediaBuffer) {
+        console.warn(`[Media Ingress] Failed to download media buffer for id: ${mediaId}`);
+        return;
+      }
+
+      const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
+
+      if (whatsapp.mediaDebounceQueues) {
+        if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
+          whatsapp.mediaDebounceQueues.set(queueKey, {
+            items: [],
+            timer: null,
+            site,
+            worker,
+            dispatchTarget,
+            callerIdentity
+          });
+        }
+
+        const queue = whatsapp.mediaDebounceQueues.get(queueKey);
+        queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
+        
+        if (queue.timer) clearTimeout(queue.timer);
+        queue.timer = setTimeout(async () => {
+          const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
+          whatsapp.mediaDebounceQueues.delete(queueKey);
+          if (!currentBatch || currentBatch.items.length === 0) return;
+          
+          console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
+
+          try {
+            const hasVideo = currentBatch.items.some(i => i.type === 'video');
+            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware|bill|store/i.test(i.caption || ''));
+            
+            let isReceipt = hasReceiptKeyword;
+            let isScreenshot = false;
+            
+            if (!hasVideo && currentBatch.items.length > 0) {
+              try {
+                const firstImg = currentBatch.items[0];
+                const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
+                
+                const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{
+                      role: 'user',
+                      parts: [
+                        { text: checkPrompt },
+                        { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } }
+                      ]
+                    }],
+                    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+                  })
+                });
+
+                if (checkRes.ok) {
+                  const checkData = await checkRes.json();
+                  const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+                  if (parsedCheck.is_receipt === true) isReceipt = true;
+                  if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
+                  
+                  if (isScreenshot) {
+                    draftingSessions.set(dispatchTarget, { active: false, context: parsedCheck.ocr_text });
+                    const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
+                    await dispatchOutboundButtons(dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?`, buttons);
+                    return;
+                  }
+                }
+              } catch (e) {
+                console.warn('[Batch Triage] Fast visual classifier bypassed:', e.message);
+              }
+            }
+
+            if (!hasVideo && isReceipt) {
+              if (finance && finance.handleReceiptUpload) {
+                await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+                return;
+              }
+            }
+
+            if (whatsapp && whatsapp.processMediaBatch) {
+              await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
+            } else if (finance && finance.handleReceiptUpload) {
+              await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+            }
+          } catch (batchErr) {
+            console.error('[Batch Engine Failure]:', batchErr);
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
+          }
+        }, 3500);
+      }
+      return;
+    }
+
     if (message.type === 'audio' || message.type === 'voice') {
       const mediaObj = message[message.type];
       const mediaId = mediaObj?.id;
@@ -1132,28 +1249,14 @@ app.post('/webhook', async (req, res) => {
                                    const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
                                    const extractedFields = JSON.parse(cleanJsonStr);
                                    
-                                   // 🚨 AIRTABLE SCHEMA NORMALIZER 🚨
-                                   for (let [key, value] of Object.entries(extractedFields)) {
-                                       if (value !== null && value !== undefined && value !== '') {
-                                           let k = key;
-                                           let v = String(value).trim();
-                                           
-                                           // Reconcile common aliases to precise Airtable column headers
-                                           if (/turf color/i.test(k)) k = 'Turf Colour';
-                                           if (/turf supplier/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
-                                           if (/structure color/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
-                                           
-                                           // Force Title Case for Single Select drop-downs to bypass 422 errors
-                                           if (v.toLowerCase() === 'green') v = 'Green';
-                                           if (v.toLowerCase() === 'blue') v = 'Blue';
-                                           if (v.toLowerCase() === 'terracotta') v = 'Terracotta';
-                                           if (v.toLowerCase() === 'black') v = 'Black';
-                                           if (v.toLowerCase() === 'mondo') v = 'Mondo';
-                                           if (v.toLowerCase() === 'real turf' || v.toLowerCase() === 'realturf') v = 'Real Turf';
-                                           
-                                           payloadToPatch[k] = v;
-                                           updatedList.push(`${k}: *${v}*`);
-                                       }
+                                   // NORMALIZE KEYS & TITLE CASE VALUES AGAINST CACHED SCHEMA
+                                   const normalizedFields = whatsapp.normalizeSitePayload 
+                                     ? whatsapp.normalizeSitePayload(extractedFields, allSites)
+                                     : extractedFields;
+
+                                   for (let [key, value] of Object.entries(normalizedFields)) {
+                                       payloadToPatch[key] = value;
+                                       updatedList.push(`${key}: *${value}*`);
                                    }
                                } catch (parseErr) {
                                    console.warn('[Dynamic Extraction Parse Error]', parseErr.message);
@@ -1391,9 +1494,7 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Text Engine] Evaluated Intent: ${triage?.intent || 'UNKNOWN'} | Client: ${triage?.qbo_customer_name || 'None'}`);
 
-      const isARQuery = triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar');
-
-      if (isARQuery) {
+      if (triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar')) {
         console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget} (Role: ${callerIdentity.role})`);
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
@@ -1513,8 +1614,8 @@ app.post('/webhook', async (req, res) => {
                    
                    Extract ANY field updates requested by the user.
                    Return ONLY a valid JSON object where the keys are the exact field names being updated and the values are the new data.
-                   You may extract ANY field mentioned.
-                   Examples of valid keys include: "Turf Colour", "Supplier", "Lights", "Site Status", "Workflow Mode", "Environment", "Substrate".
+                   You may extract ANY field mentioned. 
+                   Examples of valid keys include (but are not limited to): "Turf Colour", "Supplier", "Lights", "Site Status", "Workflow Mode", "Environment", "Substrate".
                    Do not include fields that were not explicitly mentioned for updating. Return {} if none are found.`;
                    
                    const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
@@ -1541,25 +1642,14 @@ app.post('/webhook', async (req, res) => {
                                const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
                                const extractedFields = JSON.parse(cleanJsonStr);
                                
-                               for (let [key, value] of Object.entries(extractedFields)) {
-                                   if (value !== null && value !== undefined && value !== '') {
-                                       let k = key;
-                                       let v = String(value).trim();
-                                       
-                                       if (/turf color/i.test(k)) k = 'Turf Colour';
-                                       if (/turf supplier/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
-                                       if (/structure color/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
-                                       
-                                       if (v.toLowerCase() === 'green') v = 'Green';
-                                       if (v.toLowerCase() === 'blue') v = 'Blue';
-                                       if (v.toLowerCase() === 'terracotta') v = 'Terracotta';
-                                       if (v.toLowerCase() === 'black') v = 'Black';
-                                       if (v.toLowerCase() === 'mondo') v = 'Mondo';
-                                       if (v.toLowerCase() === 'real turf' || v.toLowerCase() === 'realturf') v = 'Real Turf';
-                                       
-                                       payloadToPatch[k] = v;
-                                       updatedFieldsList.push(`${k}: *${v}*`);
-                                   }
+                               // NORMALIZE KEYS & TITLE CASE VALUES AGAINST CACHED SCHEMA
+                               const normalizedFields = whatsapp.normalizeSitePayload 
+                                 ? whatsapp.normalizeSitePayload(extractedFields, allSites)
+                                 : extractedFields;
+
+                               for (let [key, value] of Object.entries(normalizedFields)) {
+                                   payloadToPatch[key] = value;
+                                   updatedFieldsList.push(`${key}: *${value}*`);
                                }
                            } catch (parseErr) {
                                console.warn('[Dynamic Extraction Parse Error]', parseErr.message);
