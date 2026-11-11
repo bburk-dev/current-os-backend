@@ -30,8 +30,13 @@ async function syncOracleDocs(config, setOracleFileURIs = null) {
   const endpoint = config?.airtable?.endpoint || 'https://api.airtable.com/v0';
   const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
 
-  if (!apiKey || !geminiApiKey) {
-    console.warn('[Oracle Engine] Missing Airtable or Gemini API keys. Sync aborted.');
+  if (!apiKey) {
+    console.warn('[Oracle Engine] Missing Airtable API key. Sync aborted.');
+    return activeOracleURIs;
+  }
+  
+  if (!geminiApiKey) {
+    console.warn('[Oracle Engine] Missing Gemini API key. Sync aborted.');
     return activeOracleURIs;
   }
 
@@ -149,7 +154,7 @@ function getOracleFileURIs() {
 async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = null, sendWhatsAppMessage, isRetry = false) {
   let fileList = (oracleFileURIs && oracleFileURIs.length > 0) ? oracleFileURIs : activeOracleURIs;
 
-  // NEW: Autonomous Defensive Catch - If memory is empty, force a synchronous refresh before answering.
+  // Autonomous Defensive Catch - If memory is empty, force a synchronous refresh before answering.
   if (!fileList || fileList.length === 0) {
     console.log('[Oracle Engine] Memory empty on inbound query. Triggering emergency knowledge sync...');
     await sendWhatsAppMessage(dispatchTarget, "⏳ Initializing Technical Oracle blueprints. One moment...");
@@ -228,6 +233,11 @@ Question: "${userQuery}"`;
 
   const endpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
   const apiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+      console.warn('[Oracle Engine] Missing Gemini API key for querying.');
+      return await sendWhatsAppMessage(dispatchTarget, `⚠️ Technical Oracle query failed: API configuration missing.`);
+  }
 
   try {
     const res = await fetch(`${endpoint}?key=${apiKey}`, {
