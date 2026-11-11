@@ -39,7 +39,8 @@ const metrics = require('./metrics'); // Telemetry Layer
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
 // ====================================================================
-const PORT = process.env.PORT || 3000;
+// CRITICAL FIX: Force port 10000 to avoid Render internal healthcheck conflicts on 3000
+const PORT = process.env.PORT || 10000;
 
 const CONFIG = {
   port: PORT,
@@ -1815,7 +1816,7 @@ if (oracle && oracle.syncOracleDocs) {
   setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
 }
 
-app.listen(PORT, '0.0.0.0', async () => {
+const server = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
   try {
     await getCachedSites();
@@ -1832,4 +1833,12 @@ app.listen(PORT, '0.0.0.0', async () => {
   } catch (err) {
     console.error(`[Cache Hydration Error]:`, err.message);
   }
+});
+
+// Force clean shutdown on termination signals
+process.on('SIGTERM', () => {
+  console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
+  server.close(() => {
+    process.exit(0);
+  });
 });
