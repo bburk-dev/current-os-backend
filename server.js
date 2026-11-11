@@ -28,7 +28,6 @@ try { require('dotenv').config(); } catch (e) {}
 
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const cluster = require('cluster');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
@@ -479,20 +478,20 @@ async function executeDraftingMode(config, rawText, audioBuffer, mimeType, draft
   await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Structuring professional executive response...");
   
   const prompt = `You are a professional executive assistant for Bob Burk. 
-  The user has provided a raw dictation (via voice or text) intended to reply to a specific message or email.
-  Your task is to transcribe and meticulously clean it up into a highly professional, warm, and structured reply.
-  - Remove all filler words (ahhs, umms, pauses, hesitations, etc.).
-  - Fix grammar and conversational flow.
-  - Make it sound decisive, polite, and professional.
-  - Do not include subject lines, brackets, or placeholder headers.
-  - Output ONLY the final polished message text.
-  
-  Original Message Context being replied to:
-  """
-  ${draftContext || 'No context provided.'}
-  """
-  
-  ${rawText ? `Raw Text Input:\n"${rawText}"` : 'Please process the attached audio dictation.'}`;
+The user has provided a raw dictation (via voice or text) intended to reply to a specific message or email.
+Your task is to transcribe and meticulously clean it up into a highly professional, warm, and structured reply.
+- Remove all filler words (ahhs, umms, pauses, hesitations, etc.).
+- Fix grammar and conversational flow.
+- Make it sound decisive, polite, and professional.
+- Do not include subject lines, brackets, or placeholder headers.
+- Output ONLY the final polished message text.
+
+Original Message Context being replied to:
+"""
+${draftContext || 'No context provided.'}
+"""
+
+${rawText ? `Raw Text Input:\n"${rawText}"` : 'Please process the attached audio dictation.'}`;
   
   const parts = [{ text: prompt }];
   if (audioBuffer) {
@@ -534,8 +533,6 @@ function startFridayNewsletterCron() {
   
   const nextFriday = new Date(estDate.getFullYear(), estDate.getMonth(), estDate.getDate() + daysUntilFriday, 16, 0, 0, 0);
   const msUntilNextFriday = nextFriday - estDate;
-  
-  console.log(`[Newsletter Cron] Scheduled for ${msUntilNextFriday / 1000 / 60 / 60} hours from now.`);
   
   setTimeout(async () => {
     await dispatchExecutiveNewsletter();
@@ -1045,24 +1042,32 @@ app.post('/webhook', async (req, res) => {
             
             // Dynamic DYNAMIC R/W INTERCEPTION (Audio)
             const isQuestion = transcriptLower.includes('what') || transcriptLower.includes('who') || transcriptLower.includes('when') || transcriptLower.includes('how') || transcriptLower.includes('tell me') || transcript.includes('?');
-            const isUpdate = transcriptLower.includes('update site') || transcriptLower.includes('change site') || transcriptLower.includes('set site');
-            const isActionable = transcriptLower.length > 10 && (transcriptLower.includes('need') || transcriptLower.includes('broken') || transcriptLower.includes('missing') || transcriptLower.includes('finished'));
+            const isUpdate = transcriptLower.includes('update site') || transcriptLower.includes('change site') || transcriptLower.includes('set site') || transcriptLower.includes('update');
+            const isActionable = transcriptLower.length > 10 && (transcriptLower.includes('need') || transcriptLower.includes('broken') || transcriptLower.includes('missing') || transcriptLower.includes('finished') || isUpdate);
             
             if (isQuestion || isUpdate || isActionable) {
-               if (!boundSite) {
+               let activeTargetSite = boundSite;
+               if (!activeTargetSite && spokenTriage.referenced_site_name) {
+                 activeTargetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(spokenTriage.referenced_site_name.toLowerCase()));
+               }
+               if (!activeTargetSite) {
+                 activeTargetSite = allSites.find(s => s.fields['Site Name'] && transcriptLower.includes(s.fields['Site Name'].toLowerCase()));
+               }
+
+               if (!activeTargetSite) {
                  if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
-                 await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at?`);
+                 await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site does this update apply to?`);
                  return;
                }
 
                // 1. DYNAMIC READ: Answer questions from Airtable Database
                if (isQuestion && !isUpdate) {
-                   console.log(`[Audio Engine] Site Query phrase detected. Querying digital twin for ${boundSite.fields['Site Name']}...`);
+                   console.log(`[Audio Engine] Site Query phrase detected. Querying digital twin for ${activeTargetSite.fields['Site Name']}...`);
                    try {
                        const queryPrompt = `You are Titan OS, assisting a field worker.
                        The user asked: "${transcript}"
-                       Here is the current database record for their active site (${boundSite.fields['Site Name']}):
-                       ${JSON.stringify(boundSite.fields, null, 2)}
+                       Here is the current database record for their active site (${activeTargetSite.fields['Site Name']}):
+                       ${JSON.stringify(activeTargetSite.fields, null, 2)}
                        
                        Answer their question accurately and concisely using ONLY the data provided above. If the data is missing or empty, state that it is not documented in the ledger. Do not hallucinate.`;
                        
@@ -1079,7 +1084,7 @@ app.post('/webhook', async (req, res) => {
                            const aiData = await geminiRes.json();
                            const answer = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
                            if (answer) {
-                               await dispatchOutboundWhatsApp(dispatchTarget, `🏟️ *${boundSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
+                               await dispatchOutboundWhatsApp(dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
                                return;
                            }
                        }
@@ -1090,7 +1095,7 @@ app.post('/webhook', async (req, res) => {
 
                // 2. DYNAMIC WRITE: Arbitrary Column Extraction
                if (isUpdate) {
-                   console.log(`[Audio Engine] Site Update phrase detected. Extracting dynamic columns for ${boundSite.fields['Site Name']}...`);
+                   console.log(`[Audio Engine] Site Update phrase detected. Extracting dynamic columns for ${activeTargetSite.fields['Site Name']}...`);
                    try {
                        const extractionPrompt = `You are an AI extracting data to patch an Airtable database row for the 'Sites' table.
                        Read the following transcript: "${transcript}"
@@ -1113,6 +1118,8 @@ app.post('/webhook', async (req, res) => {
                            'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
                            'Last Intent': 'GENERAL_UPDATE'
                        };
+
+                       let updatedList = [];
                        
                        if (geminiRes.ok) {
                            const aiData = await geminiRes.json();
@@ -1124,6 +1131,7 @@ app.post('/webhook', async (req, res) => {
                                    for (const [key, value] of Object.entries(extractedFields)) {
                                        if (value !== null && value !== undefined && value !== '') {
                                            payloadToPatch[key] = value;
+                                           updatedList.push(`${key}: *${value}*`);
                                        }
                                    }
                                } catch (parseErr) {
@@ -1132,9 +1140,12 @@ app.post('/webhook', async (req, res) => {
                            }
                        }
                        
-                       await airtableWriteWithAutoDrop('Sites', payloadToPatch, boundSite.id);
+                       await airtableWriteWithAutoDrop('Sites', payloadToPatch, activeTargetSite.id);
+                       await getCachedSites(true);
                        if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-                       await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger and dynamically updated specifications.`);
+
+                       const summary = updatedList.length > 0 ? `\n\n*Updated Specifications:*\n• ` + updatedList.join('\n• ') : '';
+                       await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger and dynamically updated specifications.${summary}`);
                        return;
                        
                    } catch (e) {
@@ -1146,9 +1157,9 @@ app.post('/webhook', async (req, res) => {
                await airtableWriteWithAutoDrop('Sites', {
                  'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
                  'Last Intent': 'GENERAL_UPDATE'
-               }, boundSite.id);
+               }, activeTargetSite.id);
                if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-               await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
+               await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${activeTargetSite.fields['Site Name']} ledger.`);
                return;
             }
           }
@@ -1239,7 +1250,7 @@ app.post('/webhook', async (req, res) => {
                          `*👷 Field Installation*\n` +
                          `• Drop a 📍 Location Pin to check in.\n` +
                          `• Send photos/videos to log progress.\n` +
-                         `• Send voice notes to log issues.\n\n` +
+                         `• Send voice notes to log issues or update specs.\n\n` +
                          `*🚚 Logistics & Navigation*\n` +
                          `• \`/map [Site Name]\` or "directions to [Site]"\n\n` +
                          `*📊 Project Management*\n` +
@@ -1359,7 +1370,9 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`[Text Engine] Evaluated Intent: ${triage?.intent || 'UNKNOWN'} | Client: ${triage?.qbo_customer_name || 'None'}`);
 
-      if (triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar')) {
+      const isARQuery = triage?.intent === 'AR_LOOKUP' || lTxt === 'ar' || lTxt.startsWith('ar ') || lTxt.endsWith(' ar') || lTxt.includes('ar +') || lTxt.includes('ar+') || lTxt.includes('+ 30') || lTxt.includes('+30') || lTxt.includes('30+') || lTxt.includes('aging') || lTxt.includes('balance') || lTxt.includes('open invoice') || lTxt.startsWith('/ar');
+
+      if (isARQuery) {
         console.log(`[Finance Engine] AR Lookup initiated for ${dispatchTarget} (Role: ${callerIdentity.role})`);
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
@@ -1426,8 +1439,8 @@ app.post('/webhook', async (req, res) => {
         
         // DYNAMIC R/W INTERCEPTION (Text)
         const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
-        const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site');
-        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished'));
+        const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || lTxt.includes('update');
+        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished') || isUpdate);
         
         if (isQuestion || isUpdate || isActionable) {
            console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
@@ -1495,17 +1508,20 @@ app.post('/webhook', async (req, res) => {
                        'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
                        'Last Intent': 'GENERAL_UPDATE'
                    };
+
+                   let updatedFieldsList = [];
                    
                    if (geminiRes.ok) {
                        const aiData = await geminiRes.json();
                        const extractedJsonStr = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
                        if (extractedJsonStr) {
                            try {
-                               const cleanJsonStr = extractedJsonStr.replace(/^===json\s*/i, '').replace(/===\s*$/i, '').trim();
+                               const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
                                const extractedFields = JSON.parse(cleanJsonStr);
                                for (const [key, value] of Object.entries(extractedFields)) {
                                    if (value !== null && value !== undefined && value !== '') {
                                        payloadToPatch[key] = value;
+                                       updatedFieldsList.push(`${key}: *${value}*`);
                                    }
                                }
                            } catch (parseErr) {
@@ -1515,8 +1531,11 @@ app.post('/webhook', async (req, res) => {
                    }
                    
                    await airtableWriteWithAutoDrop('Sites', payloadToPatch, boundSite.id);
+                   await getCachedSites(true);
                    if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger and dynamically updated specifications.`);
+
+                   const summaryStr = updatedFieldsList.length > 0 ? `\n\n*Updated Specifications:*\n• ` + updatedFieldsList.join('\n• ') : '';
+                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the *${boundSite.fields['Site Name']}* ledger and dynamically updated specifications.${summaryStr}`);
                    return;
                    
                } catch (e) {
@@ -1539,6 +1558,123 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    if (message.type === 'video' || message.type === 'image') {
+      const mediaObj = message[message.type];
+      const mediaId = mediaObj.id;
+      const mimeType = mediaObj.mime_type || (message.type === 'video' ? 'video/mp4' : 'image/jpeg');
+      
+      if (metrics && metrics.incrementMetric) metrics.incrementMetric('photos_processed');
+
+      if (whatsapp.sendWhatsAppReaction) {
+        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
+      }
+
+      let mediaBuffer = null;
+      if (CONFIG.meta.accessToken && mediaId) {
+        const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+        const metaMediaData = await metaMediaRes.json().catch(() => ({}));
+        if (metaMediaRes.ok && metaMediaData?.url) {
+          const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
+          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+        }
+      }
+
+      if (!mediaBuffer) {
+        console.warn(`[Media Ingress] Failed to download media buffer for id: ${mediaId}`);
+        return;
+      }
+
+      const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
+
+      if (whatsapp.mediaDebounceQueues) {
+        if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
+          whatsapp.mediaDebounceQueues.set(queueKey, {
+            items: [],
+            timer: null,
+            site,
+            worker,
+            dispatchTarget,
+            callerIdentity
+          });
+        }
+
+        const queue = whatsapp.mediaDebounceQueues.get(queueKey);
+        queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
+        
+        if (queue.timer) clearTimeout(queue.timer);
+        queue.timer = setTimeout(async () => {
+          const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
+          whatsapp.mediaDebounceQueues.delete(queueKey);
+          if (!currentBatch || currentBatch.items.length === 0) return;
+          
+          console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
+
+          try {
+            const hasVideo = currentBatch.items.some(i => i.type === 'video');
+            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware|bill|store/i.test(i.caption || ''));
+            
+            let isReceipt = hasReceiptKeyword;
+            let isScreenshot = false;
+            
+            if (!hasVideo && currentBatch.items.length > 0) {
+              try {
+                const firstImg = currentBatch.items[0];
+                const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
+                
+                const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{
+                      role: 'user',
+                      parts: [
+                        { text: checkPrompt },
+                        { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } }
+                      ]
+                    }],
+                    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+                  })
+                });
+
+                if (checkRes.ok) {
+                  const checkData = await checkRes.json();
+                  const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+                  if (parsedCheck.is_receipt === true) isReceipt = true;
+                  if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
+                  
+                  if (isScreenshot) {
+                    draftingSessions.set(dispatchTarget, { active: false, context: parsedCheck.ocr_text });
+                    const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
+                    await dispatchOutboundButtons(dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?`, buttons);
+                    return;
+                  }
+                }
+              } catch (e) {
+                console.warn('[Batch Triage] Fast visual classifier bypassed:', e.message);
+              }
+            }
+
+            if (!hasVideo && isReceipt) {
+              if (finance && finance.handleReceiptUpload) {
+                await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+                return;
+              }
+            }
+
+            if (whatsapp && whatsapp.processMediaBatch) {
+              await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
+            } else if (finance && finance.handleReceiptUpload) {
+              await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+            }
+          } catch (batchErr) {
+            console.error('[Batch Engine Failure]:', batchErr);
+            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
+          }
+        }, 3500);
+      }
+      return;
+    }
+    
   } catch (err) {
     console.error('[Runtime Exception in /webhook]:', err);
   }
@@ -1678,81 +1814,55 @@ app.get('/health', (req, res) => {
 // 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
 // ====================================================================
 
-if (cluster.isPrimary) {
-  console.log(`[Core Engine] Master orchestrator booting (PID ${process.pid})...`);
-  
-  // Launch exactly one worker process
-  cluster.fork();
+if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
+  globalThis.__TITAN_SERVER_INITIALIZED__ = true;
 
-  cluster.on('exit', (worker, code, signal) => {
-    console.warn(`[Core Engine] Worker ${worker.process.pid} died. Respawning...`);
-    cluster.fork();
-  });
-  
-} else {
-  // --- WORKER PROCESS: BIND TO PORT ---
-  
-  // Defensive guard against PM2 cluster mode double-loading
-  if (!globalThis.__TITAN_BOOTED__) {
-    globalThis.__TITAN_BOOTED__ = true;
-    
-    process.on('uncaughtException', (err) => {
-      console.error('[CRITICAL] Uncaught Exception:', err);
-      process.exit(1);
-    });
-    
-    process.on('unhandledRejection', (reason) => {
-      console.error('[CRITICAL] Unhandled Rejection:', reason);
-    });
+  process.on('uncaughtException', (err) => console.error('[CRITICAL] Uncaught Exception:', err));
+  process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
-    console.log(`====================================================================`);
-    console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
-    console.log(`====================================================================`);
+  console.log(`====================================================================`);
+  console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`====================================================================`);
 
-    startFridayNewsletterCron();
+  startFridayNewsletterCron();
 
-    if (oracle && oracle.syncOracleDocs) {
-      oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-      setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
-    }
-
-    const server = app.listen(PORT, '0.0.0.0', async () => {
-      console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
-      try {
-        await getCachedSites();
-        await getCachedWorkers();
-        await getCachedContacts();
-        await getCachedOpenAssignments();
-        
-        if (inventory && inventory.refreshInventoryCache) {
-          await inventory.refreshInventoryCache(CONFIG);
-        }
-        
-        await hydrateQBOCache();
-
-      } catch (err) {
-        console.error(`[Cache Hydration Error]:`, err.message);
-      }
-    });
-
-    server.on('error', (err) => {
-      if (err.code === 'EADDRINUSE') {
-        console.warn(`[Core Engine] Port ${PORT} is currently locked by the OS (EADDRINUSE). Assuming zombie process. Yielding...`);
-        process.exit(1);
-      } else {
-        console.error('[Core Engine] Fatal listener error:', err);
-        process.exit(1);
-      }
-    });
-
-    // Force clean shutdown on termination signals
-    process.on('SIGTERM', () => {
-      console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
-      server.close(() => {
-        process.exit(0);
-      });
-    });
+  if (oracle && oracle.syncOracleDocs) {
+    oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
   }
+
+  const server = app.listen(PORT, '0.0.0.0', async () => {
+    console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
+    try {
+      await getCachedSites();
+      await getCachedWorkers();
+      await getCachedContacts();
+      await getCachedOpenAssignments();
+      
+      if (inventory && inventory.refreshInventoryCache) {
+        await inventory.refreshInventoryCache(CONFIG);
+      }
+      
+      await hydrateQBOCache();
+    } catch (err) {
+      console.error(`[Cache Hydration Error]:`, err.message);
+    }
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`[Core Engine] Port ${PORT} already bound in this process space. Bypassing secondary bind.`);
+    } else {
+      console.error('[Core Engine] Listener Error:', err);
+    }
+  });
+
+  process.on('SIGTERM', () => {
+    console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
+    server.close(() => {
+      process.exit(0);
+    });
+  });
 }
 
 module.exports = app;
