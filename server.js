@@ -28,6 +28,7 @@ try { require('dotenv').config(); } catch (e) {}
 
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
+const cluster = require('cluster');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
@@ -1500,7 +1501,7 @@ app.post('/webhook', async (req, res) => {
                        const extractedJsonStr = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
                        if (extractedJsonStr) {
                            try {
-                               const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+                               const cleanJsonStr = extractedJsonStr.replace(/^===json\s*/i, '').replace(/===\s*$/i, '').trim();
                                const extractedFields = JSON.parse(cleanJsonStr);
                                for (const [key, value] of Object.entries(extractedFields)) {
                                    if (value !== null && value !== undefined && value !== '') {
@@ -1677,73 +1678,81 @@ app.get('/health', (req, res) => {
 // 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
 // ====================================================================
 
-function startServer(port, retries = 5) {
-  const server = app.listen(port, '0.0.0.0', async () => {
-    console.log(`[Core Engine] System online and listening on PORT ${port}`);
-    try {
-      await getCachedSites();
-      await getCachedWorkers();
-      await getCachedContacts();
-      await getCachedOpenAssignments();
-      
-      if (inventory && inventory.refreshInventoryCache) {
-        await inventory.refreshInventoryCache(CONFIG);
-      }
-      
-      await hydrateQBOCache();
-    } catch (err) {
-      console.error(`[Cache Hydration Error]:`, err.message);
-    }
-  });
+if (cluster.isPrimary) {
+  console.log(`[Core Engine] Master orchestrator booting (PID ${process.pid})...`);
+  
+  // Launch exactly one worker process
+  cluster.fork();
 
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.warn(`[Core Engine] Port ${port} is currently locked by the OS (EADDRINUSE).`);
-      if (retries === 0) {
-        console.error(`[CRITICAL] Out of retries. Could not bind to port ${port}.`);
+  cluster.on('exit', (worker, code, signal) => {
+    console.warn(`[Core Engine] Worker ${worker.process.pid} died. Respawning...`);
+    cluster.fork();
+  });
+  
+} else {
+  // --- WORKER PROCESS: BIND TO PORT ---
+  
+  // Defensive guard against PM2 cluster mode double-loading
+  if (!globalThis.__TITAN_BOOTED__) {
+    globalThis.__TITAN_BOOTED__ = true;
+    
+    process.on('uncaughtException', (err) => {
+      console.error('[CRITICAL] Uncaught Exception:', err);
+      process.exit(1);
+    });
+    
+    process.on('unhandledRejection', (reason) => {
+      console.error('[CRITICAL] Unhandled Rejection:', reason);
+    });
+
+    console.log(`====================================================================`);
+    console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+    console.log(`====================================================================`);
+
+    startFridayNewsletterCron();
+
+    if (oracle && oracle.syncOracleDocs) {
+      oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+      setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
+    }
+
+    const server = app.listen(PORT, '0.0.0.0', async () => {
+      console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
+      try {
+        await getCachedSites();
+        await getCachedWorkers();
+        await getCachedContacts();
+        await getCachedOpenAssignments();
+        
+        if (inventory && inventory.refreshInventoryCache) {
+          await inventory.refreshInventoryCache(CONFIG);
+        }
+        
+        await hydrateQBOCache();
+
+      } catch (err) {
+        console.error(`[Cache Hydration Error]:`, err.message);
+      }
+    });
+
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[Core Engine] Port ${PORT} is currently locked by the OS (EADDRINUSE). Assuming zombie process. Yielding...`);
+        process.exit(1);
+      } else {
+        console.error('[Core Engine] Fatal listener error:', err);
         process.exit(1);
       }
-      console.log(`[Core Engine] Retrying port bind in 1.5 seconds... (${retries} attempts left)`);
-      setTimeout(() => {
-        startServer(port, retries - 1);
-      }, 1500);
-    } else {
-      console.error('[Core Engine] Fatal listener error:', err);
-      process.exit(1);
-    }
-  });
-
-  process.on('SIGTERM', () => {
-    console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
-    server.close(() => {
-      process.exit(0);
     });
-  });
-}
 
-if (require.main === module || !globalThis.__TITAN_BOOTED__) {
-  globalThis.__TITAN_BOOTED__ = true;
-  
-  process.on('uncaughtException', (err) => {
-    console.error('[CRITICAL] Uncaught Exception:', err);
-  });
-  
-  process.on('unhandledRejection', (reason) => {
-    console.error('[CRITICAL] Unhandled Rejection:', reason);
-  });
-
-  console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
-  console.log(`====================================================================`);
-
-  startFridayNewsletterCron();
-
-  if (oracle && oracle.syncOracleDocs) {
-    oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
+    // Force clean shutdown on termination signals
+    process.on('SIGTERM', () => {
+      console.log('[Core Engine] SIGTERM received. Shutting down gracefully...');
+      server.close(() => {
+        process.exit(0);
+      });
+    });
   }
-
-  startServer(PORT);
 }
 
 module.exports = app;
