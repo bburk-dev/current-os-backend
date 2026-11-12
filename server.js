@@ -75,25 +75,8 @@ const CONFIG = {
     accessToken: process.env.QBO_ACCESS_TOKEN,
     refreshToken: null,
     baseUrl: 'https://quickbooks.api.intuit.com/v3/company'
-  },
-  google: {
-    apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
   }
 };
-
-function dispatchOutboundWhatsApp(targetOrConfig, textOrTarget, possibleText) {
-  if (possibleText !== undefined) {
-    return whatsapp.sendWhatsAppMessage(targetOrConfig, textOrTarget, possibleText);
-  }
-  return whatsapp.sendWhatsAppMessage(CONFIG, targetOrConfig, textOrTarget);
-}
-
-function dispatchOutboundButtons(targetOrConfig, textOrTarget, possibleButtonsOrText, possibleButtons) {
-  if (possibleButtons !== undefined) {
-    return whatsapp.sendWhatsAppButtons(targetOrConfig, textOrTarget, possibleButtonsOrText, possibleButtons);
-  }
-  return whatsapp.sendWhatsAppButtons(CONFIG, targetOrConfig, textOrTarget, possibleButtonsOrText);
-}
 
 // ====================================================================
 // 2. STATE MACHINES & CACHE-ASIDE ENGINE
@@ -104,11 +87,9 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
 
-// In-Memory Message Deduplication Store (Guaranteed Singleton)
+// In-Memory Message Deduplication Store
 const processedMessageIds = new Map();
 const DEDUP_TTL_MS = 300 * 1000;
-
-// In-Memory Drafting State (For Voice-Drafting Replies)
 const draftingSessions = new Map();
 
 const memoryCache = {
@@ -120,7 +101,6 @@ const memoryCache = {
   contactsLastFetched: 0,
   assignments: null,
   assignmentsLastFetched: 0,
-  coordinates: new Map(),
   qbo: {
     accessToken: null,
     refreshToken: null,
@@ -128,17 +108,32 @@ const memoryCache = {
   }
 };
 
+// Autonomously overcomes Airtable's 100-record limit by following pagination offsets
+async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig = '') {
+  let records = [];
+  let offset = null;
+  do {
+    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}?`;
+    if (filterFormula) url += `filterByFormula=${encodeURIComponent(filterFormula)}&`;
+    if (sortConfig) url += `${sortConfig}&`;
+    if (offset) url += `offset=${encodeURIComponent(offset)}`;
+    
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.records) records = records.concat(data.records);
+    offset = data.offset;
+  } while (offset);
+  return records;
+}
+
 async function getCachedSites(forceRefresh = false) {
   const now = Date.now();
   if (!forceRefresh && memoryCache.sites && (now - memoryCache.sitesLastFetched < CACHE_TTL_MS)) {
     return memoryCache.sites;
   }
   try {
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Sites?maxRecords=100`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    memoryCache.sites = data.records || [];
+    memoryCache.sites = await fetchAllAirtableRecords('Sites');
     memoryCache.sitesLastFetched = now;
     console.log(`[Cache Engine] Refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
     return memoryCache.sites;
@@ -154,11 +149,7 @@ async function getCachedWorkers(forceRefresh = false) {
     return memoryCache.workers;
   }
   try {
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Workers?maxRecords=100`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    memoryCache.workers = data.records || [];
+    memoryCache.workers = await fetchAllAirtableRecords('Workers');
     memoryCache.workersLastFetched = now;
     return memoryCache.workers;
   } catch (err) {
@@ -172,11 +163,7 @@ async function getCachedContacts(forceRefresh = false) {
     return memoryCache.contacts;
   }
   try {
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Contacts?maxRecords=100`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    memoryCache.contacts = data.records || [];
+    memoryCache.contacts = await fetchAllAirtableRecords('Contacts');
     memoryCache.contactsLastFetched = now;
     return memoryCache.contacts;
   } catch (err) {
@@ -191,11 +178,8 @@ async function getCachedOpenAssignments(forceRefresh = false) {
   }
   try {
     const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
-    const url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/Daily%20Assignments?filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc&maxRecords=100`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    memoryCache.assignments = data.records || [];
+    const sort = `sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc`;
+    memoryCache.assignments = await fetchAllAirtableRecords('Daily Assignments', formula, sort);
     memoryCache.assignmentsLastFetched = now;
     return memoryCache.assignments;
   } catch (err) {
@@ -258,7 +242,7 @@ async function hydrateQBOCache() {
 }
 
 async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, retries = 2) {
-  if (Object.keys(payload).length === 0) return null;
+  if (Object.keys(payload).length === 0) return { success: false, writtenFields: {}, record: null };
   const url = recordId 
     ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}/${recordId}`
     : `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}`;
@@ -268,7 +252,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      if (Object.keys(currentPayload.fields).length === 0) return null;
+      if (Object.keys(currentPayload.fields).length === 0) return { success: false, writtenFields: {}, record: null };
       
       const res = await fetch(url, {
         method,
@@ -279,33 +263,36 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
         body: JSON.stringify(currentPayload)
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        const errorMsg = errorData?.error?.message || '';
-        
-        if (res.status === 422) {
-          const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) ||
-                        errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
-          if (match && match[1]) {
-            const badField = match[1];
-            console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}" from ${tableName}`);
-            delete currentPayload.fields[badField];
-            continue; 
-          }
-        }
-        throw new Error(`HTTP ${res.status}: ${errorMsg}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
+        // Return strictly what survived the write to preserve forensic integrity
+        return { success: true, writtenFields: currentPayload.fields, record: data };
       }
+
+      const errorData = await res.json().catch(() => ({}));
+      const errorMsg = errorData?.error?.message || '';
       
-      if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
-      return await res.json();
+      if (res.status === 422) {
+        const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) ||
+                      errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
+        if (match && match[1]) {
+          const badField = match[1];
+          console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}" from ${tableName}`);
+          delete currentPayload.fields[badField];
+          continue; 
+        }
+      }
+      throw new Error(`HTTP ${res.status}: ${errorMsg}`);
+      
     } catch (err) {
       if (attempt === retries) {
         console.error(`[Airtable Write Error] Table: ${tableName} |`, err.message);
-        return null;
+        return { success: false, writtenFields: {}, record: null };
       }
     }
   }
-  return null;
+  return { success: false, writtenFields: {}, record: null };
 }
 
 // ====================================================================
@@ -314,7 +301,13 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 
 async function fetchDadJoke() {
   try {
-    const res = await fetch('https://icanhazdadjoke.com/', { headers: { 'Accept': 'application/json' } });
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch('https://icanhazdadjoke.com/', { 
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal 
+    });
+    clearTimeout(id);
     if (res.ok) {
       const data = await res.json();
       return `\n\n🎁 *Morning Bonus:* ${data.joke}`;
@@ -359,7 +352,7 @@ async function evaluateWeatherTripwires(lat, lon) {
 }
 
 async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget) {
-  await dispatchOutboundWhatsApp(dispatchTarget, `⏳ Computing virtual readiness matrix for ${siteNameStr}...`);
+  await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⏳ Computing virtual readiness matrix for ${siteNameStr}...`);
   if (metrics && metrics.incrementMetric) metrics.incrementMetric('readiness_checks');
 
   const allSites = await getCachedSites();
@@ -369,7 +362,7 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   );
 
   if (!site) {
-    return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Could not locate site matching "${siteNameStr}".`);
+    return await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⚠️ Could not locate site matching "${siteNameStr}".`);
   }
 
   const siteId = site.id;
@@ -446,11 +439,11 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
                `*OVERALL:* ${overall}\n` +
                `*Confidence:* ${confidenceScore}%`;
 
-  await dispatchOutboundWhatsApp(dispatchTarget, card);
+  await whatsapp.sendWhatsAppMessage(config, dispatchTarget, card);
 }
 
 async function executeDraftingMode(config, rawText, audioBuffer, mimeType, draftContext, dispatchTarget) {
-  await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Structuring professional executive response...");
+  await whatsapp.sendWhatsAppMessage(config, dispatchTarget, "⏳ Structuring professional executive response...");
   
   const prompt = `You are a professional executive assistant for Bob Burk. 
 The user has provided a raw dictation (via voice or text) intended to reply to a specific message or email.
@@ -486,9 +479,9 @@ ${rawText ? `Raw Text:\n"${rawText}"` : 'Process attached audio dictation.'}`;
     const draftedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     
     const finalMsg = `✅ *Drafted Response:*\n──────────────────────────────\n${draftedText.trim()}\n──────────────────────────────\n_Ready to review or forward._`;
-    await dispatchOutboundWhatsApp(dispatchTarget, finalMsg);
+    await whatsapp.sendWhatsAppMessage(config, dispatchTarget, finalMsg);
   } catch (e) {
-    await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to draft response: ${e.message}`);
+    await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⚠️ Failed to draft response: ${e.message}`);
   }
 }
 
@@ -650,7 +643,7 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const callerIdentity = await resolveIdentity(fromPhone);
-    const sessionSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
+    const sessionSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : null;
     let site = null;
     
     if (sessionSiteId) {
@@ -683,7 +676,7 @@ app.post('/webhook', async (req, res) => {
       if (interactiveButtonId === 'DRAFT_REPLY' || interactiveButtonId === 'REPLY_VIA_EMAIL') {
         const existingSession = draftingSessions.get(fromPhone) || {};
         draftingSessions.set(fromPhone, { active: true, context: existingSession.context || null });
-        await dispatchOutboundWhatsApp(dispatchTarget, `🎙️ *Drafting Mode Active*\nSend a voice note or text message to draft your reply. I will remove filler words and format it professionally.`);
+        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🎙️ *Drafting Mode Active*\nSend a voice note or text message to draft your reply. I will remove filler words and format it professionally.`);
         return;
       }
 
@@ -694,39 +687,54 @@ app.post('/webhook', async (req, res) => {
         if (selectedSite) {
           const userLat = whatsapp.lastDroppedCoordinates?.get(fromPhone)?.lat;
           const userLon = whatsapp.lastDroppedCoordinates?.get(fromPhone)?.lon;
-          await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, 0, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke);
+          
+          let dist = 0;
+          if (userLat && userLon) {
+             const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, selectedSite, airtableWriteWithAutoDrop);
+             if (coords) {
+                 dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+             }
+          }
+
+          let weatherStr = '';
+          if (userLat && userLon) {
+             const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
+             if (!weatherCheck.safe) weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}`;
+             else if (weatherCheck.telemetry) weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
+          }
+          await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
         }
         return;
       }
 
       if (interactiveButtonId.startsWith('QBO_EMAIL_EST_')) {
         const estId = interactiveButtonId.replace('QBO_EMAIL_EST_', '');
-        await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Dispatching Estimate PDF via QuickBooks...");
+        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, "⏳ Dispatching Estimate PDF via QuickBooks...");
         try {
           const emailRes = await finance.sendQboTransactionEmail(CONFIG, 'estimate', estId);
           if (emailRes) {
-            await dispatchOutboundWhatsApp(dispatchTarget, `✅ *Estimate Dispatched:*\nOfficial QuickBooks PDF delivered to client.`);
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Estimate Dispatched:*\nOfficial QuickBooks PDF delivered to client.`);
           } else {
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send email. Verify client email address.`);
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ QuickBooks could not send email. Verify client email address.`);
           }
         } catch (emailErr) {
-          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to send estimate email.`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to send estimate email.`);
         }
         return;
       }
 
       if (interactiveButtonId.startsWith('QBO_EMAIL_INV_')) {
         const invId = interactiveButtonId.replace('QBO_EMAIL_INV_', '');
-        await dispatchOutboundWhatsApp(dispatchTarget, "⏳ Dispatching Invoice PDF via QuickBooks...");
+        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, "⏳ Dispatching Invoice PDF via QuickBooks...");
         try {
           const emailRes = await finance.sendQboTransactionEmail(CONFIG, 'invoice', invId);
           if (emailRes) {
-            await dispatchOutboundWhatsApp(dispatchTarget, `✅ *Invoice Dispatched:*\nOfficial QuickBooks Invoice delivered to client.`);
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Invoice Dispatched:*\nOfficial QuickBooks Invoice delivered to client.`);
           } else {
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ QuickBooks could not send invoice email.`);
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ QuickBooks could not send invoice email.`);
           }
         } catch (emailErr) {
-          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Failed to send invoice email.`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to send invoice email.`);
         }
         return;
       }
@@ -735,13 +743,13 @@ app.post('/webhook', async (req, res) => {
         const parts = interactiveButtonId.split('_');
         const estimateId = parts[2];
         const percentage = parseFloat(parts[3]) || 100;
-        await dispatchOutboundWhatsApp(dispatchTarget, `⏳ Converting estimate into active ${percentage}% invoice...`);
+        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⏳ Converting estimate into active ${percentage}% invoice...`);
 
         try {
           const estData = await finance.qboApiRequest(CONFIG, `/estimate/${estimateId}`);
           const estimate = estData?.Estimate;
           if (!estimate) {
-            return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Could not locate estimate #${estimateId}.`);
+            return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate estimate #${estimateId}.`);
           }
 
           const defaultItemRef = finance.getDefaultQboItemRef 
@@ -811,9 +819,9 @@ app.post('/webhook', async (req, res) => {
                               `✅ Invoice sealed in QuickBooks Online.`;
 
           const buttons = [{ id: `QBO_EMAIL_INV_${inv?.Id}`, title: "Email Invoice" }];
-          await dispatchOutboundButtons(dispatchTarget, successCard, buttons);
+          await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, successCard, buttons);
         } catch (convErr) {
-          await dispatchOutboundWhatsApp(dispatchTarget, `Headquarters is finalizing the ledger sync for this invoice.`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `Headquarters is finalizing the ledger sync for this invoice.`);
         }
         return;
       }
@@ -826,9 +834,9 @@ app.post('/webhook', async (req, res) => {
             SyncToken: "0",
             TxnStatus: "Accepted"
           });
-          await dispatchOutboundWhatsApp(dispatchTarget, `✅ *TITAN OS | CHANGE-ORDER SEALED*\nScope approved on QBO Estimate #${coEstimateId}. Authorized to proceed.`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *TITAN OS | CHANGE-ORDER SEALED*\nScope approved on QBO Estimate #${coEstimateId}. Authorized to proceed.`);
         } catch (coApproveErr) {
-          await dispatchOutboundWhatsApp(dispatchTarget, `Headquarters is finalizing the change-order ledger sync.`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `Headquarters is finalizing the change-order ledger sync.`);
         }
         return;
       }
@@ -841,9 +849,7 @@ app.post('/webhook', async (req, res) => {
       
       if (metrics && metrics.incrementMetric) metrics.incrementMetric('photos_processed');
 
-      if (whatsapp.sendWhatsAppReaction) {
-        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾').catch(() => {});
-      }
+      await whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾');
 
       let mediaBuffer = null;
       if (CONFIG.meta.accessToken && mediaId) {
@@ -862,92 +868,84 @@ app.post('/webhook', async (req, res) => {
 
       const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
 
-      if (whatsapp.mediaDebounceQueues) {
-        if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
-          whatsapp.mediaDebounceQueues.set(queueKey, {
-            items: [],
-            timer: null,
-            site,
-            worker,
-            dispatchTarget,
-            callerIdentity
-          });
-        }
-
-        const queue = whatsapp.mediaDebounceQueues.get(queueKey);
-        queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
-        
-        if (queue.timer) clearTimeout(queue.timer);
-        queue.timer = setTimeout(async () => {
-          const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
-          whatsapp.mediaDebounceQueues.delete(queueKey);
-          if (!currentBatch || currentBatch.items.length === 0) return;
-          
-          console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
-
-          try {
-            const hasVideo = currentBatch.items.some(i => i.type === 'video');
-            const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware|bill|store/i.test(i.caption || ''));
-            
-            let isReceipt = hasReceiptKeyword;
-            let isScreenshot = false;
-            
-            if (!hasVideo && currentBatch.items.length > 0) {
-              try {
-                const firstImg = currentBatch.items[0];
-                const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
-                
-                const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    contents: [{
-                      role: 'user',
-                      parts: [
-                        { text: checkPrompt },
-                        { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } }
-                      ]
-                    }],
-                    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-                  })
-                });
-
-                if (checkRes.ok) {
-                  const checkData = await checkRes.json();
-                  const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-                  if (parsedCheck.is_receipt === true) isReceipt = true;
-                  if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
-                  
-                  if (isScreenshot) {
-                    draftingSessions.set(dispatchTarget, { active: false, context: parsedCheck.ocr_text });
-                    const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
-                    await dispatchOutboundButtons(dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?`, buttons);
-                    return;
-                  }
-                }
-              } catch (e) {
-                console.warn('[Batch Triage] Fast visual classifier bypassed:', e.message);
-              }
-            }
-
-            if (!hasVideo && isReceipt) {
-              if (finance && finance.handleReceiptUpload) {
-                await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
-                return;
-              }
-            }
-
-            if (whatsapp && whatsapp.processMediaBatch) {
-              await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
-            } else if (finance && finance.handleReceiptUpload) {
-              await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
-            }
-          } catch (batchErr) {
-            console.error('[Batch Engine Failure]:', batchErr);
-            await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
-          }
-        }, 3500);
+      if (!whatsapp.mediaDebounceQueues.has(queueKey)) {
+        whatsapp.mediaDebounceQueues.set(queueKey, {
+          items: [],
+          timer: null,
+          site,
+          worker,
+          dispatchTarget,
+          callerIdentity
+        });
       }
+
+      const queue = whatsapp.mediaDebounceQueues.get(queueKey);
+      queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
+      
+      if (queue.timer) clearTimeout(queue.timer);
+      queue.timer = setTimeout(async () => {
+        const currentBatch = whatsapp.mediaDebounceQueues.get(queueKey);
+        whatsapp.mediaDebounceQueues.delete(queueKey);
+        if (!currentBatch || currentBatch.items.length === 0) return;
+        
+        console.log(`[Batch Engine] Executing analysis on ${currentBatch.items.length} files from ${dispatchTarget}`);
+
+        try {
+          const hasVideo = currentBatch.items.some(i => i.type === 'video');
+          const hasReceiptKeyword = currentBatch.items.some(i => /receipt|expense|costco|depot|gas|fuel|food|lunch|dinner|invoice|hardware|bill|store/i.test(i.caption || ''));
+          
+          let isReceipt = hasReceiptKeyword;
+          let isScreenshot = false;
+          
+          if (!hasVideo && currentBatch.items.length > 0) {
+            try {
+              const firstImg = currentBatch.items[0];
+              const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
+              
+              const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{
+                    role: 'user',
+                    parts: [
+                      { text: checkPrompt },
+                      { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } }
+                    ]
+                  }],
+                  generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+                })
+              });
+
+              if (checkRes.ok) {
+                const checkData = await checkRes.json();
+                const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+                if (parsedCheck.is_receipt === true) isReceipt = true;
+                if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
+                
+                if (isScreenshot) {
+                  draftingSessions.set(dispatchTarget, { active: false, context: parsedCheck.ocr_text });
+                  const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
+                  await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?`, buttons);
+                  return;
+                }
+              }
+            } catch (e) {
+              console.warn('[Batch Triage] Fast visual classifier bypassed:', e.message);
+            }
+          }
+
+          if (!hasVideo && isReceipt && finance && finance.handleReceiptUpload) {
+            await finance.handleReceiptUpload(CONFIG, currentBatch, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
+            return;
+          }
+
+          await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs);
+        } catch (batchErr) {
+          console.error('[Batch Engine Failure]:', batchErr);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
+        }
+      }, 3500);
       return;
     }
 
@@ -957,10 +955,7 @@ app.post('/webhook', async (req, res) => {
       const mimeType = mediaObj?.mime_type || 'audio/ogg';
       
       if (metrics && metrics.incrementMetric) metrics.incrementMetric('voice_commands');
-
-      if (whatsapp.sendWhatsAppReaction) {
-        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '🎙️').catch(() => {});
-      }
+      await whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '🎙️');
 
       let audioBuffer = null;
       if (CONFIG.meta.accessToken && mediaId) {
@@ -982,250 +977,192 @@ app.post('/webhook', async (req, res) => {
 
         const allSites = await getCachedSites();
         const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
-        const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
+        const boundSiteId = whatsapp.getUserBoundSiteId(fromPhone);
         const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
 
         console.log(`[Audio Ingress] Parsing spoken voice memo via Gemini 2.5 Pro from ${dispatchTarget}...`);
 
-        const spokenTriage = whatsapp.triageSpokenOrTextNLP 
-          ? await whatsapp.triageSpokenOrTextNLP(CONFIG, '', registeredSiteNames, true, [{ buffer: audioBuffer, mimeType }], fromPhone, boundSite)
-          : null;
+        const spokenTriage = await whatsapp.triageSpokenOrTextNLP(CONFIG, '', registeredSiteNames, true, [{ buffer: audioBuffer, mimeType }], fromPhone, boundSite);
 
         console.log(`[Audio Ingress] Spoken Intent: ${spokenTriage?.intent || 'UNKNOWN'} | Client: ${spokenTriage?.qbo_customer_name || 'None'}`);
 
         if (spokenTriage) {
-          if (spokenTriage.intent === 'CREATE_ESTIMATE') {
-            if (finance && finance.handleEstimateCreation) {
-              await finance.handleEstimateCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
-              if (metrics && metrics.incrementMetric) metrics.incrementMetric('estimates_generated');
-              return;
-            }
-          }
+          const dM = (t,m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m);
+          const dB = (t,m,b) => whatsapp.sendWhatsAppButtons(CONFIG, t, m, b);
 
-          if (spokenTriage.intent === 'CONVERT_ESTIMATE') {
-            if (finance && finance.handleInvoiceApproval) {
-              await finance.handleInvoiceApproval(CONFIG, spokenTriage, dispatchTarget, dispatchOutboundWhatsApp, dispatchOutboundButtons);
-              return;
-            }
+          if (spokenTriage.intent === 'CREATE_ESTIMATE' && finance?.handleEstimateCreation) {
+            await finance.handleEstimateCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dM, dB);
+            return;
           }
-
-          if (spokenTriage.intent === 'CREATE_INVOICE') {
-            if (finance && finance.handleInvoiceCreation) {
-              await finance.handleInvoiceCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
-              if (metrics && metrics.incrementMetric) metrics.incrementMetric('invoices_generated');
-              return;
-            }
+          if (spokenTriage.intent === 'CONVERT_ESTIMATE' && finance?.handleInvoiceApproval) {
+            await finance.handleInvoiceApproval(CONFIG, spokenTriage, dispatchTarget, dM, dB);
+            return;
           }
-
-          if (spokenTriage.intent === 'CHANGE_ORDER') {
-            if (finance && finance.handleConversationalChangeOrder) {
-              await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons, callerIdentity);
-              return;
-            }
+          if (spokenTriage.intent === 'CREATE_INVOICE' && finance?.handleInvoiceCreation) {
+            await finance.handleInvoiceCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dM, dB);
+            return;
           }
-
+          if (spokenTriage.intent === 'CHANGE_ORDER' && finance?.handleConversationalChangeOrder) {
+            await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dM, dB, callerIdentity);
+            return;
+          }
           if (spokenTriage.intent === 'AR_LOOKUP') {
             const userRole = String(callerIdentity.role || '').trim().toLowerCase();
             if (userRole !== 'admin') {
-              console.warn(`[Security Alert] Unauthorized spoken AR lookup blocked for ${dispatchTarget}`);
-              await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`);
-              return;
+              return await dM(dispatchTarget, `⚠️ Access Denied. Financial ledger queries are restricted to Admin roles.`);
             }
-            if (finance && finance.handleARLookup) {
-              await finance.handleARLookup(CONFIG, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity);
-              return;
-            }
-          }
-
-          if (spokenTriage.intent === 'ORACLE_QUERY') {
-            if (oracle && oracle.handleOracleQuery) {
-              await oracle.handleOracleQuery(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
-              if (metrics && metrics.incrementMetric) metrics.incrementMetric('oracle_queries');
+            if (finance?.handleARLookup) {
+              await finance.handleARLookup(CONFIG, dispatchTarget, dM, callerIdentity);
               return;
             }
           }
-
-          if (spokenTriage.intent === 'INVENTORY_QUERY') {
-            if (inventory && inventory.handleSpokenInventorySnapshot) {
-              await inventory.handleSpokenInventorySnapshot(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
-              return;
-            }
+          if (spokenTriage.intent === 'ORACLE_QUERY' && oracle?.handleOracleQuery) {
+            await oracle.handleOracleQuery(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dM);
+            return;
           }
-
-          if (spokenTriage.intent === 'METRICS_QUERY') {
-            const userRole = String(callerIdentity.role || '').trim().toLowerCase();
-            if (userRole !== 'admin') {
-               return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Access Denied. Metrics are restricted to Executive/Admin roles.`);
-            }
-            return await dispatchOutboundWhatsApp(dispatchTarget, metrics.getTelemetryReport());
+          if (spokenTriage.intent === 'INVENTORY_QUERY' && inventory?.handleSpokenInventorySnapshot) {
+            await inventory.handleSpokenInventorySnapshot(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
+            return;
           }
-
           if (spokenTriage.intent === 'READINESS_QUERY') {
              const targetSiteName = spokenTriage.qbo_customer_name || (boundSite ? boundSite.fields['Site Name'] : null);
-             if (!targetSiteName) {
-               return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please specify a site (e.g., "Are we ready for Aurora?")`);
-             }
+             if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
              return await evaluateVirtualSiteReadiness(CONFIG, targetSiteName, dispatchTarget);
           }
 
-          if (spokenTriage.intent === 'UNKNOWN' || spokenTriage.intent === 'GENERAL_UPDATE') {
-            const transcript = spokenTriage.transcript_en || '';
-            const transcriptLower = transcript.toLowerCase();
+          // DYNAMIC AIRTABLE READ / WRITE INTENT FOR SPOKEN MEMOS
+          const transcript = spokenTriage.transcript_en || '';
+          const transcriptLower = transcript.toLowerCase();
+          const isQuestion = transcriptLower.includes('what') || transcriptLower.includes('who') || transcriptLower.includes('how') || transcriptLower.includes('tell me') || transcript.includes('?');
+          const isUpdate = transcriptLower.includes('update site') || transcriptLower.includes('change site') || transcriptLower.includes('set site') || transcriptLower.includes('update');
+
+          if (isQuestion || isUpdate) {
+            let activeTargetSite = null;
             
-            // Dynamic DYNAMIC R/W INTERCEPTION (Audio)
-            const isQuestion = transcriptLower.includes('what') || transcriptLower.includes('who') || transcriptLower.includes('when') || transcriptLower.includes('how') || transcriptLower.includes('tell me') || transcript.includes('?');
-            const isUpdate = transcriptLower.includes('update site') || transcriptLower.includes('change site') || transcriptLower.includes('set site') || transcriptLower.includes('update');
-            const isActionable = transcriptLower.length > 10 && (transcriptLower.includes('need') || transcriptLower.includes('broken') || transcriptLower.includes('missing') || transcriptLower.includes('finished') || isUpdate);
-            
-            if (isQuestion || isUpdate || isActionable) {
-               let activeTargetSite = null;
-               
-               // PRIORITY 1: Explicitly Named Site
-               if (spokenTriage.referenced_site_name) {
-                 activeTargetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(spokenTriage.referenced_site_name.toLowerCase()));
-               }
-               if (!activeTargetSite) {
-                 activeTargetSite = allSites.find(s => s.fields['Site Name'] && transcriptLower.includes(s.fields['Site Name'].toLowerCase()));
-               }
+            // PRIORITY 1: Explicitly Named Site via NLP Extraction
+            if (spokenTriage.referenced_site_name) {
+              const ref = spokenTriage.referenced_site_name.toLowerCase();
+              activeTargetSite = allSites.find(s => {
+                  const sName = (s.fields['Site Name'] || '').toLowerCase();
+                  return sName.includes(ref) || ref.includes(sName);
+              });
+            }
+            // PRIORITY 2: Fuzzy matching in Transcript
+            if (!activeTargetSite) {
+              activeTargetSite = allSites.find(s => {
+                  const sName = (s.fields['Site Name'] || '').toLowerCase();
+                  if (transcriptLower.includes(sName)) return true;
+                  const words = sName.split(' ').filter(w => w.length > 4);
+                  return words.some(w => transcriptLower.includes(w));
+              });
+            }
+            // PRIORITY 3: Fallback to Currently Bound Site
+            if (!activeTargetSite) {
+              activeTargetSite = boundSite;
+            }
 
-               // PRIORITY 2: Fallback to Currently Bound Site
-               if (!activeTargetSite) {
-                 activeTargetSite = boundSite;
-               }
+            if (!activeTargetSite) {
+              whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
+              return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `Got it. Which site does this update apply to?`);
+            }
 
-               if (!activeTargetSite) {
-                 if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
-                 await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site does this update apply to?`);
-                 return;
-               }
+            // DYNAMIC READ
+            if (isQuestion && !isUpdate) {
+              try {
+                const queryPrompt = `You are Titan OS, assisting a field supervisor.
+User query: "${transcript}"
+Site Record (${activeTargetSite.fields['Site Name']}):
+${JSON.stringify(activeTargetSite.fields, null, 2)}
 
-               // 1. DYNAMIC READ: Answer questions from Airtable Database
-               if (isQuestion && !isUpdate) {
-                   console.log(`[Audio Engine] Site Query phrase detected. Querying digital twin for ${activeTargetSite.fields['Site Name']}...`);
-                   try {
-                       const queryPrompt = `You are Titan OS, assisting a field worker.
-                       The user asked: "${transcript}"
-                       Here is the current database record for their active site (${activeTargetSite.fields['Site Name']}):
-                       ${JSON.stringify(activeTargetSite.fields, null, 2)}
-                       
-                       Answer their question accurately and concisely using ONLY the data provided above. If the data is missing or empty, state that it is not documented in the ledger. Do not hallucinate.`;
-                       
-                       const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-                           method: 'POST',
-                           headers: { 'Content-Type': 'application/json' },
-                           body: JSON.stringify({
-                             contents: [{ role: 'user', parts: [{ text: queryPrompt }] }],
-                             generationConfig: { temperature: 0.2 }
-                           })
-                       });
-                       
-                       if (geminiRes.ok) {
-                           const aiData = await geminiRes.json();
-                           const answer = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
-                           if (answer) {
-                               await dispatchOutboundWhatsApp(dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
-                               return;
-                           }
-                       }
-                   } catch (e) {
-                       console.warn('[Site Query Failed]', e.message);
-                   }
-               }
+Answer accurately based strictly on the record. If empty, state that it is not documented in the ledger.`;
 
-               // 2. DYNAMIC WRITE: Arbitrary Column Extraction
-               if (isUpdate) {
-                   console.log(`[Audio Engine] Site Update phrase detected. Extracting dynamic columns for ${activeTargetSite.fields['Site Name']}...`);
-                   try {
-                       const knownColumns = new Set();
-                       allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
-                       
-                       const extractionPrompt = `You are an AI extracting data to patch an Airtable database row for the 'Sites' table.
-                       Read the following transcript: "${transcript}"
-                       
-                       Extract ANY field updates requested by the user. Match extracted keys EXACTLY to this list of known columns if possible: ${JSON.stringify(Array.from(knownColumns))}.
-                       (e.g., use "Turf Colour" instead of "Turf Color", "Supplier" instead of "Turf Supplier").
-                       Format Single Select dropdown values in strict Title Case (e.g. "Green", "Mondo").
-                       Format Checkboxes as strictly boolean true or false.
-                       Return ONLY a valid JSON object mapping exact field names to values. Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
-                       
-                       const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-                           method: 'POST',
-                           headers: { 'Content-Type': 'application/json' },
-                           body: JSON.stringify({
-                             contents: [{ role: 'user', parts: [{ text: extractionPrompt }] }],
-                             generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-                           })
-                       });
-                       
-                       let payloadToPatch = {
-                           'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
-                           'Last Intent': 'DYNAMIC_SITE_UPDATE'
-                       };
+                const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{ role: 'user', parts: [{ text: queryPrompt }] }],
+                    generationConfig: { temperature: 0.1 }
+                  })
+                });
 
-                       let updatedList = [];
-                       
-                       if (geminiRes.ok) {
-                           const aiData = await geminiRes.json();
-                           const extractedJsonStr = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
-                           if (extractedJsonStr) {
-                               try {
-                                   const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-                                   const extractedFields = JSON.parse(cleanJsonStr);
-                                   
-                                   // INLINE SCHEMA NORMALIZER
-                                   for (const [key, value] of Object.entries(extractedFields)) {
-                                       if (value !== null && value !== undefined && value !== '') {
-                                           let k = key;
-                                           let v = String(value).trim();
-                                           
-                                           // Reconcile common aliases
-                                           if (/turf col/i.test(k) || /turf colour/i.test(k)) k = 'Turf Colour';
-                                           if (/turf sup/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
-                                           if (/structure col/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
-                                           if (/lights/i.test(k) || /lighting/i.test(k)) k = 'Lights';
+                if (geminiRes.ok) {
+                  const aiData = await geminiRes.json();
+                  const answer = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
+                  if (answer) {
+                    return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
+                  }
+                }
+              } catch (e) {}
+            }
 
-                                           // Force everything to String to prevent 422 Dropdown Errors
-                                           let vLower = v.toLowerCase();
-                                           if (vLower === 'true' || vLower === 'yes') v = 'Yes';
-                                           else if (vLower === 'false' || vLower === 'no') v = 'No';
-                                           else if (vLower === 'green') v = 'Green';
-                                           else if (vLower === 'blue') v = 'Blue';
-                                           else if (vLower === 'terracotta') v = 'Terracotta';
-                                           else if (vLower === 'black') v = 'Black';
-                                           else if (vLower === 'mondo') v = 'Mondo';
-                                           else if (vLower === 'real turf' || vLower === 'realturf') v = 'Real Turf';
+            // DYNAMIC WRITE
+            if (isUpdate) {
+              try {
+                const knownColumns = new Set();
+                allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
+                
+                const extractionPrompt = `You are an AI extracting database patches for the 'Sites' table.
+Transcript: "${transcript}"
+Known Airtable Columns: ${JSON.stringify(Array.from(knownColumns))}
 
-                                           payloadToPatch[k] = v;
-                                           updatedList.push(`${k}: *${v}*`);
-                                       }
-                                   }
-                               } catch (parseErr) {
-                                   console.warn('[Dynamic Extraction Parse Error]', parseErr.message);
-                               }
-                           }
-                       }
-                       
-                       await airtableWriteWithAutoDrop('Sites', payloadToPatch, activeTargetSite.id);
-                       await getCachedSites(true);
-                       if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
+Extract any fields the user wants updated. Match extracted keys EXACTLY to the 'Known Airtable Columns' above (e.g. use "Turf Colour" not "Turf Color", use "Supplier" not "Turf Supplier").
+Format Single Select dropdowns in Title Case (e.g. "Green", "Mondo", "Yes").
+Format Checkboxes as strictly boolean true or false.
+Return ONLY valid JSON mapping exact field names to values.
+Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
 
-                       const summary = updatedList.length > 0 ? `\n\n*Updated Specifications:*\n• ` + updatedList.join('\n• ') : '';
-                       await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger and dynamically updated specifications.${summary}`);
-                       return;
-                       
-                   } catch (e) {
-                       console.warn('[Site Update Extraction Failed]', e.message);
-                   }
-               }
-               
-               // 3. Fallback General Update Logic
-               await airtableWriteWithAutoDrop('Sites', {
-                 'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
-                 'Last Intent': 'GENERAL_UPDATE'
-               }, activeTargetSite.id);
-               if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-               await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${activeTargetSite.fields['Site Name']} ledger.`);
-               return;
+                const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{ role: 'user', parts: [{ text: extractionPrompt }] }],
+                    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+                  })
+                });
+
+                let payloadToPatch = {
+                  'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
+                  'Last Intent': 'DYNAMIC_SITE_UPDATE'
+                };
+
+                let updatedCols = [];
+                if (geminiRes.ok) {
+                  const aiData = await geminiRes.json();
+                  const rawJson = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
+                  if (rawJson) {
+                    const cleanJson = rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+                    const parsed = JSON.parse(cleanJson);
+                    
+                    // Route to dynamic schema normalizer to completely avoid 422 Dropdown errors
+                    const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, allSites) : parsed;
+                    
+                    for (const [key, value] of Object.entries(normalized)) {
+                        payloadToPatch[key] = value;
+                    }
+                  }
+                }
+
+                // Call write and strictly only announce the fields that SURVIVED Airtable's 422 schema checks
+                const writeResult = await airtableWriteWithAutoDrop('Sites', payloadToPatch, activeTargetSite.id);
+                await getCachedSites(true);
+                if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
+
+                if (writeResult && writeResult.success) {
+                  const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
+                  if (writtenKeys.length > 0) {
+                    const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
+                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                  } else {
+                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                  }
+                } else {
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+                }
+                return;
+                
+              } catch (e) {
+                console.error('[Dynamic Extraction Failure]', e.message);
+              }
             }
           }
         }
@@ -1234,43 +1171,43 @@ app.post('/webhook', async (req, res) => {
     }
 
     if (message.type === 'location') {
-      if (whatsapp.sendWhatsAppReaction) {
-        whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍').catch(() => {});
-      }
+      await whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍');
       const userLat = message.location?.latitude;
       const userLon = message.location?.longitude;
       
       if (userLat && userLon) {
-        if (whatsapp.lastDroppedCoordinates) {
-          whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
-        }
+        whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
 
         const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
+        let weatherStr = '';
         if (!weatherCheck.safe) {
-          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`);
+          weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`;
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, weatherStr);
+        } else if (weatherCheck.telemetry) {
+          weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
         }
 
-        const allSites = await getCachedSites();
+        // Force a live refresh to bypass the 10-minute cache if they just added coordinates in Airtable
+        const allSites = await getCachedSites(true);
         const nearby = [];
+        
         for (const s of allSites) {
-          if (whatsapp.resolveCoordinates) {
-            const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
-            if (coords) {
-              const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
-              if (dist <= 800) nearby.push({ site: s, distance: dist });
-            }
+          const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
+          if (coords) {
+            const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+            if (dist <= 2500) nearby.push({ site: s, distance: dist });
           }
         }
         nearby.sort((a, b) => a.distance - b.distance);
 
-        if (nearby.length === 1 && whatsapp.bindSiteContext) {
-          await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke);
+        if (nearby.length === 1) {
+          await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
         } else if (nearby.length > 1) {
           const buttons = nearby.slice(0, 3).map((n) => ({
             id: `BIND_SITE_${n.site.id}`,
             title: String(n.site.fields['Site Name']).substring(0, 20)
           }));
-          await dispatchOutboundButtons(dispatchTarget, `📍 Multiple courts detected within 800m. Please select your active work zone:`, buttons);
+          await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 2.5km. Please select your active zone:`, buttons);
         } else {
           console.log(`[Site Engine] Unmapped location pin dropped at (${userLat.toFixed(5)}, ${userLon.toFixed(5)}) by ${dispatchTarget}`);
           
@@ -1283,21 +1220,21 @@ app.post('/webhook', async (req, res) => {
           const promptMsg = `📍 *UNREGISTERED LOCATION DETECTED*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `Coordinates: \`${userLat.toFixed(5)}, ${userLon.toFixed(5)}\`\n` +
-            `No Bounce Padel courts were located within 800m.\n\n` +
+            `No Bounce Padel courts were located within 2.5km.\n\n` +
             `Would you like to register this as a *NEW SITE*?\n\n` +
             `Reply with the site name:\n` +
             `👉 *CREATE SITE: [Site Name]*\n` +
-            `_(e.g., CREATE SITE: Miami Shores Club)_`;
+            `_(e.g., CREATE SITE: RCOR Court 1)_`;
 
-          await dispatchOutboundWhatsApp(dispatchTarget, promptMsg);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, promptMsg);
         }
       }
       return;
     }
 
-    const inboundPayloadText = message.text?.body || message.interactive?.button_reply?.title || '';
-    if (message.type === 'text' || message.type === 'interactive' || inboundPayloadText) {
-      const txt = inboundPayloadText.trim();
+    const payloadText = message.text?.body || message.interactive?.button_reply?.title || '';
+    if (message.type === 'text' || message.type === 'interactive' || payloadText) {
+      const txt = payloadText.trim();
       const lTxt = txt.toLowerCase();
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
@@ -1325,7 +1262,7 @@ app.post('/webhook', async (req, res) => {
                          `• \`/metrics\`\n` +
                          `• "What is my 30+ AR?"\n` +
                          `• "Create an estimate for [Client]..."`;
-        return await dispatchOutboundWhatsApp(dispatchTarget, helpMenu);
+        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, helpMenu);
       }
 
       if (lTxt.startsWith('/map ') || lTxt.includes('directions to')) {
@@ -1349,24 +1286,24 @@ app.post('/webhook', async (req, res) => {
                            `──────────────────────────────\n` +
                            `Tap below for active turn-by-turn routing:\n\n${mapsUrl}`;
            
-           return await dispatchOutboundWhatsApp(dispatchTarget, navCard);
+           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
          } else {
-           return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Could not locate GPS coordinates for site "${targetSiteName}".`);
+           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate GPS coordinates for site "${targetSiteName}".`);
          }
       }
 
       if (lTxt === '/metrics' || lTxt === '/telemetry') {
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
-           return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Access Denied. Metrics are restricted to Executive/Admin roles.`);
+           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Access Denied. Metrics are restricted to Executive/Admin roles.`);
         }
-        return await dispatchOutboundWhatsApp(dispatchTarget, metrics.getTelemetryReport());
+        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, metrics.getTelemetryReport());
       }
 
       if (lTxt.startsWith('/readiness')) {
         const siteNameStr = txt.replace(/^\/readiness\s*/i, '').trim();
         if (!siteNameStr) {
-          return await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please specify a site (e.g., /readiness Aurora)`);
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Please specify a site (e.g., /readiness Aurora)`);
         }
         return await evaluateVirtualSiteReadiness(CONFIG, siteNameStr, dispatchTarget);
       }
@@ -1375,19 +1312,40 @@ app.post('/webhook', async (req, res) => {
         let siteName = txt.replace(/^create\s+site:?/i, '').replace(/^new\s+site:?/i, '').replace(/^\/createsite:?/i, '').replace(/^\/newsite:?/i, '').replace(/^yes,?:?/i, '').replace(/^site:?/i, '').trim();
 
         if (!siteName) {
-          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Please reply with the site name:\n👉 *CREATE SITE: [Site Name]*\n_(e.g., CREATE SITE: RCOR Court 3)_`);
           return;
         }
 
-        const pendingGeo = pendingNewSiteRequests.get(fromPhone) || whatsapp.lastDroppedCoordinates?.get(fromPhone);
+        const pendingGeo = pendingNewSiteRequests.get(fromPhone) || (whatsapp.lastDroppedCoordinates ? whatsapp.lastDroppedCoordinates.get(fromPhone) : null);
         
         if (!pendingGeo || (Date.now() - pendingGeo.timestamp > 2 * 60 * 60 * 1000)) {
-          await dispatchOutboundWhatsApp(dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Coordinates expired. Please drop a new WhatsApp location pin first, then reply with:\n*CREATE SITE: ${siteName}*`);
           return;
         }
 
-        console.log(`[Site Engine] Provisioning "${siteName}" at (${pendingGeo.lat}, ${pendingGeo.lon}) for ${dispatchTarget}`);
+        console.log(`[Site Engine] Provisioning/Updating "${siteName}" at (${pendingGeo.lat}, ${pendingGeo.lon}) for ${dispatchTarget}`);
         
+        // Scan for existing site to avoid duplicates and heal database
+        const allSites = await getCachedSites();
+        const existingSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase() === siteName.toLowerCase());
+
+        if (existingSite) {
+          const updateRes = await airtableWriteWithAutoDrop('Sites', {
+            'Latitude': pendingGeo.lat,
+            'Longitude': pendingGeo.lon
+          }, existingSite.id);
+
+          if (updateRes && updateRes.success) {
+            pendingNewSiteRequests.delete(fromPhone);
+            await getCachedSites(true); // Force refresh
+            if (whatsapp.userActiveSiteMap) whatsapp.userActiveSiteMap.set(fromPhone, existingSite.id);
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 *SITE UPDATED*\nGPS coordinates for existing site *${siteName}* locked to \`${pendingGeo.lat.toFixed(5)}, ${pendingGeo.lon.toFixed(5)}\`. You are now checked in.`);
+          } else {
+             await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update GPS coordinates for *${siteName}* in Airtable.`);
+          }
+          return;
+        }
+
         const newRecord = await airtableWriteWithAutoDrop('Sites', {
           'Site Name': siteName,
           'Workflow Mode': 'INSTALLATION',
@@ -1396,11 +1354,11 @@ app.post('/webhook', async (req, res) => {
           'Longitude': pendingGeo.lon
         });
 
-        if (newRecord && newRecord.id) {
+        if (newRecord && newRecord.success) {
           pendingNewSiteRequests.delete(fromPhone);
           await getCachedSites(true);
           if (whatsapp.userActiveSiteMap) {
-            whatsapp.userActiveSiteMap.set(fromPhone, newRecord.id);
+            whatsapp.userActiveSiteMap.set(fromPhone, newRecord.record.id);
           }
           const weather = await evaluateWeatherTripwires(pendingGeo.lat, pendingGeo.lon);
           let weatherNote = '';
@@ -1417,16 +1375,16 @@ app.post('/webhook', async (req, res) => {
             `✅ Digital twin active. You are now checked in to *${siteName}*.\n` +
             `Send photos, voice memos, or video sweeps to begin logging progress.${weatherNote}`;
 
-          await dispatchOutboundWhatsApp(dispatchTarget, confirmMsg);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, confirmMsg);
         } else {
-          await dispatchOutboundWhatsApp(dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to create site in Airtable. Please try again or notify HQ.`);
         }
         return;
       }
 
       const allSites = await getCachedSites();
       const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
-      const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : (whatsapp.userActiveSiteMap?.get(fromPhone) || null);
+      const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : null;
       const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
 
       const triage = whatsapp.triageSpokenOrTextNLP 
@@ -1442,22 +1400,22 @@ app.post('/webhook', async (req, res) => {
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') {
           console.warn(`[Security Alert] Unauthorized AR lookup blocked for ${dispatchTarget} (Name: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
-          await dispatchOutboundWhatsApp(dispatchTarget, `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ *TITAN OS SECURITY*\n━━━━━━━━━━━━━━━━━━━━\nAccess Denied. Financial ledger queries are restricted to Executive/Admin roles.\n_Your query has been logged._`);
           return;
         }
 
         if (finance && finance.handleARLookup) {
-          await finance.handleARLookup(CONFIG, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity);
+          await finance.handleARLookup(CONFIG, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity);
         } else if (finance && finance.getAgingReport) {
           const report = await finance.getAgingReport(CONFIG, 30);
-          await dispatchOutboundWhatsApp(dispatchTarget, report);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, report);
         }
         return;
       }
 
       if (triage?.intent === 'CREATE_ESTIMATE' || lTxt.includes('build an estimate') || lTxt.includes('create estimate') || lTxt.startsWith('/estimate')) {
         if (finance && finance.handleEstimateCreation) {
-          await finance.handleEstimateCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
+          await finance.handleEstimateCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), (t,m,b)=>whatsapp.sendWhatsAppButtons(CONFIG,t,m,b));
           if (metrics && metrics.incrementMetric) metrics.incrementMetric('estimates_generated');
           return;
         }
@@ -1465,14 +1423,14 @@ app.post('/webhook', async (req, res) => {
 
       if (triage?.intent === 'CONVERT_ESTIMATE' || lTxt.includes('convert to') || lTxt.includes('% invoice') || lTxt.includes('draw')) {
         if (finance && finance.handleInvoiceApproval) {
-          await finance.handleInvoiceApproval(CONFIG, triage || { transcript_en: txt }, dispatchTarget, dispatchOutboundWhatsApp, dispatchOutboundButtons);
+          await finance.handleInvoiceApproval(CONFIG, triage || { transcript_en: txt }, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), (t,m,b)=>whatsapp.sendWhatsAppButtons(CONFIG,t,m,b));
           return;
         }
       }
 
       if (triage?.intent === 'CREATE_INVOICE' || lTxt.includes('create invoice') || lTxt.includes('direct invoice') || lTxt.startsWith('/invoice')) {
         if (finance && finance.handleInvoiceCreation) {
-          await finance.handleInvoiceCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons);
+          await finance.handleInvoiceCreation(CONFIG, triage || { transcript_en: txt }, dispatchTarget, oracleFileURIs, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), (t,m,b)=>whatsapp.sendWhatsAppButtons(CONFIG,t,m,b));
           if (metrics && metrics.incrementMetric) metrics.incrementMetric('invoices_generated');
           return;
         }
@@ -1480,14 +1438,14 @@ app.post('/webhook', async (req, res) => {
 
       if (triage?.intent === 'CHANGE_ORDER' || lTxt.includes('change order') || lTxt.includes('change-order') || lTxt.includes('variation') || lTxt.startsWith('/changeorder') || lTxt.startsWith('/co')) {
         if (finance && finance.handleConversationalChangeOrder) {
-          await finance.handleConversationalChangeOrder(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp, dispatchOutboundButtons, callerIdentity);
+          await finance.handleConversationalChangeOrder(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), (t,m,b)=>whatsapp.sendWhatsAppButtons(CONFIG,t,m,b), callerIdentity);
           return;
         }
       }
 
       if (triage?.intent === 'ORACLE_QUERY' || lTxt.startsWith('/docs') || lTxt.startsWith('/specs') || lTxt.includes('spec') || lTxt.includes('engineering plan')) {
         if (oracle && oracle.handleOracleQuery) {
-          await oracle.handleOracleQuery(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, dispatchOutboundWhatsApp);
+          await oracle.handleOracleQuery(CONFIG, triage || txt, dispatchTarget, oracleFileURIs, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m));
           if (metrics && metrics.incrementMetric) metrics.incrementMetric('oracle_queries');
           return;
         }
@@ -1495,7 +1453,7 @@ app.post('/webhook', async (req, res) => {
 
       if (triage?.intent === 'INVENTORY_QUERY' || lTxt.startsWith('/inv') || lTxt === 'inv' || lTxt.includes('inventory') || lTxt.includes('stock')) {
         if (inventory && inventory.handleSpokenInventorySnapshot) {
-          await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, dispatchOutboundWhatsApp, callerIdentity, airtableWriteWithAutoDrop);
+          await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
           return;
         }
       }
@@ -1504,146 +1462,77 @@ app.post('/webhook', async (req, res) => {
         
         // DYNAMIC R/W INTERCEPTION (Text)
         const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
-        const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || lTxt.includes('update');
-        const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished') || isUpdate);
-        
-        if (isQuestion || isUpdate || isActionable) {
-           console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
-           if (!boundSite) {
-             if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: txt });
-             await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at? (Reply with the court name).`);
-             return;
-           }
+        const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site');
 
-           // 1. DYNAMIC READ: Answer questions from Airtable Database
-           if (isQuestion && !isUpdate) {
-               console.log(`[Text Engine] Site Query phrase detected. Querying digital twin for ${boundSite.fields['Site Name']}...`);
-               try {
-                   const queryPrompt = `You are Titan OS, assisting a field worker.
-                   The user asked: "${txt}"
-                   Here is the current database record for their active site (${boundSite.fields['Site Name']}):
-                   ${JSON.stringify(boundSite.fields, null, 2)}
-                   
-                   Answer their question accurately and concisely using ONLY the data provided above. If the data is missing or empty, state that it is not documented in the ledger. Do not hallucinate.`;
-                   
-                   const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-                       method: 'POST',
-                       headers: { 'Content-Type': 'application/json' },
-                       body: JSON.stringify({
-                         contents: [{ role: 'user', parts: [{ text: queryPrompt }] }],
-                         generationConfig: { temperature: 0.2 }
-                       })
-                   });
-                   
-                   if (geminiRes.ok) {
-                       const aiData = await geminiRes.json();
-                       const answer = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
-                       if (answer) {
-                           await dispatchOutboundWhatsApp(dispatchTarget, `🏟️ *${boundSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
-                           return;
-                       }
-                   }
-               } catch (e) {
-                   console.warn('[Site Query Failed]', e.message);
-               }
-           }
-
-           // 2. DYNAMIC WRITE: Arbitrary Column Extraction
-           if (isUpdate) {
-               console.log(`[Text Engine] Site Update phrase detected. Extracting dynamic columns for ${boundSite.fields['Site Name']}...`);
-               try {
-                   const knownColumns = new Set();
-                   allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
-                   
-                   const extractionPrompt = `You are an AI extracting data to patch an Airtable database row for the 'Sites' table.
-                   Read the following transcript: "${txt}"
-                   
-                   Extract ANY field updates requested by the user. Match extracted keys EXACTLY to this list of known columns if possible: ${JSON.stringify(Array.from(knownColumns))}.
-                   (e.g., use "Turf Colour" instead of "Turf Color", "Supplier" instead of "Turf Supplier").
-                   Format Single Select dropdown values in strict Title Case (e.g. "Green", "Mondo").
-                   Format Checkboxes as strictly boolean true or false (e.g. Lights: true).
-                   Return ONLY a valid JSON object mapping exact field names to values. Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
-                   
-                   const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-                       method: 'POST',
-                       headers: { 'Content-Type': 'application/json' },
-                       body: JSON.stringify({
-                         contents: [{ role: 'user', parts: [{ text: extractionPrompt }] }],
-                         generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-                       })
-                   });
-                   
-                   let payloadToPatch = {
-                       'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
-                       'Last Intent': 'DYNAMIC_SITE_UPDATE'
-                   };
-
-                   let updatedFieldsList = [];
-                   
-                   if (geminiRes.ok) {
-                       const aiData = await geminiRes.json();
-                       const extractedJsonStr = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
-                       if (extractedJsonStr) {
-                           try {
-                               const cleanJsonStr = extractedJsonStr.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-                               const extractedFields = JSON.parse(cleanJsonStr);
-                               
-                               // INLINE SCHEMA NORMALIZER
-                               for (const [key, value] of Object.entries(extractedFields)) {
-                                   if (value !== null && value !== undefined && value !== '') {
-                                       let k = key;
-                                       let v = String(value).trim();
-                                       
-                                       // Reconcile common aliases
-                                       if (/turf col/i.test(k) || /turf colour/i.test(k)) k = 'Turf Colour';
-                                       if (/turf sup/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
-                                       if (/structure col/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
-                                       if (/lights/i.test(k) || /lighting/i.test(k)) k = 'Lights';
-
-                                       // Force all values to Strict String matching Airtable Single Select Dropdowns
-                                       let vLower = v.toLowerCase();
-                                       if (vLower === 'true' || vLower === 'yes') v = 'Yes';
-                                       else if (vLower === 'false' || vLower === 'no') v = 'No';
-                                       else if (vLower === 'green') v = 'Green';
-                                       else if (vLower === 'blue') v = 'Blue';
-                                       else if (vLower === 'terracotta') v = 'Terracotta';
-                                       else if (vLower === 'black') v = 'Black';
-                                       else if (vLower === 'mondo') v = 'Mondo';
-                                       else if (vLower === 'real turf' || vLower === 'realturf') v = 'Real Turf';
-                                       
-                                       payloadToPatch[k] = v;
-                                       updatedFieldsList.push(`${k}: *${v}*`);
-                                   }
-                               }
-                           } catch (parseErr) {
-                               console.warn('[Dynamic Extraction Parse Error]', parseErr.message);
-                           }
-                       }
-                   }
-                   
-                   await airtableWriteWithAutoDrop('Sites', payloadToPatch, boundSite.id);
-                   await getCachedSites(true);
-                   if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-
-                   const summaryStr = updatedFieldsList.length > 0 ? `\n\n*Updated Specifications:*\n• ` + updatedFieldsList.join('\n• ') : '';
-                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the *${boundSite.fields['Site Name']}* ledger and dynamically updated specifications.${summaryStr}`);
-                   return;
-                   
-               } catch (e) {
-                   console.warn('[Site Update Extraction Failed]', e.message);
-               }
-           }
-           
-           // 3. Fallback General Update Logic
-           await airtableWriteWithAutoDrop('Sites', {
-             'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
-             'Last Intent': 'GENERAL_UPDATE'
-           }, boundSite.id);
-           if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-           await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
-           return;
+        if ((isQuestion || isUpdate) && boundSite) {
+          
+          let activeTargetSite = null;
+          if (triage?.referenced_site_name) {
+            const ref = triage.referenced_site_name.toLowerCase();
+            activeTargetSite = allSites.find(s => {
+                const sName = (s.fields['Site Name'] || '').toLowerCase();
+                return sName.includes(ref) || ref.includes(sName);
+            });
+          }
+          if (!activeTargetSite) activeTargetSite = boundSite;
+          
+          if (isQuestion && !isUpdate) {
+            const queryPrompt = `Answer the question from this record:\nQuery: "${txt}"\nRecord: ${JSON.stringify(activeTargetSite.fields, null, 2)}`;
+            const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: queryPrompt }] }] })
+            });
+            if (geminiRes.ok) {
+              const data = await geminiRes.json();
+              const ans = data.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (ans) return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${ans.trim()}`);
+            }
+          }
+          if (isUpdate) {
+            const knownColumns = new Set();
+            allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
+            
+            const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns.`;
+            const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
+                generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+              })
+            });
+            if (geminiRes.ok) {
+              const data = await geminiRes.json();
+              const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (rawJson) {
+                const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+                const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, allSites) : parsed;
+                
+                const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
+                for (const [key, value] of Object.entries(normalized)) {
+                    payload[key] = value;
+                }
+                
+                const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
+                await getCachedSites(true);
+                
+                if (writeResult && writeResult.success) {
+                  const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
+                  if (writtenKeys.length > 0) {
+                    const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
+                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                  } else {
+                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                  }
+                } else {
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+                }
+                return;
+              }
+            }
+          }
         }
-        console.log(`[Text Engine] General conversational fallthrough: ignored.`);
         return;
       }
       return;
@@ -1703,7 +1592,7 @@ app.post('/api/telemetry/iot', async (req, res) => {
                         `_Physical turf gluing & glass seating automatically suspended on this asset._`;
 
       const groupTarget = site.fields['WhatsApp Group ID'] || CONFIG.meta.targetVerifiedPhone;
-      await dispatchOutboundWhatsApp(groupTarget, alertCard);
+      await whatsapp.sendWhatsAppMessage(CONFIG, groupTarget, alertCard);
     }
 
   } catch (err) {
@@ -1721,13 +1610,20 @@ app.post('/api/inbound-email', async (req, res) => {
     const b = req.body || {};
     
     // Airtable Scripting payload extraction
-    const fromAddr = b.from || b.sender || b.From || '';
-    const subjectLine = b.subject || b.Subject || 'No Subject';
-    const rawText = b.text || b.body_plain || b.html || b.body_html || JSON.stringify(b);
-    const cleanText = rawText.replace(/<[^>]*>?/gm, '').trim();
+    const fromAddr = b.from || b.sender || b.From || b.email || b.Email || 'Airtable Lead System';
+    const subjectLine = b.subject || b.Subject || b.title || 'Inbound Commercial Inquiry';
+    
+    let rawText = '';
+    if (b.text || b.body_plain || b.content || b.message) {
+        rawText = b.text || b.body_plain || b.content || b.message;
+    } else {
+        rawText = JSON.stringify(b);
+    }
+    
+    const cleanText = typeof rawText === 'string' ? rawText.replace(/<[^>]*>?/gm, '').trim() : JSON.stringify(rawText);
 
-    if (!fromAddr || !cleanText) {
-      console.warn('[Email Ingress] Ignored malformed email payload from Airtable automation.');
+    if (cleanText.length < 5 || cleanText === '{}') {
+      console.warn('[Email Ingress] Ignored malformed empty payload from Airtable automation.');
       return;
     }
 
@@ -1780,7 +1676,7 @@ Body: ${cleanText.substring(0, 1500)}`;
                                `_To reply, tap below and dictate your response._`;
              
              const buttons = [{ id: 'DRAFT_REPLY', title: "Draft AI Reply" }];
-             await dispatchOutboundButtons(CONFIG.meta.targetVerifiedPhone, alertCard, buttons);
+             await whatsapp.sendWhatsAppButtons(CONFIG, CONFIG.meta.targetVerifiedPhone, alertCard, buttons);
           } else {
              console.log(`[Email Engine] Rejected non-commercial email from ${fromAddr}`);
           }
