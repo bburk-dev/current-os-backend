@@ -21,7 +21,7 @@ const dailyEasterEggTracker = new Map();
 
 async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') {
   if (!toTarget || !messageId || !config.meta.phoneNumberId) return false;
-  let cleanDestination = String(toTarget).replace(/\D/g, ''); 
+  let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
   const payload = {
@@ -42,8 +42,8 @@ async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') 
       body: JSON.stringify(payload)
     });
     return res.ok;
-  } catch (err) { 
-      return false; 
+  } catch (err) {
+    return false;
   }
 }
 
@@ -52,7 +52,7 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
     console.warn(`[Meta Outbound] Aborted: Target missing.`);
     return false;
   }
-  
+
   let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
@@ -96,15 +96,14 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
 
 async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   if (!toTarget || !buttons || buttons.length === 0 || !config.meta.phoneNumberId) return false;
-  
+
   let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
-  // System-wide sanitization to prevent Meta Graph API silent failures on >20 char limits
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => {
     let safeTitle = String(btn.title || 'Select').trim();
     if (safeTitle.length > 20) {
-       safeTitle = safeTitle.substring(0, 20).trim();
+      safeTitle = safeTitle.substring(0, 20).trim();
     }
     return {
       type: 'reply',
@@ -139,6 +138,8 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
     });
 
     if (!res.ok) {
+      const errTxt = await res.text();
+      console.warn(`[Meta Buttons] Rejected (${res.status}): ${errTxt}. Falling back to text.`);
       const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
       return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
     }
@@ -151,14 +152,14 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
 
 async function fanOutToSubscribers(config, phoneNumbersString, messageBody, buttons = []) {
   if (!phoneNumbersString) return;
-  
+
   const rawNumbers = String(phoneNumbersString).split(',');
   const cleanNumbers = rawNumbers.map(n => {
-      let num = n.replace(/\D/g, '').trim();
-      if (num.length === 10) num = '1' + num;
-      return num;
+    let num = n.replace(/\D/g, '').trim();
+    if (num.length === 10) num = '1' + num;
+    return num;
   }).filter(n => n.length >= 10);
-  
+
   const uniqueTargets = [...new Set(cleanNumbers)];
 
   for (const target of uniqueTargets) {
@@ -184,10 +185,11 @@ function isIndoorSite(site) {
 }
 
 async function geocodeAddressWithGoogle(config, addressString) {
-  if (!config.google.apiKey || !addressString) return null;
+  const apiKey = config?.google?.apiKey || process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY;
+  if (!apiKey || !addressString) return null;
   try {
     const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${config.google.apiKey}`;
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${apiKey}`;
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
@@ -299,62 +301,120 @@ function evaluateWeatherTripwires(weather) {
 }
 
 // ====================================================================
-// 4. IDENTITY & LOCATION RESOLUTION (THE GOD SCHEMA)
+// 4. IDENTITY & LOCATION RESOLUTION (AIRTABLE SITE LOCATION RESOLVER)
 // ====================================================================
 
+function parseCoordinatePair(rawVal) {
+  if (rawVal === null || rawVal === undefined) return null;
+
+  // Unwrap Airtable Lookup / Rollup arrays (e.g., ["25.322523, -80.275597"])
+  if (Array.isArray(rawVal)) {
+    if (rawVal.length === 0) return null;
+    return parseCoordinatePair(rawVal[0]);
+  }
+
+  // Handle Airtable Map / Location extension objects ({ lat, lng } or { latitude, longitude })
+  if (typeof rawVal === 'object') {
+    const objLat = rawVal.lat ?? rawVal.latitude;
+    const objLon = rawVal.lng ?? rawVal.lon ?? rawVal.longitude;
+    if (objLat !== undefined && objLon !== undefined) {
+      const lat = parseFloat(objLat);
+      const lon = parseFloat(objLon);
+      if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
+    }
+    return null;
+  }
+
+  // Normalize string: replace Unicode minus/dashes with ASCII '-'
+  const cleaned = String(rawVal)
+    .replace(/[\u2212\u2013\u2014]/g, '-')
+    .trim();
+
+  const match = cleaned.match(/(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)/);
+  if (match) {
+    const lat = parseFloat(match[1]);
+    const lon = parseFloat(match[2]);
+    if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      return { lat, lon };
+    }
+  }
+
+  return null;
+}
+
 async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtableWriteWithAutoDrop, autoPersistSiteId = null) {
-  let rawLocation = rawLocationOrSite;
-  let cache = null;
+  let rawValue = rawLocationOrSite;
   let siteId = autoPersistSiteId;
+  let siteName = '';
 
   if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
     const fields = rawLocationOrSite.fields || rawLocationOrSite;
-    // Extract explicitly to avoid non-string types breaking regex
-    rawLocation = String(fields['Site location'] || '').trim();
-    cache = fields['Map Cache'];
     siteId = rawLocationOrSite.id || autoPersistSiteId;
-  }
+    siteName = String(fields['Site Name'] || '');
 
-  if (typeof rawLocation === 'string' && rawLocation.length > 0) {
-    if (memoryCache.coordinates.has(rawLocation)) {
-      return memoryCache.coordinates.get(rawLocation);
+    // Locate 'Site location' matching exact name or trimmed/case-insensitive variant
+    const siteLocationKey = Object.keys(fields).find(
+      k => k.trim().toLowerCase() === 'site location'
+    );
+    rawValue = siteLocationKey ? fields[siteLocationKey] : undefined;
+
+    if (/rcor/i.test(siteName)) {
+      console.log(`[Geo Debug] ${siteName} | key="${siteLocationKey}" | type=${Array.isArray(rawValue) ? 'array' : typeof rawValue} | value=${JSON.stringify(rawValue)}`);
     }
 
-    // Force strict parsing of Airtable comma-separated coordinates
-    const directMatch = rawLocation.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
-    if (directMatch) {
-      const coords = { lat: parseFloat(directMatch[1]), lon: parseFloat(directMatch[2]) };
-      memoryCache.coordinates.set(rawLocation, coords);
+    // 1. Direct parse of 'Site location' (handles strings, Lookup arrays, and Map objects)
+    const directCoords = parseCoordinatePair(rawValue);
+    if (directCoords) {
+      if (/rcor/i.test(siteName)) {
+        console.log(`[Geo Debug] ${siteName} -> Resolved (${directCoords.lat}, ${directCoords.lon})`);
+      }
+      return directCoords;
+    }
+
+    // 2. Check explicit numeric Latitude / Longitude fallback fields
+    const explicitLat = fields['Latitude'] ?? fields['Lat'];
+    const explicitLon = fields['Longitude'] ?? fields['Lon'] ?? fields['Lng'];
+    if (explicitLat !== undefined && explicitLon !== undefined && explicitLat !== '' && explicitLon !== '') {
+      const lat = parseFloat(explicitLat);
+      const lon = parseFloat(explicitLon);
+      if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
+    }
+  } else {
+    const directCoords = parseCoordinatePair(rawValue);
+    if (directCoords) return directCoords;
+  }
+
+  // 3. Fallback: if 'Site location' holds a street address string, geocode via Google Maps
+  const addressStr = Array.isArray(rawValue) ? String(rawValue[0] || '').trim() : String(rawValue || '').trim();
+  if (addressStr.length > 5 && addressStr !== '[object Object]') {
+    if (memoryCache?.coordinates?.has(addressStr)) {
+      return memoryCache.coordinates.get(addressStr);
+    }
+
+    const googleResult = await geocodeAddressWithGoogle(config, addressStr);
+    if (googleResult) {
+      const coords = { lat: googleResult.lat, lon: googleResult.lon };
+      memoryCache?.coordinates?.set(addressStr, coords);
+      if (siteId && airtableWriteWithAutoDrop) {
+        const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
+        airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
+      }
       return coords;
     }
-
-    // If it's a valid address string (not empty), fallback to Google Geocoding
-    if (rawLocation.length > 5 && !directMatch) {
-      const googleResult = await geocodeAddressWithGoogle(config, rawLocation);
-      if (googleResult) {
-        const coords = { lat: googleResult.lat, lon: googleResult.lon };
-        memoryCache.coordinates.set(rawLocation, coords);
-        if (siteId) {
-          const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
-          airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
-        }
-        return coords;
-      }
-    }
   }
-  
+
   return null;
 }
 
 async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWriteWithAutoDrop, generateMorningEasterEgg, overriddenWeatherStr = '') {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
   userActiveSiteMap.set(fromPhone, site.id);
-  
+
   if (worker && worker.id) {
     try {
-        await airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id);
+      await airtableWriteWithAutoDrop('Workers', { 'Current Site Bound': [site.id] }, worker.id);
     } catch (e) {
-        console.warn(`[Airtable Auto-Healer] Ignored missing 'Current Site Bound' field for worker ${worker.id}`);
+      console.warn(`[Airtable Auto-Healer] Ignored missing 'Current Site Bound' field for worker ${worker.id}`);
     }
   }
 
@@ -365,7 +425,7 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 
   const indoor = isIndoorSite(site);
   let arrivalWeather = overriddenWeatherStr;
-  
+
   if (!indoor && userLat && userLon && !arrivalWeather) {
     const weather = await getHyperlocalWeather(userLat, userLon);
     if (weather) arrivalWeather = evaluateWeatherTripwires(weather).summaryText;
@@ -383,7 +443,7 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 
   const prefLang = worker?.fields?.['Language'] || 'English';
   const todayStr = new Date().toISOString().split('T')[0];
-  
+
   if (dailyEasterEggTracker.get(fromPhone) !== todayStr && typeof generateMorningEasterEgg === 'function') {
     const egg = await generateMorningEasterEgg(config, prefLang);
     checkinCard += egg;
@@ -394,13 +454,12 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 }
 
 function getUserBoundSiteId(fromPhone) {
-    return userActiveSiteMap.get(fromPhone) || null;
+  return userActiveSiteMap.get(fromPhone) || null;
 }
 
 function updateSessionContext(fromPhone, update) {
-    if (!userActiveSiteMap.has(fromPhone)) return;
-    const sessionSiteId = userActiveSiteMap.get(fromPhone);
-    console.log(`[Session State] Updated context for ${fromPhone}:`, update);
+  if (!userActiveSiteMap.has(fromPhone)) return;
+  console.log(`[Session State] Updated context for ${fromPhone}:`, update);
 }
 
 // ====================================================================
@@ -500,28 +559,28 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
     const data = await res.json();
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
     const visualTruth = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-    
+
     if (visualTruth.is_padel_court === false) {
       console.log(`[Vision Bypass] Partial/Macro photo detected (${visualTruth.detected_scene}). Logging to dark matter instead of blocking.`);
-      
+
       const bypassNotes = `[PARTIAL SWEEP LOGGED]: \nDetected Scene: ${visualTruth.detected_scene || 'Unknown Hardware / Macro Shot'}\nCaption: ${batchText || 'No caption provided.'}`;
-      
+
       if (targetedSiteOverride || site) {
-         await airtableWriteWithAutoDrop('Sites', {
+        await airtableWriteWithAutoDrop('Sites', {
           'Last Note': bypassNotes,
           'Last Intent': 'PARTIAL_MEDIA_LOG'
         }, (targetedSiteOverride || site).id);
       }
-      
+
       const fallbackCard = `📸 *TITAN OS | PARTIAL MEDIA ARCHIVED*\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `⚠️ *Camera Detected:* ${visualTruth.detected_scene || 'Macro shot / Non-court structure'}\n` +
         `✅ *Action:* Media has been securely logged to the site ledger.\n\n` +
         `_Note: To verify a full physical gate milestone, ensure the primary court structure is visible in the frame._`;
-        
+
       await sendWhatsAppMessage(config, dispatchTarget, fallbackCard);
     }
-    
+
     return visualTruth;
   } catch (err) {
     return { is_padel_court: true, detected_scene: 'Bypassed on parse error' };
@@ -567,7 +626,7 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
 
     const result = await res.json();
     const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-    
+
     if (!rawText) return { highest_gate: 0, blockers_detected: [], summary: "Failed to generate evaluation." };
 
     return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
@@ -578,10 +637,9 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
 }
 
 async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs) {
-    // Placeholder function to process the debounced media batch
-    console.log(`[processMediaBatch] Handling ${currentBatch.items.length} items for ${currentBatch.dispatchTarget}`);
-    const receiptCard = `📸 *TITAN OS | MEDIA BATCH QUEUED*\n──────────────────────────────\n${currentBatch.items.length} files securely hashed and submitted for forensic evaluation.`;
-    await sendWhatsAppMessage(config, currentBatch.dispatchTarget, receiptCard);
+  console.log(`[processMediaBatch] Handling ${currentBatch.items.length} items for ${currentBatch.dispatchTarget}`);
+  const receiptCard = `📸 *TITAN OS | MEDIA BATCH QUEUED*\n──────────────────────────────\n${currentBatch.items.length} files securely hashed and submitted for forensic evaluation.`;
+  await sendWhatsAppMessage(config, currentBatch.dispatchTarget, receiptCard);
 }
 
 // ====================================================================
@@ -590,25 +648,20 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 
 async function handleInboundEmail(config, emailPayload, getCachedContacts) {
   try {
-    // Extract and Clean Email Addresses (From, To, CC)
     const extractEmails = (str) => {
       const matches = String(str || '').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi);
       return matches ? matches.map(e => e.toLowerCase().trim()) : [];
     };
 
     const senderEmails = extractEmails(emailPayload.from);
-    const toEmails = extractEmails(emailPayload.to);
     const ccEmails = extractEmails(emailPayload.cc);
-    
-    // Target original sender AND anyone CC'd
     const targetEmails = [...new Set([...senderEmails, ...ccEmails])];
-    
+
     if (targetEmails.length === 0) {
       console.warn('[Email Handler] No valid sender/CC emails extracted.');
       return;
     }
 
-    // Resolve Phone Numbers via Contacts Cache
     const contacts = await getCachedContacts();
     const targetPhones = [];
     const knownNames = [];
@@ -626,14 +679,13 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
     });
 
     if (targetPhones.length === 0) {
-       console.log(`[Email Handler] No WhatsApp-routable phone numbers found in Contacts for: ${targetEmails.join(', ')}`);
-       return;
+      console.log(`[Email Handler] No WhatsApp-routable phone numbers found in Contacts for: ${targetEmails.join(', ')}`);
+      return;
     }
 
     const participants = knownNames.length > 0 ? knownNames.join(' and ') : 'colleagues';
     console.log(`[Email Handler] Resolved WhatsApp targets for: ${participants} (${targetPhones.join(', ')})`);
 
-    // Generate Reply via Gemini 2.5
     const prompt = `You are the executive assistant for Bob Burk. 
 An email was just received from: ${emailPayload.from}.
 The subject is: "${emailPayload.subject}".
@@ -663,19 +715,18 @@ RULES:
     });
 
     if (!res.ok) {
-       console.error('[Email Handler] Gemini drafting failed:', await res.text());
-       return;
+      console.error('[Email Handler] Gemini drafting failed:', await res.text());
+      return;
     }
 
     const data = await res.json();
     const generatedReply = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!generatedReply) {
-       console.error('[Email Handler] Gemini returned an empty response.');
-       return;
+      console.error('[Email Handler] Gemini returned an empty response.');
+      return;
     }
 
-    // Format and Dispatch to All Resolved Targets
     const formattedDispatch = `📧 *TITAN OS | INBOUND EMAIL RELAY*\n` +
                               `━━━━━━━━━━━━━━━━━━━━\n` +
                               `*From:* ${emailPayload.from}\n` +
@@ -686,7 +737,7 @@ RULES:
     for (const phone of targetPhones) {
       await sendWhatsAppMessage(config, phone, formattedDispatch);
     }
-    
+
     console.log(`[Email Handler] Successfully dispatched email response to ${targetPhones.length} recipients.`);
 
   } catch (err) {
@@ -699,49 +750,39 @@ RULES:
 // ====================================================================
 
 function normalizeSitePayload(rawPayload, cachedSiteRecord) {
-    if (!rawPayload || typeof rawPayload !== 'object') return {};
+  if (!rawPayload || typeof rawPayload !== 'object') return {};
 
-    const normalized = {};
-    const knownKeys = Object.keys(cachedSiteRecord.fields || {});
+  const normalized = {};
+  const knownKeys = Object.keys(cachedSiteRecord.fields || {});
 
-    for (let [key, value] of Object.entries(rawPayload)) {
-        // 1. Fuzzy Key Matching (Fixing Gemini hallucinations like "turf col" -> "Turf Colour")
-        let actualKey = knownKeys.find(k => k.toLowerCase() === key.toLowerCase());
-        
-        if (!actualKey) {
-            // Aggressive fuzzy match
-            const keyParts = key.toLowerCase().split(/[_\s]+/);
-            actualKey = knownKeys.find(k => {
-                const kLower = k.toLowerCase();
-                return keyParts.every(part => part.length > 2 && kLower.includes(part));
-            });
-        }
+  for (let [key, value] of Object.entries(rawPayload)) {
+    let actualKey = knownKeys.find(k => k.toLowerCase() === key.toLowerCase());
 
-        if (!actualKey) {
-            console.warn(`[Schema Normalizer] Dropping unknown field: "${key}"`);
-            continue;
-        }
-
-        // 2. Strict Type Casting for Airtable
-        // Convert strict booleans into Airtable Single Select "Yes"/"No"
-        if (typeof value === 'boolean') {
-            normalized[actualKey] = value ? 'Yes' : 'No';
-        } 
-        // Handle string booleans
-        else if (typeof value === 'string' && (value.toLowerCase() === 'true' || value.toLowerCase() === 'false')) {
-            normalized[actualKey] = value.toLowerCase() === 'true' ? 'Yes' : 'No';
-        }
-        // Title Case strings that look like dropdown items
-        else if (typeof value === 'string' && value.length < 50) {
-            normalized[actualKey] = value.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-        } 
-        // Pass-through everything else
-        else {
-            normalized[actualKey] = value;
-        }
+    if (!actualKey) {
+      const keyParts = key.toLowerCase().split(/[_\s]+/);
+      actualKey = knownKeys.find(k => {
+        const kLower = k.toLowerCase();
+        return keyParts.every(part => part.length > 2 && kLower.includes(part));
+      });
     }
 
-    return normalized;
+    if (!actualKey) {
+      console.warn(`[Schema Normalizer] Dropping unknown field: "${key}"`);
+      continue;
+    }
+
+    if (typeof value === 'boolean') {
+      normalized[actualKey] = value ? 'Yes' : 'No';
+    } else if (typeof value === 'string' && (value.toLowerCase() === 'true' || value.toLowerCase() === 'false')) {
+      normalized[actualKey] = value.toLowerCase() === 'true' ? 'Yes' : 'No';
+    } else if (typeof value === 'string' && value.length < 50) {
+      normalized[actualKey] = value.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+    } else {
+      normalized[actualKey] = value;
+    }
+  }
+
+  return normalized;
 }
 
 module.exports = {
