@@ -107,6 +107,7 @@ const memoryCache = {
   contactsLastFetched: 0,
   assignments: null,
   assignmentsLastFetched: 0,
+  coordinates: new Map(),
   qbo: {
     accessToken: null,
     refreshToken: null,
@@ -172,12 +173,44 @@ async function getCachedContacts(forceRefresh = false) {
   if (!forceRefresh && memoryCache.contacts && (now - memoryCache.contactsLastFetched < CACHE_TTL_MS)) {
     return memoryCache.contacts;
   }
+
   try {
-    memoryCache.contacts = await fetchAllAirtableRecords('Contacts');
+    // 1. Discover exact table name via schema.bases:read before querying records
+    let targetTable = 'Contacts';
+    try {
+      const schemaUrl = `${CONFIG.airtable.endpoint}/meta/bases/${CONFIG.airtable.baseId}/tables`;
+      const schemaRes = await fetch(schemaUrl, {
+        headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+      });
+
+      if (schemaRes.ok) {
+        const schemaData = await schemaRes.json();
+        const tables = schemaData.tables || [];
+        const matchedTable =
+          tables.find(t => t.name.trim().toLowerCase() === 'contacts') ||
+          tables.find(t => /contact|client|lead|partner/i.test(t.name));
+
+        if (!matchedTable) {
+          console.log('[Cache Engine] No Contacts/Partner table present in this base. Skipping hydration.');
+          memoryCache.contacts = [];
+          memoryCache.contactsLastFetched = now;
+          return memoryCache.contacts;
+        }
+        targetTable = matchedTable.name;
+      }
+    } catch (schemaErr) {
+      console.warn('[Cache Engine] Schema lookup bypassed:', schemaErr.message);
+    }
+
+    memoryCache.contacts = await fetchAllAirtableRecords(targetTable);
     memoryCache.contactsLastFetched = now;
+    console.log(`[Cache Engine] Refreshed ${memoryCache.contacts.length} records from "${targetTable}" into RAM`);
     return memoryCache.contacts;
   } catch (err) {
-    return memoryCache.contacts || [];
+    console.warn('[Cache Engine] Contacts hydration skipped:', err.message);
+    memoryCache.contacts = memoryCache.contacts || [];
+    memoryCache.contactsLastFetched = now;
+    return memoryCache.contacts;
   }
 }
 
