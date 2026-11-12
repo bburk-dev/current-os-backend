@@ -1,7 +1,8 @@
 /**
  * TITAN OS V6.0.22 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
- * Purpose: Webhooks, Debouncing, NLP Intent Routing, Forensic Vision, and Telemetry
+ * Purpose: Webhooks, Debouncing, NLP Intent Routing, 12-Gate Forensic Vision,
+ *          Supabase Private Vault Storage, BOM Triggers, and Telemetry
  */
 
 const crypto = require('crypto');
@@ -307,13 +308,11 @@ function evaluateWeatherTripwires(weather) {
 function parseCoordinatePair(rawVal) {
   if (rawVal === null || rawVal === undefined) return null;
 
-  // Unwrap Airtable Lookup / Rollup arrays (e.g., ["25.322523, -80.275597"])
   if (Array.isArray(rawVal)) {
     if (rawVal.length === 0) return null;
     return parseCoordinatePair(rawVal[0]);
   }
 
-  // Handle Airtable Map / Location extension objects ({ lat, lng } or { latitude, longitude })
   if (typeof rawVal === 'object') {
     const objLat = rawVal.lat ?? rawVal.latitude;
     const objLon = rawVal.lng ?? rawVal.lon ?? rawVal.longitude;
@@ -325,7 +324,6 @@ function parseCoordinatePair(rawVal) {
     return null;
   }
 
-  // Normalize string: replace Unicode minus/dashes with ASCII '-'
   const cleaned = String(rawVal)
     .replace(/[\u2212\u2013\u2014]/g, '-')
     .trim();
@@ -345,33 +343,19 @@ function parseCoordinatePair(rawVal) {
 async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtableWriteWithAutoDrop, autoPersistSiteId = null) {
   let rawValue = rawLocationOrSite;
   let siteId = autoPersistSiteId;
-  let siteName = '';
 
   if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
     const fields = rawLocationOrSite.fields || rawLocationOrSite;
     siteId = rawLocationOrSite.id || autoPersistSiteId;
-    siteName = String(fields['Site Name'] || '');
 
-    // Locate 'Site location' matching exact name or trimmed/case-insensitive variant
     const siteLocationKey = Object.keys(fields).find(
       k => k.trim().toLowerCase() === 'site location'
     );
     rawValue = siteLocationKey ? fields[siteLocationKey] : undefined;
 
-    if (/rcor/i.test(siteName)) {
-      console.log(`[Geo Debug] ${siteName} | key="${siteLocationKey}" | type=${Array.isArray(rawValue) ? 'array' : typeof rawValue} | value=${JSON.stringify(rawValue)}`);
-    }
-
-    // 1. Direct parse of 'Site location' (handles strings, Lookup arrays, and Map objects)
     const directCoords = parseCoordinatePair(rawValue);
-    if (directCoords) {
-      if (/rcor/i.test(siteName)) {
-        console.log(`[Geo Debug] ${siteName} -> Resolved (${directCoords.lat}, ${directCoords.lon})`);
-      }
-      return directCoords;
-    }
+    if (directCoords) return directCoords;
 
-    // 2. Check explicit numeric Latitude / Longitude fallback fields
     const explicitLat = fields['Latitude'] ?? fields['Lat'];
     const explicitLon = fields['Longitude'] ?? fields['Lon'] ?? fields['Lng'];
     if (explicitLat !== undefined && explicitLon !== undefined && explicitLat !== '' && explicitLon !== '') {
@@ -384,7 +368,6 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
     if (directCoords) return directCoords;
   }
 
-  // 3. Fallback: if 'Site location' holds a street address string, geocode via Google Maps
   const addressStr = Array.isArray(rawValue) ? String(rawValue[0] || '').trim() : String(rawValue || '').trim();
   if (addressStr.length > 5 && addressStr !== '[object Object]') {
     if (memoryCache?.coordinates?.has(addressStr)) {
@@ -522,8 +505,116 @@ Respond STRICTLY with JSON:
 }
 
 // ====================================================================
-// 6. BLIND VISUAL FORENSICS & MEDIA BATCH PROCESSING
+// 6. BLIND VISUAL FORENSICS, SUPABASE VAULT, & 12-GATE BATCH PIPELINE
 // ====================================================================
+
+const INDUSTRIAL_12_GATE_PROMPT = `You are the Lead Forensic Construction Auditor for Bounce Padel.
+Evaluate the attached field photos/videos against the 12-Gate Padel Court Installation Standard:
+Gate 1: Concrete Slab / Foundation / Sub-base Prepped
+Gate 2: Perimeter Steel Frame Erected & Anchored
+Gate 3: Structural Wire Mesh Panels Installed
+Gate 4: 12mm Tempered Glass Panels Seated & Clamped
+Gate 5: LED Lighting Columns & Fixtures Mounted
+Gate 6: Shock Pad / Underlayment Installed
+Gate 7: Artificial Turf Unrolled, Cut & Seamed
+Gate 8: Court Playing Lines Cut & Glued
+Gate 9: Silica Sand Infill Brushed In
+Gate 10: Center Net Posts & Tensioned Net Installed
+Gate 11: Entrance Gates, Hinges & Latches Operational
+Gate 12: Site Cleanliness & Complete Debris/Tool Removal
+
+CRITICAL RULES:
+1. ADDITIVE INGESTION: Credit every gate clearly supported by visual evidence. Never punish missing angles; list unverified gates as pending adjustments.
+2. GATE 12 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, or construction debris are visible anywhere on or around the playing surface, Gate 12 MUST be marked false/withheld even if Gates 1–11 are complete.
+3. Return STRICTLY JSON:
+{
+  "highest_gate": number (0 to 12),
+  "verified_gates": [number],
+  "cleanliness_passed": boolean,
+  "blockers_detected": ["string"],
+  "field_observations": "string (concise material/hardware/friction notes for Dark Matter log)",
+  "summary": "string (concise, encouraging 2-sentence field summary in target language)"
+}`;
+
+const MAINTENANCE_TRIAGE_PROMPT = `You are the Lead Maintenance Inspector for Bounce Padel.
+Inspect the attached court photos/videos for turf wear, sand compaction, glass alignment, net tension, lighting outages, rust, or drainage issues.
+Return STRICTLY JSON:
+{
+  "highest_gate": 12,
+  "verified_gates": [12],
+  "cleanliness_passed": boolean,
+  "blockers_detected": ["string (any maintenance defects found)"],
+  "field_observations": "string (concise asset health notes)",
+  "summary": "string (concise 2-sentence maintenance report in target language)"
+}`;
+
+async function uploadMediaToSupabaseVault(config, item) {
+  if (!config?.supabase?.url || !config?.supabase?.serviceRoleKey) return null;
+  try {
+    const now = new Date();
+    const yyyy = now.getUTCFullYear();
+    const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+    const ext = item.mimeType.includes('video') ? 'mp4' : (item.mimeType.includes('png') ? 'png' : 'jpg');
+    const filePath = `${yyyy}/${mm}/${crypto.randomUUID()}.${ext}`;
+    const bucket = config.supabase.bucket || 'titan-private-media';
+
+    const uploadRes = await fetch(`${config.supabase.url}/storage/v1/object/${bucket}/${filePath}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.supabase.serviceRoleKey}`,
+        'apikey': config.supabase.serviceRoleKey,
+        'Content-Type': item.mimeType
+      },
+      body: item.buffer
+    });
+
+    if (!uploadRes.ok) {
+      console.warn(`[Supabase Vault] Upload failed (${uploadRes.status})`);
+      return null;
+    }
+
+    const signRes = await fetch(`${config.supabase.url}/storage/v1/object/sign/${bucket}/${filePath}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.supabase.serviceRoleKey}`,
+        'apikey': config.supabase.serviceRoleKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ expiresIn: 604800 }) // 7-day signed token
+    });
+
+    if (!signRes.ok) return null;
+    const signData = await signRes.json();
+    return signData?.signedURL ? `${config.supabase.url}/storage/v1${signData.signedURL}` : null;
+  } catch (err) {
+    console.warn('[Supabase Vault] Exception:', err.message);
+    return null;
+  }
+}
+
+async function logToDarkMatterVault(config, siteName, workerName, category, rawText, distilledContext) {
+  if (!config?.supabase?.url || !config?.supabase?.serviceRoleKey || !distilledContext) return;
+  try {
+    await fetch(`${config.supabase.url}/rest/v1/${config.supabase.tableDarkMatter}`, {
+      method: 'POST',
+      headers: {
+        'apikey': config.supabase.serviceRoleKey,
+        'Authorization': `Bearer ${config.supabase.serviceRoleKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({
+        site_name: siteName || 'Unbound Field',
+        worker_name: workerName || 'Field Tech',
+        category: category || 'FIELD_OBSERVATION',
+        raw_text: rawText || '',
+        distilled_context: distilledContext
+      })
+    });
+  } catch (err) {
+    console.warn('[Dark Matter Vault] Insert warning:', err.message);
+  }
+}
 
 async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispatchTarget, targetedSiteOverride, site, airtableWriteWithAutoDrop) {
   const payload = {
@@ -587,9 +678,9 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   }
 }
 
-async function evaluateCourtMediaBatch(config, items, cumulativeContext, maintenanceTriagePrompt, industrialSystemPrompt) {
+async function evaluateCourtMediaBatch(config, items, cumulativeContext, maintenanceTriagePrompt = MAINTENANCE_TRIAGE_PROMPT, industrialSystemPrompt = INDUSTRIAL_12_GATE_PROMPT) {
   const contentParts = [
-    { text: `Context: You are evaluating a Padel court at site: ${cumulativeContext.siteName}. The workflow mode is ${cumulativeContext.workflowMode}. The site is currently at Status: ${cumulativeContext.siteStatus}. The target language for the output receipt card is ${cumulativeContext.workerLanguage}.` }
+    { text: `Context: You are evaluating a Padel court at site: ${cumulativeContext.siteName}. The workflow mode is ${cumulativeContext.workflowMode}. The site is currently at Status: ${cumulativeContext.siteStatus}. The target language for the output receipt card is ${cumulativeContext.workerLanguage}. Captions provided: "${cumulativeContext.captions || 'None'}"` }
   ];
 
   for (const item of items) {
@@ -607,7 +698,7 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
     system_instruction: { parts: [{ text: cumulativeContext.workflowMode === 'MAINTENANCE' ? maintenanceTriagePrompt : industrialSystemPrompt }] },
     contents: [{ parts: contentParts }],
     generationConfig: {
-      temperature: 0.1,
+      temperature: 0.0,
       responseMimeType: 'application/json'
     }
   };
@@ -621,25 +712,148 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
 
     if (!res.ok) {
       console.error('[Gemini Evaluation API Error]:', await res.text());
-      return { highest_gate: 0, blockers_detected: [], summary: "API evaluation failed." };
+      return { highest_gate: 0, verified_gates: [], cleanliness_passed: true, blockers_detected: [], summary: 'API evaluation failed.' };
     }
 
     const result = await res.json();
     const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    if (!rawText) return { highest_gate: 0, blockers_detected: [], summary: "Failed to generate evaluation." };
+    if (!rawText) return { highest_gate: 0, verified_gates: [], cleanliness_passed: true, blockers_detected: [], summary: 'Failed to generate evaluation.' };
 
     return JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
   } catch (err) {
     console.error('[Gemini Evaluation Exception]:', err.message);
-    return { highest_gate: 0, blockers_detected: [], summary: "Exception during evaluation." };
+    return { highest_gate: 0, verified_gates: [], cleanliness_passed: true, blockers_detected: [], summary: 'Exception during evaluation.' };
   }
 }
 
 async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs) {
-  console.log(`[processMediaBatch] Handling ${currentBatch.items.length} items for ${currentBatch.dispatchTarget}`);
-  const receiptCard = `📸 *TITAN OS | MEDIA BATCH QUEUED*\n──────────────────────────────\n${currentBatch.items.length} files securely hashed and submitted for forensic evaluation.`;
-  await sendWhatsAppMessage(config, currentBatch.dispatchTarget, receiptCard);
+  const { items, site, worker, dispatchTarget, callerIdentity } = currentBatch;
+  const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Field Tech';
+  const workerLang = worker?.fields?.['Language'] || callerIdentity?.language || 'English';
+  const combinedCaptions = items.map(i => i.caption).filter(Boolean).join(' | ');
+
+  if (!site) {
+    await sendWhatsAppMessage(
+      config,
+      dispatchTarget,
+      `📍 *SITE CONTEXT REQUIRED*\nReceived ${items.length} file(s), but you are not currently checked in to a court.\n\nDrop a 📍 *WhatsApp Location Pin* on-site first, then re-send your sweep.`
+    );
+    return;
+  }
+
+  const siteName = site.fields['Site Name'] || 'Active Court';
+  const workflowMode = site.fields['Workflow Mode'] || 'INSTALLATION';
+  const siteStatus = site.fields['Site Status'] || 'ACTIVE';
+
+  // Stage 1: Blind Visual Ground-Truth Verification (Cold Inspection)
+  const firstVisual = items.find(i => i.type === 'image' || i.type === 'video');
+  if (firstVisual) {
+    const groundTruth = await inspectBlindVisualGroundTruth(config, firstVisual, combinedCaptions, dispatchTarget, site, site, airtableWriteWithAutoDrop);
+    if (groundTruth && groundTruth.is_padel_court === false) {
+      await logToDarkMatterVault(config, siteName, workerName, 'PARTIAL_HARDWARE', combinedCaptions, groundTruth.detected_scene);
+      return;
+    }
+  }
+
+  // Stage 2: Parallel Supabase Vault Archival + 12-Gate Forensic Evaluation
+  const uploadPromises = items.map(item => uploadMediaToSupabaseVault(config, item));
+  const evalPromise = evaluateCourtMediaBatch(config, items, {
+    siteName,
+    workflowMode,
+    siteStatus,
+    workerLanguage: workerLang,
+    captions: combinedCaptions
+  });
+
+  const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
+  const validLinks = signedUrls.filter(Boolean);
+
+  // Enforce Gate 12 Non-Monotonic Cleanliness Guardrail
+  let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates] : [];
+  if (audit.cleanliness_passed === false) {
+    verifiedGates = verifiedGates.filter(g => g !== 12);
+  }
+  const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
+  const gateLabel = workflowMode === 'MAINTENANCE' ? 'Maintenance Sweep' : `Gate ${highestGate} (${verifiedGates.length}/12 Verified)`;
+
+  // Stage 3: Ledger Mutation (Sites & Reports 2) + Dark Matter Capture
+  const auditNote = `[FORENSIC SWEEP] ${workerName}: ${gateLabel}. ${audit.summary || ''}${validLinks.length > 0 ? `\nVault: ${validLinks[0]}` : ''}`;
+
+  const sitePatch = {
+    'Last Note': auditNote,
+    'Last Intent': workflowMode === 'MAINTENANCE' ? 'MAINTENANCE_SWEEP' : 'FORENSIC_GATE_AUDIT'
+  };
+  if (workflowMode === 'INSTALLATION' && highestGate > 0) {
+    sitePatch['Current Gate'] = gateLabel;
+  }
+
+  await airtableWriteWithAutoDrop('Sites', sitePatch, site.id);
+
+  const reportPatch = {
+    'Workflow Mode': workflowMode,
+    'Action Items': (audit.blockers_detected && audit.blockers_detected.length > 0) ? audit.blockers_detected.join('; ') : 'None',
+    'Last Note': auditNote,
+    'Site': [site.id]
+  };
+  if (worker?.id) reportPatch['Worker'] = [worker.id];
+  if (validLinks.length > 0) reportPatch['Media Links'] = validLinks.join('\n');
+
+  await airtableWriteWithAutoDrop('Reports 2', reportPatch);
+
+  if (audit.field_observations) {
+    await logToDarkMatterVault(config, siteName, workerName, workflowMode, combinedCaptions, audit.field_observations);
+  }
+
+  // Stage 4: Automated BOM Depletion on Structural Gates
+  if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
+    try {
+      const inventory = require('./inventory');
+      if (inventory && inventory.processMilestoneBOMDeduction) {
+        for (const g of verifiedGates) {
+          if ([2, 4, 6].includes(g)) {
+            await inventory.processMilestoneBOMDeduction(config, site, g);
+          }
+        }
+      }
+    } catch (bomErr) {
+      console.warn('[BOM Trigger Warning]:', bomErr.message);
+    }
+  }
+
+  // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + Joy Cannon)
+  const blockersBlock = (audit.blockers_detected && audit.blockers_detected.length > 0)
+    ? `\n⚠️ *Adjustments / Holds:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
+    : '';
+  const cleanWarning = (audit.cleanliness_passed === false)
+    ? `\n🧹 *Gate 12 Held:* Debris/tools visible on apron. Clear site to seal Gate 12.\n`
+    : '';
+
+  const punchCard = `🏗️ *TITAN OS | FORENSIC AUDIT RECEIPT*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🏟️ *Court:* ${siteName}\n` +
+    `👷 *Operative:* ${workerName}\n` +
+    `📊 *Milestone:* ${gateLabel}\n` +
+    `📸 *Evidence:* ${items.length} file(s) sealed in vault\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `${audit.summary || 'Progress logged to digital twin.'}` +
+    `${blockersBlock}${cleanWarning}`;
+
+  await sendWhatsAppMessage(config, dispatchTarget, punchCard);
+
+  // Joy Cannon: Broadcast milestone progress to external subscribers registered on the Site
+  const subscriberPhones = site.fields['Subscriber Phones'] || site.fields['Subscribers'] || site.fields['Client Phone'];
+  if (subscriberPhones && workflowMode === 'INSTALLATION' && highestGate > 0) {
+    const joyMsg = `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `🏟️ *Project:* ${siteName}\n` +
+      `✅ *Status:* ${gateLabel}\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `${audit.summary || 'Construction progressing on schedule.'}` +
+      (validLinks.length > 0 ? `\n\n📸 *Latest Site Capture:*\n${validLinks[0]}` : '');
+
+    await fanOutToSubscribers(config, subscriberPhones, joyMsg);
+  }
 }
 
 // ====================================================================
