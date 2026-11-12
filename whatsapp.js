@@ -33,7 +33,7 @@ async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') 
   };
 
   try {
-    await fetch(`${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`, {
+    const res = await fetch(`${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${config.meta.accessToken}`,
@@ -41,8 +41,10 @@ async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') 
       },
       body: JSON.stringify(payload)
     });
-    return true;
-  } catch (err) { return false; }
+    return res.ok;
+  } catch (err) { 
+      return false; 
+  }
 }
 
 async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
@@ -98,13 +100,20 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
-  const actionButtons = buttons.slice(0, 3).map((btn, idx) => ({
-    type: 'reply',
-    reply: {
-      id: btn.id || `btn_${idx}_${Date.now()}`,
-      title: (btn.title || 'Select').slice(0, 20)
+  // System-wide sanitization to prevent Meta Graph API silent failures on >20 char limits
+  const actionButtons = buttons.slice(0, 3).map((btn, idx) => {
+    let safeTitle = String(btn.title || 'Select').trim();
+    if (safeTitle.length > 20) {
+       safeTitle = safeTitle.substring(0, 20).trim();
     }
-  }));
+    return {
+      type: 'reply',
+      reply: {
+        id: btn.id || `btn_${idx}_${Date.now()}`,
+        title: safeTitle
+      }
+    };
+  });
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -333,7 +342,7 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
   return null;
 }
 
-async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWriteWithAutoDrop, generateMorningEasterEgg) {
+async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWriteWithAutoDrop, generateMorningEasterEgg, overriddenWeatherStr = '') {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
   userActiveSiteMap.set(fromPhone, site.id);
   
@@ -351,8 +360,9 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
   }, site.id).catch(() => {});
 
   const indoor = isIndoorSite(site);
-  let arrivalWeather = '';
-  if (!indoor && userLat && userLon) {
+  let arrivalWeather = overriddenWeatherStr;
+  
+  if (!indoor && userLat && userLon && !arrivalWeather) {
     const weather = await getHyperlocalWeather(userLat, userLon);
     if (weather) arrivalWeather = evaluateWeatherTripwires(weather).summaryText;
   }
@@ -370,7 +380,7 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
   const prefLang = worker?.fields?.['Language'] || 'English';
   const todayStr = new Date().toISOString().split('T')[0];
   
-  if (dailyEasterEggTracker.get(fromPhone) !== todayStr) {
+  if (dailyEasterEggTracker.get(fromPhone) !== todayStr && typeof generateMorningEasterEgg === 'function') {
     const egg = await generateMorningEasterEgg(config, prefLang);
     checkinCard += egg;
     dailyEasterEggTracker.set(fromPhone, todayStr);
@@ -386,7 +396,6 @@ function getUserBoundSiteId(fromPhone) {
 function updateSessionContext(fromPhone, update) {
     if (!userActiveSiteMap.has(fromPhone)) return;
     const sessionSiteId = userActiveSiteMap.get(fromPhone);
-    // Expand this functionality as needed for more robust context caching
     console.log(`[Session State] Updated context for ${fromPhone}:`, update);
 }
 
@@ -566,7 +575,6 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
 
 async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs) {
     // Placeholder function to process the debounced media batch
-    // In your full implementation, this integrates inspectBlindVisualGroundTruth and evaluateCourtMediaBatch
     console.log(`[processMediaBatch] Handling ${currentBatch.items.length} items for ${currentBatch.dispatchTarget}`);
     const receiptCard = `📸 *TITAN OS | MEDIA BATCH QUEUED*\n──────────────────────────────\n${currentBatch.items.length} files securely hashed and submitted for forensic evaluation.`;
     await sendWhatsAppMessage(config, currentBatch.dispatchTarget, receiptCard);
