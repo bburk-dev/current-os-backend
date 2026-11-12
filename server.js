@@ -77,6 +77,9 @@ const CONFIG = {
     accessToken: process.env.QBO_ACCESS_TOKEN,
     refreshToken: null,
     baseUrl: 'https://quickbooks.api.intuit.com/v3/company'
+  },
+  google: {
+    apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
   }
 };
 
@@ -656,6 +659,8 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const callerIdentity = await resolveIdentity(fromPhone);
+    console.log(`[Bouncer] Resolved Identity for ${fromPhone}: ${callerIdentity.type} (${callerIdentity.name})`);
+
     const sessionSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : null;
     let site = null;
     const allSites = await getCachedSites();
@@ -681,7 +686,9 @@ app.post('/webhook', async (req, res) => {
         'Message ID': messageId,
         'Message Type': safeMessageType
       });
-    } catch (e) {}
+    } catch (e) {
+        console.warn(`[Airtable Log] Failed to write to Inbound Messages 2: ${e.message}`);
+    }
 
     const interactiveButtonId = message.interactive?.button_reply?.id || '';
     if (interactiveButtonId) {
@@ -701,19 +708,29 @@ app.post('/webhook', async (req, res) => {
           
           let dist = 0;
           if (userLat && userLon) {
-             const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, selectedSite, airtableWriteWithAutoDrop);
-             if (coords) {
-                 dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+             try {
+                const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, selectedSite, airtableWriteWithAutoDrop);
+                if (coords) {
+                    dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+                }
+             } catch (geocodingBindingErr) {
+                console.warn(`[Geocoding Error] Failed to resolve coordinates for binding: ${geocodingBindingErr.message}`);
              }
           }
 
           let weatherStr = '';
           if (userLat && userLon) {
-             const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
-             if (!weatherCheck.safe) weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}`;
-             else if (weatherCheck.telemetry) weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
+             try {
+                const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
+                if (!weatherCheck.safe) weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}`;
+                else if (weatherCheck.telemetry) weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
+             } catch (wError) {
+                console.warn(`[Meteorology Error] Failed to evaluate weather during binding: ${wError.message}`);
+             }
           }
-          await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
+          
+          await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr)
+            .catch(e => console.error('[Context Binding Error]:', e.message));
         }
         return;
       }
@@ -851,6 +868,92 @@ app.post('/webhook', async (req, res) => {
         }
         return;
       }
+    }
+
+    if (message.type === 'location') {
+      console.log(`[Location Triage] Received pin from ${fromPhone}. Triggering reaction...`);
+      
+      whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍')
+        .catch(e => console.error('[Meta API] Reaction Error:', e.message));
+        
+      const userLat = message.location?.latitude;
+      const userLon = message.location?.longitude;
+      
+      if (userLat && userLon) {
+        whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
+
+        let weatherStr = '';
+        try {
+          const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
+          if (!weatherCheck.safe) {
+            weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`;
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, weatherStr)
+                .catch(e => console.error('[Meta API] Weather Warning Message Error:', e.message));
+          } else if (weatherCheck.telemetry) {
+            weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
+          }
+        } catch (weatherError) {
+          console.warn(`[Meteorology Error] Failed to evaluate weather for ${fromPhone}:`, weatherError.message);
+        }
+
+        let allSites = [];
+        try {
+           allSites = await getCachedSites(true);
+        } catch (cacheError) {
+           console.error('[Cache Error] Failed to retrieve sites:', cacheError.message);
+        }
+        
+        const nearby = [];
+        
+        for (const s of allSites) {
+          try {
+            const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
+            if (coords) {
+              const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
+              if (dist <= 2500) nearby.push({ site: s, distance: dist });
+            }
+          } catch (geocodeError) {
+             console.warn(`[Geocoding Error] Failed to resolve coordinates for site ${s.id}:`, geocodeError.message);
+          }
+        }
+        
+        nearby.sort((a, b) => a.distance - b.distance);
+
+        if (nearby.length === 1) {
+          console.log(`[Location Triage] Single site found (${nearby[0].site.fields['Site Name']}). Binding context.`);
+          await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr)
+             .catch(e => console.error('[Context Binding Error]:', e.message));
+        } else if (nearby.length > 1) {
+          console.log(`[Location Triage] Multiple sites found. Dispatching selector buttons.`);
+          const buttons = nearby.slice(0, 3).map((n) => ({
+            id: `BIND_SITE_${n.site.id}`,
+            title: String(n.site.fields['Site Name']).substring(0, 20)
+          }));
+          await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 2.5km. Please select your active zone:`, buttons)
+              .catch(e => console.error('[Meta API] Button Message Error:', e.message));
+        } else {
+          console.log(`[Site Engine] Unmapped location pin dropped at (${userLat.toFixed(5)}, ${userLon.toFixed(5)}) by ${dispatchTarget}`);
+          
+          pendingNewSiteRequests.set(fromPhone, {
+            lat: userLat,
+            lon: userLon,
+            timestamp: Date.now()
+          });
+
+          const promptMsg = `📍 *UNREGISTERED LOCATION DETECTED*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `Coordinates: \`${userLat.toFixed(5)}, ${userLon.toFixed(5)}\`\n` +
+            `No Bounce Padel courts were located within 2.5km.\n\n` +
+            `Would you like to register this as a *NEW SITE*?\n\n` +
+            `Reply with the site name:\n` +
+            `👉 *CREATE SITE: [Site Name]*\n` +
+            `_(e.g., CREATE SITE: RCOR Court 1)_`;
+
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, promptMsg)
+              .catch(e => console.error('[Meta API] Unregistered Location Message Error:', e.message));
+        }
+      }
+      return;
     }
 
     if (message.type === 'video' || message.type === 'image' || message.type === 'document') {
@@ -1241,68 +1344,6 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
               }
             }
           }
-        }
-      }
-      return;
-    }
-
-    if (message.type === 'location') {
-      await whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍');
-      const userLat = message.location?.latitude;
-      const userLon = message.location?.longitude;
-      
-      if (userLat && userLon) {
-        whatsapp.lastDroppedCoordinates.set(fromPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
-
-        const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
-        let weatherStr = '';
-        if (!weatherCheck.safe) {
-          weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`;
-          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, weatherStr);
-        } else if (weatherCheck.telemetry) {
-          weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
-        }
-
-        // Force a live refresh to bypass the 10-minute cache if they just added coordinates in Airtable
-        const allSites = await getCachedSites(true);
-        const nearby = [];
-        
-        for (const s of allSites) {
-          const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
-          if (coords) {
-            const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
-            if (dist <= 2500) nearby.push({ site: s, distance: dist });
-          }
-        }
-        nearby.sort((a, b) => a.distance - b.distance);
-
-        if (nearby.length === 1) {
-          await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
-        } else if (nearby.length > 1) {
-          const buttons = nearby.slice(0, 3).map((n) => ({
-            id: `BIND_SITE_${n.site.id}`,
-            title: String(n.site.fields['Site Name']).substring(0, 20)
-          }));
-          await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 2.5km. Please select your active zone:`, buttons);
-        } else {
-          console.log(`[Site Engine] Unmapped location pin dropped at (${userLat.toFixed(5)}, ${userLon.toFixed(5)}) by ${dispatchTarget}`);
-          
-          pendingNewSiteRequests.set(fromPhone, {
-            lat: userLat,
-            lon: userLon,
-            timestamp: Date.now()
-          });
-
-          const promptMsg = `📍 *UNREGISTERED LOCATION DETECTED*\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `Coordinates: \`${userLat.toFixed(5)}, ${userLon.toFixed(5)}\`\n` +
-            `No Bounce Padel courts were located within 2.5km.\n\n` +
-            `Would you like to register this as a *NEW SITE*?\n\n` +
-            `Reply with the site name:\n` +
-            `👉 *CREATE SITE: [Site Name]*\n` +
-            `_(e.g., CREATE SITE: RCOR Court 1)_`;
-
-          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, promptMsg);
         }
       }
       return;
@@ -1764,6 +1805,8 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.warn(`[Core Engine] Port ${PORT} already bound in this process space. Bypassing secondary bind.`);
+    } else {
+      console.error('[Core Engine] Listener Error:', err);
     }
   });
 
