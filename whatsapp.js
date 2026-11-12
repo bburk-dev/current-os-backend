@@ -309,36 +309,40 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
 
   if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
     const fields = rawLocationOrSite.fields || rawLocationOrSite;
-    rawLocation = fields['Site location'];
+    // Extract explicitly to avoid non-string types breaking regex
+    rawLocation = String(fields['Site location'] || '').trim();
     cache = fields['Map Cache'];
     siteId = rawLocationOrSite.id || autoPersistSiteId;
   }
 
-  if (typeof rawLocation === 'string' && memoryCache.coordinates.has(rawLocation)) {
-    return memoryCache.coordinates.get(rawLocation);
-  }
+  if (typeof rawLocation === 'string' && rawLocation.length > 0) {
+    if (memoryCache.coordinates.has(rawLocation)) {
+      return memoryCache.coordinates.get(rawLocation);
+    }
 
-  if (typeof rawLocation === 'string') {
-    const directMatch = rawLocation.trim().match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+    // Force strict parsing of Airtable comma-separated coordinates
+    const directMatch = rawLocation.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
     if (directMatch) {
       const coords = { lat: parseFloat(directMatch[1]), lon: parseFloat(directMatch[2]) };
       memoryCache.coordinates.set(rawLocation, coords);
       return coords;
     }
-  }
 
-  if (typeof rawLocation === 'string' && rawLocation.length > 3) {
-    const googleResult = await geocodeAddressWithGoogle(config, rawLocation);
-    if (googleResult) {
-      const coords = { lat: googleResult.lat, lon: googleResult.lon };
-      memoryCache.coordinates.set(rawLocation, coords);
-      if (siteId && !rawLocation.includes(',')) {
-        const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
-        airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
+    // If it's a valid address string (not empty), fallback to Google Geocoding
+    if (rawLocation.length > 5 && !directMatch) {
+      const googleResult = await geocodeAddressWithGoogle(config, rawLocation);
+      if (googleResult) {
+        const coords = { lat: googleResult.lat, lon: googleResult.lon };
+        memoryCache.coordinates.set(rawLocation, coords);
+        if (siteId) {
+          const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
+          airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
+        }
+        return coords;
       }
-      return coords;
     }
   }
+  
   return null;
 }
 
