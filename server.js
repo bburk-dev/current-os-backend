@@ -268,6 +268,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
       if (res.ok) {
         const data = await res.json();
         if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
+        // Return strictly what survived the write to preserve forensic integrity
         return { success: true, writtenFields: currentPayload.fields, record: data };
       }
 
@@ -1457,6 +1458,55 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
       //    return;
       // }
 
+      if (triage && triage.intent === 'NAVIGATION_QUERY') {
+         let targetSiteName = triage?.referenced_site_name;
+         if (!targetSiteName) {
+             targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+         }
+         
+         let activeTargetSite = null;
+         if (targetSiteName) {
+           activeTargetSite = allSites.find(s => {
+               const sName = (s.fields['Site Name'] || '').toLowerCase();
+               if (sName.includes(targetSiteName.toLowerCase())) return true;
+               
+               const words = sName.split(' ').filter(w => w.length > 3);
+               return words.some(w => targetSiteName.toLowerCase().includes(w));
+           });
+         } else {
+           activeTargetSite = boundSite;
+         }
+
+         if (activeTargetSite) {
+           let lat = activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat'];
+           let lon = activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'];
+           
+           if (!lat && activeTargetSite.fields['Site location']) {
+               const parts = String(activeTargetSite.fields['Site location']).split(',');
+               if (parts.length === 2) {
+                   lat = parts[0].trim();
+                   lon = parts[1].trim();
+               }
+           }
+           
+           if (lat && lon) {
+               const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
+               const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
+               
+               const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                               `──────────────────────────────\n` +
+                               `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
+                               `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
+                               `──────────────────────────────\n` +
+                               `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
+                               `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+               
+               return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
+           }
+         }
+         return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
+      }
+
       const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
       const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site');
 
@@ -1707,6 +1757,10 @@ app.post('/api/sync-oracle', async (req, res) => {
   }
 });
 
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy', version: '6.0.22' });
+});
+
 async function resolveIdentity(fromPhone) {
   const workers = await getCachedWorkers();
   const cleanDigits = String(fromPhone).replace(/\D/g, '');
@@ -1730,14 +1784,6 @@ async function resolveIdentity(fromPhone) {
   return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: fromPhone, language: 'English' };
 }
 
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.22' });
-});
-
-// ====================================================================
-// 5. ATOMIC ORCHESTRATION & BOOTSTRAP 
-// ====================================================================
-
 if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   globalThis.__TITAN_SERVER_INITIALIZED__ = true;
 
@@ -1748,13 +1794,6 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   console.log(`🚀 TITAN OS V6.0.22 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`====================================================================`);
 
-  startFridayNewsletterCron();
-
-  if (oracle && oracle.syncOracleDocs) {
-    oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
-    setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
-  }
-
   const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
     try {
@@ -1762,12 +1801,6 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
       await getCachedWorkers();
       await getCachedContacts();
       await getCachedOpenAssignments();
-      
-      if (inventory && inventory.refreshInventoryCache) {
-        await inventory.refreshInventoryCache(CONFIG);
-      }
-      
-      await hydrateQBOCache();
     } catch (err) {
       console.error(`[Cache Hydration Error]:`, err.message);
     }
@@ -1776,8 +1809,6 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.warn(`[Core Engine] Port ${PORT} already bound in this process space. Bypassing secondary bind.`);
-    } else {
-      console.error('[Core Engine] Listener Error:', err);
     }
   });
 
