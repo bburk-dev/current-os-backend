@@ -2,7 +2,7 @@
  * TITAN OS V6.0.22 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
  * Purpose: Webhooks, Debouncing, NLP Intent Routing, 12-Gate Forensic Vision,
- *          Supabase Private Vault Storage, BOM Triggers, and Telemetry
+ *          Supabase Private Vault Storage, BOM Triggers, and Semantic Email Triage
  */
 
 const crypto = require('crypto');
@@ -862,7 +862,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 }
 
 // ====================================================================
-// 7. INBOUND EMAIL WEBHOOK (ZAPIER / SENDGRID / MAILGUN)
+// 7. INBOUND EMAIL WEBHOOK & SEMANTIC AI GATEKEEPER
 // ====================================================================
 
 async function handleInboundEmail(config, emailPayload, getCachedContacts) {
@@ -881,6 +881,7 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
       return;
     }
 
+    // 1. Resolve WhatsApp targets from Airtable Contacts ('Full Name', 'Email', 'Phone number')
     const contacts = await getCachedContacts();
     const targetPhones = [];
     const knownNames = [];
@@ -913,62 +914,92 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
       return;
     }
 
-    const participants = knownNames.length > 0 ? knownNames.join(' and ') : 'colleagues';
-    console.log(`[Email Handler] Resolved WhatsApp targets for: ${participants} (${targetPhones.join(', ')})`);
+    // 2. Semantic AI Gatekeeper (Temperature 0.0) — Filter out noise before buzzing WhatsApp
+    const bodyText = String(emailPayload.text || emailPayload.html || '').substring(0, 4000);
+    const triagePrompt = `You are the Commercial Triage Gatekeeper for Bounce Padel.
+Classify this inbound email and determine if it requires immediate executive attention on WhatsApp.
 
-    const prompt = `You are the executive assistant for Bob Burk. 
-An email was just received from: ${emailPayload.from}.
-The subject is: "${emailPayload.subject}".
-
-Here is the body of the email:
+From: ${emailPayload.from}
+Subject: "${emailPayload.subject}"
+Body:
 """
-${emailPayload.text || emailPayload.html}
+${bodyText}
 """
 
-Task: Draft a warm, professional, and concise reply from Bob Burk addressing the sender and any individuals introduced in the email. 
-If this is an introduction, explicitly welcome the new connection and offer to serve as a resource for anything related to padel courts. Mention that Bob is currently stateside but readily available via call, text, or WhatsApp at 437-928-7172.
+Categories:
+- COMMERCIAL_LEAD: New padel court inquiry, pricing request, RFP, club build, or turf/canopy quote.
+- MAINTENANCE_REQUEST: Repair, glass replacement, turf grooming, lighting issue, or warranty service.
+- PARTNER_INTRO: Warm introduction, general contractor, architect, or strategic partner outreach.
+- ACTIVE_PROJECT: Direct client, supplier, or logistics coordination on an active build.
+- NOISE_SPAM_RECEIPT: Newsletters, automated billing/SaaS receipts, cold marketing/SEO spam, calendar auto-replies, or internal system notifications.
 
-RULES:
-1. Do NOT include a subject line in the output.
-2. Sign off simply as "Best regards, Bob Burk". Do NOT include any titles like "Founder, Bounce Padel" or company names in the sign-off.
-3. Keep the tone conversational but highly professional.`;
-
-    const payload = {
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2 }
-    };
+Return STRICTLY JSON:
+{
+  "category": "COMMERCIAL_LEAD|MAINTENANCE_REQUEST|PARTNER_INTRO|ACTIVE_PROJECT|NOISE_SPAM_RECEIPT",
+  "is_critical": boolean (true ONLY for the first 4 categories; false for NOISE_SPAM_RECEIPT),
+  "reason": "1-sentence summary of why it was classified this way",
+  "draft_reply": "If is_critical is true, draft a warm, concise reply from Bob Burk (no subject line, sign off simply as 'Best regards, Bob Burk', mention availability via call/text/WhatsApp at 437-928-7172 if relevant). If false, return empty string."
+}`;
 
     const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: triagePrompt }] }],
+        generationConfig: {
+          temperature: 0.0,
+          responseMimeType: 'application/json'
+        }
+      })
     });
 
     if (!res.ok) {
-      console.error('[Email Handler] Gemini drafting failed:', await res.text());
+      console.error('[Email Handler] Gemini triage failed:', await res.text());
       return;
     }
 
     const data = await res.json();
-    const generatedReply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!generatedReply) {
-      console.error('[Email Handler] Gemini returned an empty response.');
+    const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    let triage;
+    try {
+      triage = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    } catch (parseErr) {
+      console.error('[Email Gatekeeper] Failed to parse Gemini JSON:', parseErr.message);
       return;
     }
 
-    const formattedDispatch = `📧 *TITAN OS | INBOUND EMAIL RELAY*\n` +
+    if (!triage.is_critical || triage.category === 'NOISE_SPAM_RECEIPT') {
+      console.log(`[Email Gatekeeper] 🛡️ Filtered non-critical email (${triage.category}): "${emailPayload.subject}" — ${triage.reason}`);
+      return;
+    }
+
+    const badgeMap = {
+      COMMERCIAL_LEAD: '💰 COMMERCIAL LEAD',
+      MAINTENANCE_REQUEST: '🛠️ MAINTENANCE REQUEST',
+      PARTNER_INTRO: '🤝 PARTNER INTRO',
+      ACTIVE_PROJECT: '🏗️ ACTIVE PROJECT'
+    };
+    const badge = badgeMap[triage.category] || '📧 PRIORITY EMAIL';
+
+    const participants = knownNames.length > 0 ? knownNames.join(' and ') : 'colleagues';
+    console.log(`[Email Gatekeeper] ✅ Routing ${triage.category} to ${participants} (${targetPhones.join(', ')})`);
+
+    const formattedDispatch = `📧 *TITAN OS | ${badge}*\n` +
                               `━━━━━━━━━━━━━━━━━━━━\n` +
                               `*From:* ${emailPayload.from}\n` +
                               `*Subject:* ${emailPayload.subject}\n` +
-                              `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                              `${generatedReply.trim()}`;
+                              `*Signal:* ${triage.reason}\n` +
+                              `━━━━━━━━━━━━━━━━━━━━\n` +
+                              `*Suggested Draft:*\n\n` +
+                              `${(triage.draft_reply || '').trim()}`;
+
+    const buttons = [{ id: 'DRAFT_REPLY', title: 'Draft Reply' }];
 
     for (const phone of targetPhones) {
-      await sendWhatsAppMessage(config, phone, formattedDispatch);
+      await sendWhatsAppButtons(config, phone, formattedDispatch, buttons);
     }
 
-    console.log(`[Email Handler] Successfully dispatched email response to ${targetPhones.length} recipients.`);
+    console.log(`[Email Handler] Dispatched priority relay card to ${targetPhones.length} recipient(s).`);
   } catch (err) {
     console.error('[Email Handler Exception]:', err.message);
   }
