@@ -925,10 +925,19 @@ app.post('/webhook', async (req, res) => {
              .catch(e => console.error('[Context Binding Error]:', e.message));
         } else if (nearby.length > 1) {
           console.log(`[Location Triage] Multiple sites found. Dispatching selector buttons.`);
-          const buttons = nearby.slice(0, 3).map((n) => ({
-            id: `BIND_SITE_${n.site.id}`,
-            title: String(n.site.fields['Site Name']).substring(0, 20)
-          }));
+          // WhatsApp API hard limit: Interactive Button titles cannot exceed 20 characters.
+          const buttons = nearby.slice(0, 3).map((n) => {
+            let safeTitle = String(n.site.fields['Site Name'] || 'Site').trim();
+            if (safeTitle.length > 20) {
+               // Try to keep the critical identifier, often at the start (e.g. "RCOR Court 1")
+               safeTitle = safeTitle.substring(0, 20).trim();
+            }
+            return {
+              id: `BIND_SITE_${n.site.id}`,
+              title: safeTitle
+            };
+          });
+          
           await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 2.5km. Please select your active zone:`, buttons)
               .catch(e => console.error('[Meta API] Button Message Error:', e.message));
         } else {
