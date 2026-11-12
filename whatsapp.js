@@ -580,7 +580,7 @@ async function uploadMediaToSupabaseVault(config, item) {
         'apikey': config.supabase.serviceRoleKey,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ expiresIn: 604800 }) // 7-day signed token
+      body: JSON.stringify({ expiresIn: 604800 })
     });
 
     if (!signRes.ok) return null;
@@ -891,9 +891,20 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
         return contactEmail === targetEmail;
       });
 
-      if (contact && contact.fields['Phone E164']) {
-        targetPhones.push(contact.fields['Phone E164']);
-        knownNames.push(contact.fields['Full Name'] || contact.fields['First Name'] || targetEmail);
+      if (contact) {
+        const rawPhone =
+          contact.fields['Phone number'] ||
+          contact.fields['Phone E164'] ||
+          contact.fields['WhatsApp Number'] ||
+          contact.fields['Phone'] ||
+          '';
+        let cleanPhone = String(rawPhone).replace(/\D/g, '');
+        if (cleanPhone.length === 10) cleanPhone = '1' + cleanPhone;
+
+        if (cleanPhone.length >= 10) {
+          targetPhones.push(cleanPhone);
+          knownNames.push(contact.fields['Full Name'] || contact.fields['First Name'] || targetEmail);
+        }
       }
     });
 
@@ -958,7 +969,6 @@ RULES:
     }
 
     console.log(`[Email Handler] Successfully dispatched email response to ${targetPhones.length} recipients.`);
-
   } catch (err) {
     console.error('[Email Handler Exception]:', err.message);
   }
