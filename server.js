@@ -29,6 +29,7 @@ try { require('dotenv').config(); } catch (e) {}
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cluster = require('cluster');
+const os = require('os');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
@@ -36,7 +37,9 @@ const oracle = require('./oracle');
 const inventory = require('./inventory');
 // const equipment = require('./equipment'); // Temporarily disabled until equipment.js is uploaded to server
 const whatsapp = require('./whatsapp');
-const metrics = require('./metrics'); // Telemetry Layer
+// Note: If metrics.js is not yet uploaded, ensure you have a dummy module or comment out incrementMetric calls.
+let metrics;
+try { metrics = require('./metrics'); } catch(e) {} 
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -77,11 +80,14 @@ const CONFIG = {
     accessToken: process.env.QBO_ACCESS_TOKEN,
     refreshToken: null,
     baseUrl: 'https://quickbooks.api.intuit.com/v3/company'
+  },
+  google: {
+    apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
   }
 };
 
 // ====================================================================
-// 2. STATE MACHINES & CACHE-ASIDE ENGINE
+// 2. STATE MACHINES & CACHE-ASIDE ENGINE (PAGINATED)
 // ====================================================================
 
 let oracleFileURIs = [];
@@ -107,26 +113,40 @@ const memoryCache = {
     accessToken: null,
     refreshToken: null,
     expiresAt: null
-  }
+  },
+  coordinates: new Map()
 };
 
 // Autonomously overcomes Airtable's 100-record limit by following pagination offsets
-async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig = '') {
-  let records = [];
+async function fetchAllAirtableRecords(tableName, queryParams = '') {
+  let allRecords = [];
   let offset = null;
-  do {
-    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}?`;
-    if (filterFormula) url += `filterByFormula=${encodeURIComponent(filterFormula)}&`;
-    if (sortConfig) url += `${sortConfig}&`;
-    if (offset) url += `offset=${encodeURIComponent(offset)}`;
-    
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.records) records = records.concat(data.records);
-    offset = data.offset;
-  } while (offset);
-  return records;
+  let hasMore = true;
+
+  while (hasMore) {
+    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}?${queryParams}`;
+    if (offset) {
+      url += (queryParams ? '&' : '') + `offset=${encodeURIComponent(offset)}`;
+    }
+
+    try {
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      
+      allRecords = allRecords.concat(data.records || []);
+      
+      if (data.offset) {
+        offset = data.offset;
+      } else {
+        hasMore = false;
+      }
+    } catch (err) {
+      console.warn(`[Airtable] Failed to fetch page for ${tableName}:`, err.message);
+      hasMore = false; 
+    }
+  }
+  return allRecords;
 }
 
 async function getCachedSites(forceRefresh = false) {
@@ -180,8 +200,8 @@ async function getCachedOpenAssignments(forceRefresh = false) {
   }
   try {
     const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
-    const sort = `sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc`;
-    memoryCache.assignments = await fetchAllAirtableRecords('Daily Assignments', formula, sort);
+    const query = `filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc`;
+    memoryCache.assignments = await fetchAllAirtableRecords('Daily Assignments', query);
     memoryCache.assignmentsLastFetched = now;
     return memoryCache.assignments;
   } catch (err) {
@@ -277,7 +297,8 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
       
       if (res.status === 422) {
         const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) ||
-                      errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
+                      errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i) ||
+                      errorMsg.match(/Unknown field name\s*["'\\]+([^"'\\]+)["'\\]+/i);
         if (match && match[1]) {
           const badField = match[1];
           console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}" from ${tableName}`);
@@ -658,14 +679,13 @@ app.post('/webhook', async (req, res) => {
     const callerIdentity = await resolveIdentity(fromPhone);
     const sessionSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : null;
     let site = null;
+    const allSites = await getCachedSites();
     
     if (sessionSiteId) {
-      const allSites = await getCachedSites();
       site = allSites.find(s => s.id === sessionSiteId) || null;
     }
     
     if (!site) {
-      const allSites = await getCachedSites();
       site = allSites.find(s => {
         const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
         return gid && (gid === fromPhone || fromPhone.includes(gid));
@@ -695,7 +715,6 @@ app.post('/webhook', async (req, res) => {
 
       if (interactiveButtonId.startsWith('BIND_SITE_')) {
         const selectedSiteId = interactiveButtonId.replace('BIND_SITE_', '');
-        const allSites = await getCachedSites();
         const selectedSite = allSites.find(s => s.id === selectedSiteId);
         if (selectedSite) {
           const userLat = whatsapp.lastDroppedCoordinates?.get(fromPhone)?.lat;
@@ -988,14 +1007,13 @@ app.post('/webhook', async (req, res) => {
            return;
         }
 
-        const allSites = await getCachedSites();
         const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
-        const boundSiteId = whatsapp.getUserBoundSiteId(fromPhone);
-        const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
+        const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : null;
+        const activeBoundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
 
         console.log(`[Audio Ingress] Parsing spoken voice memo via Gemini 2.5 Pro from ${dispatchTarget}...`);
 
-        const spokenTriage = await whatsapp.triageSpokenOrTextNLP(CONFIG, '', registeredSiteNames, true, [{ buffer: audioBuffer, mimeType }], fromPhone, boundSite);
+        const spokenTriage = await whatsapp.triageSpokenOrTextNLP(CONFIG, '', registeredSiteNames, true, [{ buffer: audioBuffer, mimeType }], fromPhone, activeBoundSite);
 
         console.log(`[Audio Ingress] Spoken Intent: ${spokenTriage?.intent || 'UNKNOWN'} | Client: ${spokenTriage?.qbo_customer_name || 'None'}`);
 
@@ -1052,7 +1070,7 @@ app.post('/webhook', async (req, res) => {
           //   return;
           // }
           if (spokenTriage.intent === 'READINESS_QUERY') {
-             const targetSiteName = spokenTriage.qbo_customer_name || (boundSite ? boundSite.fields['Site Name'] : null);
+             const targetSiteName = spokenTriage.qbo_customer_name || (activeBoundSite ? activeBoundSite.fields['Site Name'] : null);
              if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
              return await evaluateVirtualSiteReadiness(CONFIG, targetSiteName, dispatchTarget);
           }
@@ -1072,12 +1090,12 @@ app.post('/webhook', async (req, res) => {
                   const sName = (s.fields['Site Name'] || '').toLowerCase();
                   if (sName.includes(targetSiteName.toLowerCase())) return true;
                   
-                  // Fuzzy logic: check if spoken name matches phonetically or closely (e.g. "Lewinsky" -> "Levinsky")
+                  // Fuzzy logic: check if spoken name matches phonetically or closely
                   const words = sName.split(' ').filter(w => w.length > 3);
                   return words.some(w => targetSiteName.toLowerCase().includes(w));
                });
              } else {
-               activeTargetSite = boundSite;
+               activeTargetSite = activeBoundSite;
              }
              
              if (activeTargetSite) {
@@ -1138,11 +1156,11 @@ app.post('/webhook', async (req, res) => {
             }
             // PRIORITY 3: Fallback to Currently Bound Site
             if (!activeTargetSite) {
-              activeTargetSite = boundSite;
+              activeTargetSite = activeBoundSite;
             }
 
             if (!activeTargetSite) {
-              whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
+              if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: transcript });
               return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `Got it. Which site does this update apply to?`);
             }
 
@@ -1205,7 +1223,6 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                   'Last Intent': 'DYNAMIC_SITE_UPDATE'
                 };
 
-                let updatedCols = [];
                 if (geminiRes.ok) {
                   const aiData = await geminiRes.json();
                   const rawJson = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -1214,7 +1231,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                     const parsed = JSON.parse(cleanJson);
                     
                     // Route to dynamic schema normalizer to completely avoid 422 Dropdown errors
-                    const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, allSites) : parsed;
+                    const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
                     
                     for (const [key, value] of Object.entries(normalized)) {
                         payloadToPatch[key] = value;
@@ -1373,10 +1390,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
            }
            
            if (lat && lon) {
-               // Google Maps driving directions link
                const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
-               
-               // Google Maps satellite view link for logistics/unloading
                const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
 
                const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
@@ -1396,7 +1410,10 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
       if (lTxt === '/metrics' || lTxt === '/telemetry') {
         const userRole = String(callerIdentity.role || '').trim().toLowerCase();
         if (userRole !== 'admin') return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Restricted to Admin.`);
-        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, metrics.getTelemetryReport());
+        if (metrics && metrics.getTelemetryReport) {
+            return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, metrics.getTelemetryReport());
+        }
+        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Metrics module offline.`);
       }
 
       if (lTxt.startsWith('/readiness')) {
@@ -1431,7 +1448,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
       // Check text-based dynamic read / write
       const allSites = await getCachedSites();
       const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
-      const boundSiteId = whatsapp.getUserBoundSiteId(fromPhone);
+      const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : null;
       const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
 
       const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, registeredSiteNames, false, [], fromPhone, boundSite);
@@ -1441,22 +1458,10 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
          return;
       }
       
-      // Temporarily bypassing equipment queries until equipment.js is uploaded
-      // if (triage && triage.intent === 'EQUIPMENT_QUERY' && equipment && equipment.handleSpokenEquipmentQuery) {
-      //    await equipment.handleSpokenEquipmentQuery(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
-      //    return;
-      // }
-      
       if (triage && triage.intent === 'INVENTORY_UPDATE' && inventory && inventory.handleSpokenInventoryUpdate) {
          await inventory.handleSpokenInventoryUpdate(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
          return;
       }
-      
-      // Temporarily bypassing equipment updates until equipment.js is uploaded
-      // if (triage && triage.intent === 'EQUIPMENT_UPDATE' && equipment && equipment.handleSpokenEquipmentUpdate) {
-      //    await equipment.handleSpokenEquipmentUpdate(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
-      //    return;
-      // }
 
       if (triage && triage.intent === 'NAVIGATION_QUERY') {
          let targetSiteName = triage?.referenced_site_name;
@@ -1561,7 +1566,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
             if (rawJson) {
               const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-              const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, allSites) : parsed;
+              const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
               
               const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
               for (const [key, value] of Object.entries(normalized)) {
@@ -1660,8 +1665,6 @@ app.post('/api/inbound-email', async (req, res) => {
 
   try {
     const b = req.body || {};
-    
-    // Airtable Scripting payload extraction
     const fromAddr = b.from || b.sender || b.From || b.email || b.Email || 'Airtable Lead System';
     const subjectLine = b.subject || b.Subject || b.title || 'Inbound Commercial Inquiry';
     
@@ -1681,58 +1684,9 @@ app.post('/api/inbound-email', async (req, res) => {
 
     console.log(`[Email Ingress] Processing email from ${fromAddr}: "${subjectLine}"`);
     
-    // AI COMMERCIAL LEAD CLASSIFIER (Strict Mode)
-    const emailPrompt = `You are Titan OS for Bounce Padel. Review this inbound email.
-Determine if it is a GENUINE COMMERCIAL LEAD (e.g., someone explicitly asking to build a padel court, buy a court, or requesting court maintenance).
-STRICTLY REJECT (return false) for ANY of the following:
-- SEO spam or marketing solicitations
-- Software or B2B service sales
-- Invoices, bill payments, or accounting requests
-- Newsletters or generic feedback/chatter
-
-Return STRICTLY JSON: {"is_commercial_lead": boolean, "summary": "1 sentence concise summary of the lead"}
-Subject: ${subjectLine}
-Body: ${cleanText.substring(0, 1500)}`;
-
-    const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: emailPrompt }] }],
-        generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-      })
-    });
-
-    if (geminiRes.ok) {
-       const data = await geminiRes.json();
-       const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
-       if (rawJson) {
-          const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-          
-          if (parsed.is_commercial_lead) {
-             const contacts = await getCachedContacts();
-             const senderClean = String(fromAddr).toLowerCase();
-             const matchedContact = contacts.find(c => {
-               const contactEmail = String(c.fields['Email'] || '').toLowerCase().trim();
-               return contactEmail && senderClean.includes(contactEmail);
-             });
-             
-             const senderName = matchedContact?.fields?.['Full Name'] || fromAddr;
-             const alertCard = `✉️ *TITAN OS | COMMERCIAL LEAD DETECTED*\n` +
-                               `──────────────────────────────\n` +
-                               `👤 *From:* ${senderName}\n` +
-                               `📌 *Subject:* ${subjectLine}\n` +
-                               `──────────────────────────────\n` +
-                               `🧠 *AI Summary:* ${parsed.summary}\n` +
-                               `──────────────────────────────\n` +
-                               `_To reply, tap below and dictate your response._`;
-             
-             const buttons = [{ id: 'DRAFT_REPLY', title: "Draft AI Reply" }];
-             await whatsapp.sendWhatsAppButtons(CONFIG, CONFIG.meta.targetVerifiedPhone, alertCard, buttons);
-          } else {
-             console.log(`[Email Engine] Rejected non-commercial email from ${fromAddr}`);
-          }
-       }
+    // Calls handleInboundEmail added to whatsapp.js recently
+    if (whatsapp && whatsapp.handleInboundEmail) {
+        await whatsapp.handleInboundEmail(CONFIG, req.body, getCachedContacts);
     }
   } catch (err) {
     console.error('[Runtime Exception in /api/inbound-email]:', err);
@@ -1746,7 +1700,7 @@ app.post('/api/sync-oracle', async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized: Invalid Cryptographic Signature' });
     }
 
-    console.log('[Titan OS Oracle] Manual synchronization triggered via Airtable webhook.');
+    console.log('[Titan OS Oracle] Manual synchronization triggered via webhook.');
     res.status(202).json({ status: 'Accepted', message: 'Oracle Sync Protocol Initiated in background.' });
 
     if (oracle && oracle.syncOracleDocs) {
@@ -1784,6 +1738,9 @@ async function resolveIdentity(fromPhone) {
   return { type: 'UNKNOWN', name: 'External Caller', role: 'Unknown', phone: fromPhone, language: 'English' };
 }
 
+// ====================================================================
+// SINGLE-THREADED ATOMIC BOOT SEQUENCE
+// ====================================================================
 if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   globalThis.__TITAN_SERVER_INITIALIZED__ = true;
 
@@ -1801,6 +1758,18 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
       await getCachedWorkers();
       await getCachedContacts();
       await getCachedOpenAssignments();
+      
+      if (inventory && inventory.refreshInventoryCache) {
+          await inventory.refreshInventoryCache(CONFIG);
+      }
+      
+      // Initialize Background Timers
+      startFridayNewsletterCron();
+      if (oracle && oracle.syncOracleDocs) {
+        oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
+        setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
+      }
+
     } catch (err) {
       console.error(`[Cache Hydration Error]:`, err.message);
     }
