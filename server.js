@@ -369,8 +369,10 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
 
   const siteId = site.id;
   const siteName = site.fields['Site Name'];
-  const lat = site.fields['Latitude'];
-  const lon = site.fields['Longitude'];
+  const latStr = site.fields['Latitude'] || site.fields['Lat'];
+  const lonStr = site.fields['Longitude'] || site.fields['Lon'] || site.fields['Lng'];
+  const lat = latStr ? Number(latStr) : null;
+  const lon = lonStr ? Number(lonStr) : null;
 
   const openAssignments = await getCachedOpenAssignments();
   const siteAssignments = openAssignments.filter(a => a.fields['Site'] && a.fields['Site'].includes(siteId));
@@ -1120,8 +1122,6 @@ Transcript: "${transcript}"
 Known Airtable Columns: ${JSON.stringify(Array.from(knownColumns))}
 
 Extract any fields the user wants updated. Match extracted keys EXACTLY to the 'Known Airtable Columns' above (e.g. use "Turf Colour" not "Turf Color", use "Supplier" not "Turf Supplier").
-Format Single Select dropdowns in Title Case (e.g. "Green", "Mondo", "Yes").
-Format Checkboxes as strictly boolean true or false.
 Return ONLY valid JSON mapping exact field names to values.
 Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
 
@@ -1288,8 +1288,22 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
          if (targetSite && (targetSite.fields['Latitude'] || targetSite.fields['Lat']) && (targetSite.fields['Longitude'] || targetSite.fields['Lon'] || targetSite.fields['Lng'])) {
            const lat = targetSite.fields['Latitude'] || targetSite.fields['Lat'];
            const lon = targetSite.fields['Longitude'] || targetSite.fields['Lon'] || targetSite.fields['Lng'];
+           
+           // Google Maps driving directions link
            const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
-           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🧭 *DIGITAL SITE PASS*\nDestination: *${targetSite.fields['Site Name']}*\n${mapsUrl}`);
+           
+           // Google Maps satellite view link for logistics/unloading
+           const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
+
+           const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                           `──────────────────────────────\n` +
+                           `🏟️ *Destination:* ${targetSite.fields['Site Name']}\n` +
+                           `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
+                           `──────────────────────────────\n` +
+                           `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
+                           `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+           
+           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
          }
          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName}".`);
       }
