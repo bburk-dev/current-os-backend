@@ -1,18 +1,19 @@
 /**
- * TITAN OS V6.0.22 — SUPPLY CHAIN & INVENTORY ORCHESTRATOR
+ * TITAN OS V6.0.22 — SUPPLY CHAIN & LOGISTICS ORCHESTRATOR
  * Module: inventory.js
  * Purpose: Multimodal Hardware Extraction, Auto-Reorder Integration,
- *          Zero-UI Voice-to-Stock Ledger, BOM Depletion, Multi-Page Pagination,
- *          Targeted SKU Queries, and Polymorphic Dispatch
+ *          Zero-UI Voice-to-Stock Ledger for Inventory & Equipment,
+ *          BOM Depletion, Multi-Page Pagination, Targeted SKU/Asset Queries,
+ *          and Polymorphic Dispatch.
  */
 
 // Defensive check (assuming server.js has initialized global fetch)
 if (typeof fetch === 'undefined') {
-  console.warn('[Inventory Engine] Global fetch is not defined. Falling back to native require.');
+  console.warn('[Logistics Engine] Global fetch is not defined. Falling back to native require.');
   try {
     globalThis.fetch = require('node-fetch');
   } catch (e) {
-    console.error('[Inventory Engine] CRITICAL: node-fetch missing.');
+    console.error('[Logistics Engine] CRITICAL: node-fetch missing.');
   }
 }
 
@@ -24,18 +25,17 @@ try {
   metrics = null;
 }
 
-// In-memory Cache-Aside Storage
+// In-memory Cache-Aside Storage for dual ledgers
 let inventoryCache = [];
+let equipmentCache = [];
 let lastInventoryFetch = 0;
-const INVENTORY_CACHE_TTL_MS = 5 * 60 * 1000; // 5-minute TTL
+let lastEquipmentFetch = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5-minute TTL
 
 // ====================================================================
-// 1. INVENTORY CACHE HYDRATION & MULTI-PAGE AIRTABLE TRANSPORT
+// 1. LOGISTICS CACHE HYDRATION & MULTI-PAGE AIRTABLE TRANSPORT
 // ====================================================================
 
-/**
- * Resolves the exact column name for quantity across Airtable schema variations
- */
 function resolveQtyFieldName(fields) {
   if ('Quantity on hand' in fields) return 'Quantity on hand';
   if ('Quantity on Hand' in fields) return 'Quantity on Hand';
@@ -44,18 +44,13 @@ function resolveQtyFieldName(fields) {
   return 'Quantity on hand';
 }
 
-/**
- * Hydrates and refreshes the in-memory Inventory table from Airtable using
- * recursive offset pagination to ensure all SKUs are retrieved.
- * 
- * @param {object} config - Titan OS Configuration Object
- * @param {boolean} force - Force refresh bypass of TTL
- * @returns {Promise<Array>} - Complete cached inventory records
- */
-async function refreshInventoryCache(config, force = false) {
+async function refreshLogisticsCache(config, tableName, force = false) {
   const now = Date.now();
-  if (!force && inventoryCache.length > 0 && (now - lastInventoryFetch < INVENTORY_CACHE_TTL_MS)) {
-    return inventoryCache;
+  const isInventory = tableName === 'Inventory';
+  
+  if (!force) {
+      if (isInventory && inventoryCache.length > 0 && (now - lastInventoryFetch < CACHE_TTL_MS)) return inventoryCache;
+      if (!isInventory && equipmentCache.length > 0 && (now - lastEquipmentFetch < CACHE_TTL_MS)) return equipmentCache;
   }
 
   const endpoint = config?.airtable?.endpoint || process.env.AIRTABLE_ENDPOINT || 'https://api.airtable.com/v0';
@@ -63,18 +58,17 @@ async function refreshInventoryCache(config, force = false) {
   const apiKey = config?.airtable?.apiKey || process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN;
 
   if (!apiKey) {
-    console.warn('[Inventory Engine] Airtable API credentials missing. Returning stale cache.');
-    return inventoryCache;
+    console.warn(`[Logistics Engine] Airtable API credentials missing for ${tableName}.`);
+    return isInventory ? inventoryCache : equipmentCache;
   }
 
   try {
     let allRecords = [];
     let offset = null;
 
-    // Recursive pagination loop to bypass Airtable 100-record page cap
     do {
       const offsetParam = offset ? `&offset=${encodeURIComponent(offset)}` : '';
-      const url = `${endpoint}/${baseId}/Inventory?pageSize=100${offsetParam}`;
+      const url = `${endpoint}/${baseId}/${encodeURIComponent(tableName)}?pageSize=100${offsetParam}`;
       
       const res = await fetch(url, {
         headers: {
@@ -93,25 +87,28 @@ async function refreshInventoryCache(config, force = false) {
       offset = data.offset || null;
     } while (offset);
 
-    inventoryCache = allRecords;
-    lastInventoryFetch = now;
-    console.log(`[Inventory Engine] Successfully cached ${inventoryCache.length} total items from Airtable into RAM`);
-    return inventoryCache;
+    if (isInventory) {
+        inventoryCache = allRecords;
+        lastInventoryFetch = now;
+    } else {
+        equipmentCache = allRecords;
+        lastEquipmentFetch = now;
+    }
+    
+    console.log(`[Logistics Engine] Successfully cached ${allRecords.length} items from ${tableName} into RAM`);
+    return allRecords;
   } catch (err) {
-    console.error('❌ [Inventory Engine] Failed to cache inventory:', err.message);
-    return inventoryCache;
+    console.error(`❌ [Logistics Engine] Failed to cache ${tableName}:`, err.message);
+    return isInventory ? inventoryCache : equipmentCache;
   }
 }
 
-/**
- * Resilient schema-safe Airtable write handler with auto-dropping of incompatible columns
- */
-async function writeAirtableInventory(config, recordId, fields) {
+async function writeAirtableLogistics(config, tableName, recordId, fields) {
   const endpoint = config?.airtable?.endpoint || process.env.AIRTABLE_ENDPOINT || 'https://api.airtable.com/v0';
   const baseId = config?.airtable?.baseId || process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP';
   const apiKey = config?.airtable?.apiKey || process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN;
 
-  const url = `${endpoint}/${baseId}/Inventory/${recordId}`;
+  const url = `${endpoint}/${baseId}/${encodeURIComponent(tableName)}/${recordId}`;
   let currentPayload = { fields: { ...fields } };
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -133,12 +130,11 @@ async function writeAirtableInventory(config, recordId, fields) {
       const errData = await res.json().catch(() => ({}));
       const errMsg = errData?.error?.message || '';
 
-      // Auto-Healer: drop invalid fields if Airtable schema rejects property
       if (res.status === 422) {
         const match = errMsg.match(/field\s*["'\\]+([^"'\\]+)["'\\]+/i) || errMsg.match(/Unknown field name\s*["'\\]+([^"'\\]+)["'\\]+/i);
         if (match && match[1]) {
           const badField = match[1];
-          console.warn(`[Inventory Auto-Healer] Dropping incompatible field: "${badField}"`);
+          console.warn(`[Logistics Auto-Healer] Dropping incompatible field: "${badField}" from ${tableName}`);
           delete currentPayload.fields[badField];
           continue;
         }
@@ -147,7 +143,7 @@ async function writeAirtableInventory(config, recordId, fields) {
       throw new Error(`Airtable write rejected (${res.status}): ${errMsg}`);
     } catch (err) {
       if (attempt === 1) {
-        console.error('[Inventory Write Error]:', err.message);
+        console.error(`[Logistics Write Error on ${tableName}]:`, err.message);
         return null;
       }
     }
@@ -156,13 +152,9 @@ async function writeAirtableInventory(config, recordId, fields) {
 }
 
 // ====================================================================
-// 2. CONVERSATIONAL STOCK LEDGER & GEMINI EXTRACTION
+// 2. CONVERSATIONAL LEDGER & GEMINI EXTRACTION
 // ====================================================================
 
-/**
- * Generates an ergonomic WhatsApp Inventory Snapshot Report
- * Grouped cleanly by category to prevent WhatsApp 4096-character payload truncation.
- */
 function buildInventorySnapshotCard(items) {
   if (!items || items.length === 0) {
     return `📦 *TITAN OS | FLEET INVENTORY*\n──────────────────────────────\nNo tracked inventory records located in the master ledger.`;
@@ -174,9 +166,7 @@ function buildInventorySnapshotCard(items) {
     const qty = Number(f['Quantity on hand'] ?? f['Quantity on Hand'] ?? f['Quantity'] ?? f['Stock Level'] ?? 0);
     const committed = Number(f['Committed'] ?? 0);
     const avail = Math.max(0, qty - committed);
-    const unit = f['Unit'] || f['Units'] || 'units';
-    const commStr = committed > 0 ? ` _(Comm: ${committed})_` : '';
-    return `• *${name}:* ${avail} Avail / ${qty} On Hand${commStr}`;
+    return `• *${name}:* ${avail} Avail / ${qty} On Hand`;
   };
 
   const turf = items.filter(i => /turf/i.test(i.fields['Category'] || i.fields['Item Name'] || ''));
@@ -187,125 +177,89 @@ function buildInventorySnapshotCard(items) {
 
   let card = `📦 *TITAN OS | YARD & FLEET INVENTORY*\n──────────────────────────────\n`;
 
-  if (turf.length > 0) {
-    card += `🌱 *Turf Rolls & Play Kits:*\n${turf.slice(0, 4).map(formatLine).join('\n')}\n\n`;
-  }
-  if (glass.length > 0) {
-    card += `🪟 *Tempered Glass Panes:*\n${glass.slice(0, 3).map(formatLine).join('\n')}\n\n`;
-  }
-  if (steel.length > 0) {
-    card += `🏗️ *Steel Frame Components:*\n${steel.slice(0, 3).map(formatLine).join('\n')}\n\n`;
-  }
-  if (lights.length > 0) {
-    card += `💡 *LED Fixtures & Columns:*\n${lights.slice(0, 2).map(formatLine).join('\n')}\n\n`;
-  }
-  if (consumables.length > 0) {
-    card += `🧪 *Adhesives & Hardware:*\n${consumables.slice(0, 3).map(formatLine).join('\n')}\n\n`;
-  }
+  if (turf.length > 0) card += `🌱 *Turf Rolls & Play Kits:*\n${turf.slice(0, 4).map(formatLine).join('\n')}\n\n`;
+  if (glass.length > 0) card += `🪟 *Tempered Glass Panes:*\n${glass.slice(0, 3).map(formatLine).join('\n')}\n\n`;
+  if (steel.length > 0) card += `🏗️ *Steel Frame Components:*\n${steel.slice(0, 3).map(formatLine).join('\n')}\n\n`;
+  if (lights.length > 0) card += `💡 *LED Fixtures & Columns:*\n${lights.slice(0, 2).map(formatLine).join('\n')}\n\n`;
+  if (consumables.length > 0) card += `🧪 *Adhesives & Hardware:*\n${consumables.slice(0, 3).map(formatLine).join('\n')}\n\n`;
 
-  // Low Stock Radar Section
-  const lowStock = items.filter(i => {
-    const f = i.fields;
-    const qty = Number(f['Quantity on hand'] ?? f['Quantity on Hand'] ?? f['Quantity'] ?? 0);
-    const committed = Number(f['Committed'] ?? 0);
-    const bomQty = Number(f['Standard BOM Qty'] ?? 0);
-    const leadTime = Number(f['Lead Time (Days)'] ?? 0);
-    return (bomQty > 0 || leadTime >= 14) && (qty - committed) <= 2 && qty > 0;
-  });
-
-  if (lowStock.length > 0) {
-    card += `⚠️ *REORDER RADAR (Critical Buffer):*\n`;
-    lowStock.slice(0, 4).forEach(i => {
-      const f = i.fields;
-      const avail = Math.max(0, Number(f['Quantity on hand'] ?? 0) - Number(f['Committed'] ?? 0));
-      card += `• *${f['Item Name']}:* ${avail} Avail _(${f['Lead Time (Days)'] ? f['Lead Time (Days)'] + 'd lead time' : 'Reorder needed'})_\n`;
-    });
-    card += `\n`;
-  }
-
-  card += `──────────────────────────────\n` +
-          `📊 *Tracked Materials:* ${items.length} SKUs across fleet\n` +
-          `_To log usage, voice or text: "Used 4 tubs Turf Adhesive at RCOR"_`;
-
+  card += `──────────────────────────────\n_To log usage, voice or text: "Used 4 tubs Turf Adhesive at RCOR"_`;
   return card.trim();
 }
 
-/**
- * Builds a targeted card for a single queried inventory SKU
- */
-function buildTargetedSkuCard(record) {
-  const f = record.fields;
-  const name = f['Item Name'] || f['Name'] || 'Material';
-  const qty = Number(f['Quantity on hand'] ?? f['Quantity on Hand'] ?? f['Quantity'] ?? f['Stock Level'] ?? 0);
-  const committed = Number(f['Committed'] ?? 0);
-  const avail = Math.max(0, qty - committed);
-  const unit = f['Unit'] || f['Units'] || 'units';
-  const category = f['Category'] || 'General';
-  const leadTime = f['Lead Time (Days)'] ? `${f['Lead Time (Days)']} days` : 'Standard';
-
-  let statusEmoji = '🟢';
-  if (avail <= 0) statusEmoji = '🔴 Out of Stock';
-  else if (avail <= 2) statusEmoji = '🟡 Low Buffer';
-
-  return `📦 *TITAN OS | STOCK CHECK*\n` +
-         `──────────────────────────────\n` +
-         `🔧 *Material:* ${name}\n` +
-         `📂 *Category:* ${category}\n` +
-         `──────────────────────────────\n` +
-         `📊 *Available for Dispatch:* ${avail} ${unit} ${statusEmoji}\n` +
-         `📦 *Total on Hand (Yard):* ${qty} ${unit}\n` +
-         `🔒 *Committed to Active Builds:* ${committed} ${unit}\n` +
-         `⏱️ *Supplier Lead Time:* ${leadTime}\n` +
-         `──────────────────────────────\n` +
-         `_To adjust, voice: "Used 2 ${unit} of ${name}"_`;
+function buildEquipmentSnapshotCard(equipment) {
+    if (!equipment || equipment.length === 0) {
+      return `🚜 *TITAN OS | FLEET EQUIPMENT*\n──────────────────────────────\nNo equipment records located in the master ledger.`;
+    }
+  
+    const formatLine = (rec) => {
+      const f = rec.fields;
+      const name = f['Asset Name'] || f['Name'] || 'Equipment';
+      const loc = f['Current Location'] || 'Yard (Unassigned)';
+      return `• *${name}:* ${loc}`;
+    };
+  
+    const trailers = equipment.filter(e => /trailer/i.test(e.fields['Asset Name'] || ''));
+    const lifts = equipment.filter(e => /glass mover|lift|forklift/i.test(e.fields['Asset Name'] || ''));
+  
+    let card = `🚜 *TITAN OS | EQUIPMENT TRACKER*\n──────────────────────────────\n`;
+  
+    if (trailers.length > 0) {
+      card += `🚛 *Trailers & Transport:*\n${trailers.map(formatLine).join('\n')}\n\n`;
+    }
+    if (lifts.length > 0) {
+      card += `🏗️ *Lifts & Heavy Machinery:*\n${lifts.map(formatLine).join('\n')}\n\n`;
+    }
+  
+    card += `──────────────────────────────\n_To update, voice: "Move the flatbed trailer to RCOR Court 1"_`;
+    return card.trim();
 }
 
-/**
- * Parses unstructured natural-language inventory adjustments via Gemini 2.5 Pro
- */
-async function parseInventoryAdjustmentWithAI(config, rawText, availableItems) {
+function buildTargetedCard(record, isEquipment) {
+  const f = record.fields;
+  const name = isEquipment ? (f['Asset Name'] || 'Equipment') : (f['Item Name'] || f['Name'] || 'Material');
+  
+  if (isEquipment) {
+      const loc = f['Current Location'] || 'Yard (Unassigned)';
+      const lastNote = f['Last Note'] || 'No recent notes.';
+      return `🚜 *TITAN OS | ASSET TRACKER*\n──────────────────────────────\n🔧 *Asset:* ${name}\n📍 *Current Location:* ${loc}\n📝 *Status:* ${lastNote}\n──────────────────────────────\n_To relocate, voice: "Move ${name} to [Site]"_`;
+  } else {
+      const qty = Number(f['Quantity on hand'] ?? f['Quantity on Hand'] ?? f['Quantity'] ?? f['Stock Level'] ?? 0);
+      const committed = Number(f['Committed'] ?? 0);
+      const avail = Math.max(0, qty - committed);
+      const unit = f['Unit'] || 'units';
+      const category = f['Category'] || 'General';
+      let statusEmoji = avail <= 0 ? '🔴 Out of Stock' : (avail <= 2 ? '🟡 Low Buffer' : '🟢');
+
+      return `📦 *TITAN OS | STOCK CHECK*\n──────────────────────────────\n🔧 *Material:* ${name}\n📂 *Category:* ${category}\n──────────────────────────────\n📊 *Available:* ${avail} ${unit} ${statusEmoji}\n📦 *On Hand:* ${qty} ${unit}\n🔒 *Committed:* ${committed} ${unit}\n──────────────────────────────\n_To adjust, voice: "Used 2 ${name}"_`;
+  }
+}
+
+async function parseLogisticsAdjustmentWithAI(config, rawText, availableItems, isEquipment) {
   const geminiEndpoint = config?.gemini?.endpoint || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
   const geminiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
 
   if (!geminiKey) return null;
 
-  const itemListFormatted = availableItems.map(i => ({
-    id: i.id,
-    name: i.fields['Item Name'] || i.fields['Name'] || 'Item',
-    current_quantity: Number(i.fields['Quantity on hand'] ?? i.fields['Quantity on Hand'] ?? i.fields['Quantity'] ?? 0),
-    unit: i.fields['Unit'] || 'units'
-  }));
+  const listFormatted = availableItems.map(i => {
+      if (isEquipment) {
+          return { id: i.id, name: i.fields['Asset Name'] || 'Equipment', location: i.fields['Current Location'] || 'Yard' };
+      }
+      return { id: i.id, name: i.fields['Item Name'] || 'Item', current_quantity: Number(i.fields['Quantity on hand'] ?? 0) };
+  });
 
-  const prompt = `You are the Titan OS Logistics & Supply Chain Copilot for Bounce Padel.
-An operative in the field submitted this natural language inventory statement:
-"${rawText}"
+  const schemaStr = isEquipment 
+    ? `{"intent": "QUERY" | "ADJUST" | "UNKNOWN", "record_id": "string or null", "asset_name": "string", "new_location": "string or null", "notes": "string or null"}`
+    : `{"intent": "QUERY" | "ADJUST" | "UNKNOWN", "record_id": "string or null", "item_name": "string", "adjustment_type": "DEDUCT" | "RESTOCK" | null, "quantity": number or null, "site_context": "string or null", "notes": "string"}`;
 
-Available Active Inventory Database:
-${JSON.stringify(itemListFormatted.slice(0, 75), null, 2)}
-
-TASK:
-1. Determine if the user is asking to READ/CHECK inventory ("QUERY") or ADJUST/UPDATE stock ("ADJUST").
-2. If QUERY, identify the specific target item they are asking about (or null if general snapshot).
-3. If ADJUST, identify the target inventory item from the list, the quantity mentioned, whether it is an addition/restock or subtraction/usage, and optional jobsite context.
-4. Return STRICTLY JSON conforming to the schema below.
-
-JSON SCHEMA:
-{
-  "intent": "QUERY" | "ADJUST" | "UNKNOWN",
-  "record_id": "string (the matching Airtable record ID or null)",
-  "item_name": "string (matched item name or null)",
-  "adjustment_type": "DEDUCT" | "RESTOCK" | null,
-  "quantity": number or null,
-  "site_context": "string or null",
-  "notes": "string or null"
-}`;
+  const prompt = `You are the Titan OS Logistics Copilot.
+User input: "${rawText}"
+Active ${isEquipment ? 'Equipment' : 'Inventory'} Database: ${JSON.stringify(listFormatted.slice(0, 75), null, 2)}
+TASK: Determine if they want to QUERY or ADJUST. Match the exact record_id. Output STRICTLY JSON: ${schemaStr}`;
 
   const payload = {
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.0,
-      responseMimeType: 'application/json'
-    }
+    generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
   };
 
   try {
@@ -314,368 +268,128 @@ JSON SCHEMA:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-
     if (!res.ok) throw new Error(`Gemini API HTTP ${res.status}`);
     const data = await res.json();
     const rawJSON = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    // Defensive extraction to strip markdown formatting if Gemini hallucinates backticks
     return JSON.parse(rawJSON.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
   } catch (err) {
-    console.error('[Inventory AI Parse Error]:', err.message);
+    console.error('[Logistics AI Parse Error]:', err.message);
     return null;
   }
 }
 
 // ====================================================================
-// 3. MASTER SPOKEN INVENTORY ORCHESTRATOR
+// 3. MASTER LOGISTICS ORCHESTRATOR (INVENTORY & EQUIPMENT)
 // ====================================================================
 
-/**
- * Headless Entrypoint for WhatsApp Voice and Text Inventory Commands
- * Polymorphic: Supports both legacy and rich caller signatures.
- */
-async function handleSpokenInventorySnapshot(arg1, arg2, arg3, arg4, arg5, arg6) {
-  let config = null;
-  let rawText = '';
-  let dispatchTarget = '';
-  let sendWhatsAppMessage = null;
-  let callerIdentity = null;
+async function handleSpokenLogisticsQuery(arg1, arg2, arg3, arg4, arg5, arg6, isEquipmentRequest = false) {
+  let config, rawText, dispatchTarget, sendWhatsAppMessage, callerIdentity;
 
   if (typeof arg1 === 'object' && arg1 !== null && arg1.meta) {
-    config = arg1;
-    rawText = typeof arg2 === 'string' ? arg2 : '';
-    dispatchTarget = arg3;
-    sendWhatsAppMessage = arg4;
-    callerIdentity = arg5;
+    config = arg1; rawText = typeof arg2 === 'string' ? arg2 : ''; dispatchTarget = arg3;
+    sendWhatsAppMessage = arg4; callerIdentity = arg5;
   } else {
-    dispatchTarget = String(arg1 || '');
-    sendWhatsAppMessage = arg2;
-    rawText = typeof arg3 === 'string' ? arg3 : '';
+    dispatchTarget = String(arg1 || ''); sendWhatsAppMessage = arg2; rawText = typeof arg3 === 'string' ? arg3 : '';
     config = {
-      airtable: {
-        endpoint: process.env.AIRTABLE_ENDPOINT || 'https://api.airtable.com/v0',
-        baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
-        apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN
-      },
-      gemini: {
-        apiKey: process.env.GEMINI_API_KEY,
-        endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent'
-      }
+      airtable: { endpoint: process.env.AIRTABLE_ENDPOINT || 'https://api.airtable.com/v0', baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP', apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN },
+      gemini: { apiKey: process.env.GEMINI_API_KEY, endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent' }
     };
   }
 
-  if (typeof sendWhatsAppMessage !== 'function') {
-    console.error('[Inventory Engine] Fatal: sendWhatsAppMessage is not a function.');
-    return;
-  }
+  if (typeof sendWhatsAppMessage !== 'function') return;
 
   try {
-    const items = await refreshInventoryCache(config);
     const cleanText = String(rawText || '').trim();
     const lText = cleanText.toLowerCase();
+    
+    // Determine context dynamically if not explicitly passed
+    const isEquipment = isEquipmentRequest || lText.includes('equip') || lText.includes('trailer') || lText.includes('mover') || lText.includes('forklift');
+    const tableName = isEquipment ? 'Equipment' : 'Inventory';
+    
+    const records = await refreshLogisticsCache(config, tableName);
 
-    // 1. Pure General Stock Snapshot Branch
-    const isPureGeneralQuery = !cleanText || 
-                               lText === '/inv' || 
-                               lText === 'inv' || 
-                               lText === 'inventory' || 
-                               lText === 'stock' || 
-                               lText === 'check inventory' ||
-                               lText === 'what is our stock';
+    // 1. Pure General Snapshot
+    const isPureGeneralQuery = !cleanText || lText === '/inv' || lText === 'inv' || lText === 'inventory' || lText === 'stock' || lText === 'equipment';
 
     if (isPureGeneralQuery) {
-      const card = buildInventorySnapshotCard(items);
+      const card = isEquipment ? buildEquipmentSnapshotCard(records) : buildInventorySnapshotCard(records);
       await sendWhatsAppMessage(config, dispatchTarget, card);
       return;
     }
 
-    // 2. Natural Language AI Evaluation (Targeted Query vs Stock Adjustment)
-    await sendWhatsAppMessage(config, dispatchTarget, "⏳ Reconciling inventory ledger against yard stock...");
-    const parsed = await parseInventoryAdjustmentWithAI(config, cleanText, items);
+    // 2. AI Evaluation
+    await sendWhatsAppMessage(config, dispatchTarget, `⏳ Reconciling ${tableName.toLowerCase()} ledger...`);
+    const parsed = await parseLogisticsAdjustmentWithAI(config, cleanText, records, isEquipment);
 
-    // 3. Targeted Query Branch (e.g. "Do we have 12mm glass?", "Check sand stock")
+    // 3. Targeted Query Branch
     if (parsed && parsed.intent === 'QUERY' && parsed.record_id) {
-      const targetRecord = items.find(i => i.id === parsed.record_id);
+      const targetRecord = records.find(r => r.id === parsed.record_id);
       if (targetRecord) {
-        const card = buildTargetedSkuCard(targetRecord);
-        await sendWhatsAppMessage(config, dispatchTarget, card);
+        await sendWhatsAppMessage(config, dispatchTarget, buildTargetedCard(targetRecord, isEquipment));
         return;
       }
     }
 
-    // Fallback to categorized card if no adjustment delta is provided
-    if (!parsed || parsed.intent !== 'ADJUST' || !parsed.record_id || !parsed.quantity) {
-      const card = buildInventorySnapshotCard(items);
-      await sendWhatsAppMessage(config, dispatchTarget, card);
+    // Fallback if no adjustment delta/location is provided
+    if (!parsed || parsed.intent !== 'ADJUST' || !parsed.record_id) {
+      await sendWhatsAppMessage(config, dispatchTarget, isEquipment ? buildEquipmentSnapshotCard(records) : buildInventorySnapshotCard(records));
       return;
     }
 
-    // 4. Stock Adjustment Execution Branch (e.g., "Used 2 tubs of turf glue")
-    const targetRecord = items.find(i => i.id === parsed.record_id);
+    // 4. Execution Branch
+    const targetRecord = records.find(r => r.id === parsed.record_id);
     if (!targetRecord) {
-      await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Material "${parsed.item_name || 'Item'}" could not be reconciled in Airtable.`);
+      await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Asset "${parsed.asset_name || parsed.item_name || 'Item'}" could not be reconciled in Airtable.`);
       return;
     }
 
-    const fields = targetRecord.fields;
-    const qtyFieldName = resolveQtyFieldName(fields);
-    const currentQty = Number(fields[qtyFieldName] ?? 0);
-    const unit = fields['Unit'] || fields['Units'] || 'units';
-    const itemName = fields['Item Name'] || fields['Name'] || parsed.item_name || 'Material Item';
-    const threshold = Number(fields['Reorder Threshold'] ?? fields['Min Stock'] ?? 5);
+    let patchPayload = {};
+    let confirmCard = '';
 
-    let delta = Math.abs(Number(parsed.quantity));
-    let newQty = currentQty;
-
-    if (parsed.adjustment_type === 'DEDUCT') {
-      newQty = Math.max(0, currentQty - delta);
+    if (isEquipment) {
+        const newLoc = parsed.new_location || 'Yard';
+        patchPayload = { 
+            'Current Location': newLoc,
+            'Last Note': `[RELOCATED] Moved to ${newLoc} by ${callerIdentity?.name || 'Operative'} on ${new Date().toLocaleDateString('en-CA')}`
+        };
+        confirmCard = `🚜 *TITAN OS | EQUIPMENT MOVED*\n──────────────────────────────\n👤 *Operative:* ${callerIdentity?.name || 'HQ'}\n🔧 *Asset:* ${targetRecord.fields['Asset Name']}\n📍 *New Location:* ${newLoc}\n──────────────────────────────\n✅ Master equipment ledger updated.`;
     } else {
-      newQty = currentQty + delta;
+        const fields = targetRecord.fields;
+        const qtyFieldName = resolveQtyFieldName(fields);
+        const currentQty = Number(fields[qtyFieldName] ?? 0);
+        let delta = Math.abs(Number(parsed.quantity));
+        let newQty = parsed.adjustment_type === 'DEDUCT' ? Math.max(0, currentQty - delta) : currentQty + delta;
+
+        patchPayload = { [qtyFieldName]: newQty };
+        if ('Notes' in fields) {
+            patchPayload['Notes'] = `Adjusted by ${callerIdentity?.name || 'Operative'} on ${new Date().toLocaleDateString('en-CA')}: ${parsed.notes || cleanText}`;
+        }
+        
+        const adjSymbol = parsed.adjustment_type === 'DEDUCT' ? '-' : '+';
+        const unit = fields['Unit'] || 'units';
+        confirmCard = `📦 *TITAN OS | INVENTORY LOGGED*\n──────────────────────────────\n👤 *Operative:* ${callerIdentity?.name || 'HQ'}\n🔧 *Material:* ${fields['Item Name'] || parsed.item_name}\n📊 *Adjustment:* ${adjSymbol}${delta} ${unit}\n📈 *Current Stock:* ${newQty} ${unit}\n──────────────────────────────\n✅ Master stock ledger updated.`;
     }
 
-    const patchPayload = { [qtyFieldName]: newQty };
-    if ('Last Adjusted' in fields || 'Notes' in fields) {
-      patchPayload['Notes'] = `Adjusted by ${callerIdentity?.name || 'Field Operative'} on ${new Date().toLocaleDateString('en-CA')}: ${parsed.notes || cleanText}`;
-    }
-
-    const updated = await writeAirtableInventory(config, targetRecord.id, patchPayload);
+    const updated = await writeAirtableLogistics(config, tableName, targetRecord.id, patchPayload);
 
     if (updated) {
-      // Invalidate memory cache so next query pulls updated state
-      await refreshInventoryCache(config, true);
-
-      let statusEmoji = '🟢';
-      let statusWarning = '';
-
-      if (newQty <= 0) {
-        statusEmoji = '🔴';
-        statusWarning = `\n🚨 *CRITICAL DEPLETION:* Stock at 0 ${unit}. Restock order flagged.`;
-      } else if (newQty <= threshold) {
-        statusEmoji = '🟡';
-        statusWarning = `\n⚠️ *LOW STOCK ALERT:* Remaining stock is below minimum threshold (${threshold} ${unit}).`;
-      }
-
-      const operatorName = callerIdentity?.name || 'Field Operative';
-      const adjSymbol = parsed.adjustment_type === 'DEDUCT' ? '-' : '+';
-      const siteStr = parsed.site_context ? `\n📍 *Jobsite:* ${parsed.site_context}` : '';
-
-      const confirmCard = `📦 *TITAN OS | INVENTORY LOGGED*\n` +
-                          `──────────────────────────────\n` +
-                          `👤 *Operative:* ${operatorName}\n` +
-                          `🔧 *Material:* ${itemName}\n` +
-                          `📊 *Adjustment:* ${adjSymbol}${delta} ${unit}\n` +
-                          `📈 *Current Stock:* ${newQty} ${unit} ${statusEmoji}${siteStr}${statusWarning}\n` +
-                          `──────────────────────────────\n` +
-                          `✅ Master stock ledger updated.`;
-
+      await refreshLogisticsCache(config, tableName, true);
       await sendWhatsAppMessage(config, dispatchTarget, confirmCard);
-      await checkLowStockRadar(config, dispatchTarget);
     } else {
-      await sendWhatsAppMessage(config, dispatchTarget, `❌ Failed to update inventory record in Airtable. Retrying queued in background.`);
+      await sendWhatsAppMessage(config, dispatchTarget, `❌ Failed to update ${tableName.toLowerCase()} record in Airtable.`);
     }
 
   } catch (err) {
-    console.error('[Inventory Orchestrator Error]:', err);
-    await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Inventory Engine error: ${err.message}`);
+    console.error(`[Logistics Orchestrator Error]:`, err);
+    await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Logistics Engine error: ${err.message}`);
   }
 }
 
-// ====================================================================
-// 4. BILL OF MATERIALS (BOM) & AUTO-REORDER RADAR
-// ====================================================================
-
-/**
- * Autonomous Radar: Alerts Headquarters when available stock drops below lead-time buffers.
- */
-async function checkLowStockRadar(config, dispatchTarget) {
-  if (!dispatchTarget) return;
-  const items = await refreshInventoryCache(config);
-  const alerts = [];
-
-  for (const item of items) {
-    const f = item.fields;
-    const name = f['Item Name'] || f['Name'] || 'Unknown Item';
-    const qty = Number(f['Quantity on hand'] ?? f['Quantity on Hand'] ?? f['Quantity'] ?? 0);
-    const committed = Number(f['Committed'] ?? 0);
-    const bomQty = Number(f['Standard BOM Qty'] ?? 0);
-    const leadTimeDays = Number(f['Lead Time (Days)'] ?? 0);
-    
-    const available = qty - committed;
-
-    if ((bomQty > 0 || leadTimeDays >= 14) && available <= 2 && qty > 0) {
-      alerts.push(`• *${name}:* ${Math.max(0, available)} Avail (${leadTimeDays ? leadTimeDays + 'd lead time' : 'Reorder needed'})`);
-    }
-  }
-
-  if (alerts.length > 0) {
-    const alertCard = `⚠️ *TITAN OS | REORDER RADAR ALERT*\n` +
-      `──────────────────────────────\n` +
-      `Available buffer has reached critical threshold:\n\n` +
-      alerts.slice(0, 5).join('\n') + `\n\n` +
-      `👉 *Action:* Initiate supplier PO to protect forward installation runway.`;
-    
-    const whatsapp = require('./whatsapp');
-    if (whatsapp && whatsapp.sendWhatsAppMessage) {
-      await whatsapp.sendWhatsAppMessage(config, dispatchTarget, alertCard);
-    }
-  }
-}
-
-/**
- * Automates the depletion of bulk BOM items when structural gates are cleared.
- * Highly resilient against new Gate Names formatting (e.g. "2. Steel Frame").
- */
-async function processMilestoneBOMDeduction(config, siteRecord, clearedGate) {
-  const siteName = siteRecord.fields['Site Name'] || 'Unknown Site';
-  if (siteRecord.fields['Manufacturer'] !== 'BPC') {
-    console.log(`[BOM Engine] Bypassing BOM deduction for ${siteName} (Manufacturer is ${siteRecord.fields['Manufacturer']}, not BPC).`);
-    return;
-  }
-  
-  const items = await refreshInventoryCache(config);
-  let deductedItems = [];
-  
-  // Make gate parsing robust to string variations (e.g., "Gate 2", "2. Steel Frame", or just 2)
-  const gateStr = String(clearedGate).toLowerCase();
-
-  // Gate 2: Steel Frame
-  if (gateStr === '2' || gateStr.includes('gate 2') || gateStr.includes('steel')) {
-    console.log(`⚙️ [BOM Engine] Gate 2 (Steel) cleared at ${siteName}. Deducting Steel & Fasteners.`);
-    
-    for (const item of items) {
-      const f = item.fields;
-      const category = f['Category'] || '';
-      const qtyFieldName = resolveQtyFieldName(f);
-      const qty = Number(f[qtyFieldName] ?? 0);
-      const bomQty = Number(f['Standard BOM Qty'] ?? 0);
-
-      if (['Steel Inventory', 'Fasteners', 'Consumables'].includes(category) && bomQty > 0) {
-        const newQty = Math.max(0, qty - bomQty);
-        await writeAirtableInventory(config, item.id, { [qtyFieldName]: newQty });
-        deductedItems.push(`${f['Item Name']} (-${bomQty})`);
-      }
-    }
-  }
-  
-  // Gate 4: Glass Seating or Gate 6: Turf Layout
-  if (gateStr === '4' || gateStr.includes('gate 4') || gateStr.includes('glass') || 
-      gateStr === '6' || gateStr.includes('gate 6') || gateStr.includes('turf')) {
-    console.log(`⚙️ [BOM Engine] Gate ${clearedGate} cleared at ${siteName}. Shifting specific materials from Committed to Consumed.`);
-    
-    for (const item of items) {
-      const f = item.fields;
-      const category = f['Category'] || '';
-      const qtyFieldName = resolveQtyFieldName(f);
-      const qty = Number(f[qtyFieldName] ?? 0);
-      const committed = Number(f['Committed'] ?? 0);
-      const bomQty = Number(f['Standard BOM Qty'] ?? 0);
-
-      // Only deduct Glass if it's Gate 4, Turf if it's Gate 6
-      const isGlassMatch = (gateStr.includes('4') || gateStr.includes('glass')) && category.includes('Glass');
-      const isTurfMatch = (gateStr.includes('6') || gateStr.includes('turf')) && category.includes('Turf');
-
-      if ((isGlassMatch || isTurfMatch) && bomQty > 0) {
-        const newQty = Math.max(0, qty - bomQty);
-        const newCommitted = Math.max(0, committed - bomQty);
-        
-        await writeAirtableInventory(config, item.id, { 
-          [qtyFieldName]: newQty,
-          'Committed': newCommitted 
-        });
-        deductedItems.push(`${f['Item Name']} (-${bomQty})`);
-      }
-    }
-  }
-
-  if (deductedItems.length > 0) {
-    console.log(`✅ [BOM Engine] Successfully deducted: ${deductedItems.join(', ')}`);
-    await refreshInventoryCache(config, true);
-    await checkLowStockRadar(config, config.meta?.targetVerifiedPhone);
-  }
-}
-
-/**
- * Triggers when a site registers a deposit. Binds the materials to the 'Committed' pipeline.
- */
-async function reserveCourtBOM(config, siteName, dispatchTarget = null) {
-  console.log(`📦 [BOM Engine] Deposit received for ${siteName}. Reserving materials in Committed pipeline.`);
-  const items = await refreshInventoryCache(config);
-  
-  for (const item of items) {
-    const f = item.fields;
-    const committed = Number(f['Committed'] ?? 0);
-    const bomQty = Number(f['Standard BOM Qty'] ?? 0);
-
-    if (bomQty > 0) {
-      const newCommitted = committed + bomQty;
-      await writeAirtableInventory(config, item.id, { 'Committed': newCommitted });
-    }
-  }
-
-  await refreshInventoryCache(config, true);
-  await checkLowStockRadar(config, dispatchTarget || config.meta?.targetVerifiedPhone);
-}
-
-// ====================================================================
-// 5. PHYSICAL INVENTORY TALLY COUNTS
-// ====================================================================
-
-/**
- * Bulk executes physical inventory counts retrieved from multimodal analysis (Clipboards, voice notes).
- */
-async function executeInventoryCount(config, inventoryCounts, dispatchTarget, workerName = 'HQ Admin', sendWhatsAppMessage) {
-  if (!inventoryCounts || inventoryCounts.length === 0) return;
-  const items = await refreshInventoryCache(config);
-  
-  let updatedList = [];
-  let notFoundList = [];
-
-  for (const count of inventoryCounts) {
-    const query = (count.item_name || '').toLowerCase();
-    const newQty = parseFloat(count.new_quantity);
-    
-    if (isNaN(newQty) || !query) continue;
-
-    const matchedItem = items.find(i => {
-      const itemName = String(i.fields['Item Name'] || i.fields['Name'] || '').toLowerCase();
-      return itemName.includes(query) || query.includes(itemName);
-    });
-    
-    if (matchedItem) {
-      const qtyFieldName = resolveQtyFieldName(matchedItem.fields);
-
-      await writeAirtableInventory(config, matchedItem.id, {
-        [qtyFieldName]: newQty,
-        'Count Status': 'Verified'
-      });
-      updatedList.push(`• *${matchedItem.fields['Item Name'] || matchedItem.fields['Name']}:* ${newQty}`);
-    } else {
-      notFoundList.push(`• "${count.item_name}"`);
-    }
-  }
-
-  await refreshInventoryCache(config, true);
-
-  let card = `📋 *TITAN OS | INVENTORY AUDIT LOGGED*\n──────────────────────────────\n👤 *Auditor:* ${workerName}\n──────────────────────────────\n`;
-  if (updatedList.length > 0) {
-    card += `✅ *Stock Updated:*\n${updatedList.join('\n')}\n\n`;
-  }
-  if (notFoundList.length > 0) {
-    card += `⚠️ *Unknown SKUs:*\n${notFoundList.join('\n')}\n\n`;
-  }
-  card += `_Airtable Inventory Ledger synchronized._`;
-  
-  if (typeof sendWhatsAppMessage === 'function') {
-    await sendWhatsAppMessage(config, dispatchTarget, card.trim());
-  }
-}
-
+// Map the old function names to the new unified orchestrator for seamless server.js integration
 module.exports = {
-  refreshInventoryCache,
-  handleSpokenInventorySnapshot,
-  executeInventoryCount,
-  processMilestoneBOMDeduction,
-  reserveCourtBOM,
-  checkLowStockRadar
+  refreshInventoryCache: (c, f) => refreshLogisticsCache(c, 'Inventory', f),
+  handleSpokenInventorySnapshot: (c, r, d, s, i) => handleSpokenLogisticsQuery(c, r, d, s, i, null, false),
+  handleSpokenInventoryUpdate: (c, r, d, s, i) => handleSpokenLogisticsQuery(c, r, d, s, i, null, false),
+  handleSpokenEquipmentQuery: (c, r, d, s, i) => handleSpokenLogisticsQuery(c, r, d, s, i, null, true),
+  handleSpokenEquipmentUpdate: (c, r, d, s, i) => handleSpokenLogisticsQuery(c, r, d, s, i, null, true)
 };
