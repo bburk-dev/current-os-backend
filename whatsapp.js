@@ -103,7 +103,9 @@ function normalizeSitePayload(rawFields, cachedSites = []) {
 
     // 2. Format single-select values to Title Case (e.g., "green" -> "Green", "mondo" -> "Mondo")
     let targetVal = val;
-    if (typeof val === 'string') {
+    if (typeof val === 'boolean') {
+      targetVal = val ? 'Yes' : 'No';
+    } else if (typeof val === 'string') {
       const trimmed = val.trim();
       const lower = trimmed.toLowerCase();
 
@@ -118,9 +120,10 @@ function normalizeSitePayload(rawFields, cachedSites = []) {
       else if (lower === 'yes' || lower === 'true') targetVal = 'Yes';
       else if (lower === 'no' || lower === 'false') targetVal = 'No';
       else {
-        // Capitalize first letter of each word
         targetVal = trimmed.replace(/\b\w/g, c => c.toUpperCase());
       }
+    } else {
+      targetVal = String(val).trim();
     }
 
     normalized[targetKey] = targetVal;
@@ -246,35 +249,28 @@ async function sendWhatsAppReaction(config, to, messageId, emoji) {
 
 async function resolveCoordinates(config, memoryCache, site, airtableWrite) {
   const fields = site.fields || {};
-  if (fields.Latitude && fields.Longitude) {
-    return { lat: Number(fields.Latitude), lon: Number(fields.Longitude) };
+  
+  // Strict Airtable Lookup: Eliminate Google Maps Fallback Geocoding
+  const latStr = fields['Latitude'] || fields['Lat'];
+  const lonStr = fields['Longitude'] || fields['Long'] || fields['Lng'] || fields['Lon'];
+
+  if (latStr && lonStr) {
+    return { lat: Number(latStr), lon: Number(lonStr) };
   }
-
-  const queryAddress = fields['Address'] || fields['Site Name'];
-  if (!queryAddress || !config.google?.apiKey) return null;
-
-  try {
-    const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(queryAddress)}&key=${config.google.apiKey}`;
-    const res = await fetch(geoUrl);
-    const data = await res.json();
-
-    if (data.results && data.results[0]?.geometry?.location) {
-      const loc = data.results[0].geometry.location;
-      if (airtableWrite) {
-        airtableWrite('Sites', {
-          'Latitude': loc.lat,
-          'Longitude': loc.lng
-        }, site.id).catch(() => {});
+  
+  // Fallback for combined string fields (e.g., "25.3230734, -80.275413")
+  const combined = fields['Coordinates'] || fields['Location'] || fields['GPS'];
+  if (typeof combined === 'string' && combined.includes(',')) {
+      const parts = combined.split(',');
+      if (parts.length === 2) {
+          return { lat: Number(parts[0].trim()), lon: Number(parts[1].trim()) };
       }
-      return { lat: loc.lat, lon: loc.lng };
-    }
-  } catch (err) {
-    console.warn(`[Geo Resolver Error] Address "${queryAddress}":`, err.message);
   }
+
   return null;
 }
 
-async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWrite, fetchDadJoke) {
+async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWrite, fetchDadJoke, weatherStr = '') {
   const cleanPhone = String(fromPhone).replace(/\D/g, '');
   const siteId = site.id;
   const siteName = site.fields['Site Name'];
@@ -297,13 +293,15 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
   }
 
   const bonusJoke = fetchDadJoke ? await fetchDadJoke() : '';
+  const weatherAddon = weatherStr ? `\n\n🌤️ *Site Telemetry:*\n${weatherStr}` : '';
+  
   const checkInCard = `📍 *CHECK-IN VERIFIED | TITAN OS*\n` +
                       `──────────────────────────────\n` +
                       `🏟️ *Court:* ${siteName}\n` +
                       `👤 *Installer:* ${callerIdentity.name} (${callerIdentity.role})\n` +
                       `🌐 *Proximity:* ${Math.round(distanceMeters)}m from court center\n` +
                       `──────────────────────────────\n` +
-                      `Bound to *${siteName}*. Send photos, voice notes, or receipts to log progress.${bonusJoke}`;
+                      `Bound to *${siteName}*. Send photos, voice notes, or receipts to log progress.${weatherAddon}${bonusJoke}`;
 
   await sendWhatsAppMessage(config, dispatchTarget, checkInCard);
 }
@@ -338,7 +336,7 @@ TASK:
    - "UNKNOWN": Conversational chatter or unrecognized command.
 
 2. Extract key parameters:
-   - "referenced_site_name": Court name mentioned (e.g., "Luke Pelosi", "Aurora", "RCOR Court 2").
+   - "referenced_site_name": Court name explicitly mentioned (e.g., "Luke Pelosi", "Aurora", "RCOR Court 2").
    - "qbo_customer_name": Client name mentioned for billing.
    - "qbo_amount": Explicit dollar amount mentioned.
    - "qbo_estimate_number": Estimate number referenced.
@@ -402,37 +400,6 @@ OUTPUT STRICTLY VALID JSON:
 // ====================================================================
 // 6. MEDIA PROCESSING & SUPABASE STORAGE ARCHIVE
 // ====================================================================
-
-async function uploadMediaToSupabase(config, buffer, mimeType, extension = 'jpg') {
-  if (!config.supabase.url || !config.supabase.serviceRoleKey) return null;
-
-  try {
-    const supabase = createClient(config.supabase.url, config.supabase.serviceRoleKey);
-    const date = new Date();
-    const year = date.getUTCFullYear();
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const fileId = crypto.randomUUID();
-    const storagePath = `${year}/${month}/${fileId}.${extension}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from(config.supabase.bucket)
-      .upload(storagePath, buffer, {
-        contentType: mimeType,
-        upsert: false
-      });
-
-    if (uploadError) return null;
-
-    const { data: signedData, error: signError } = await supabase.storage
-      .from(config.supabase.bucket)
-      .createSignedUrl(storagePath, 7 * 24 * 60 * 60);
-
-    if (signError || !signedData?.signedUrl) return null;
-    return signedData.signedUrl;
-  } catch (err) {
-    return null;
-  }
-}
 
 async function processMediaBatch(config, batch, airtableWriteWithAutoDrop, oracleFileURIs) {
   const { items, site, worker, dispatchTarget, callerIdentity } = batch;
@@ -516,33 +483,6 @@ Return valid JSON:
 }
 
 // ====================================================================
-// 7. INBOUND EMAIL & SUBSCRIBER BROADCASTS
-// ====================================================================
-
-async function handleInboundEmail(config, emailPayload, getCachedContacts) {
-  const contacts = getCachedContacts ? await getCachedContacts() : [];
-  const senderClean = String(emailPayload.from).toLowerCase();
-  const matchedContact = contacts.find(c => {
-    const contactEmail = String(c.fields['Email'] || '').toLowerCase().trim();
-    return contactEmail && senderClean.includes(contactEmail);
-  });
-
-  const senderName = matchedContact?.fields?.['Full Name'] || emailPayload.from;
-  const alertCard = `✉️ *TITAN OS | INBOUND EMAIL*\n` +
-                    `──────────────────────────────\n` +
-                    `👤 *From:* ${senderName}\n` +
-                    `📌 *Subject:* ${emailPayload.subject}\n` +
-                    `──────────────────────────────\n` +
-                    `${(emailPayload.text || '').substring(0, 300)}...`;
-
-  await sendWhatsAppMessage(config, config.meta.targetVerifiedPhone, alertCard);
-}
-
-async function fanOutToSubscribers(config, targetPhone, msg) {
-  await sendWhatsAppMessage(config, targetPhone, msg);
-}
-
-// ====================================================================
 // 8. MODULE EXPORTS
 // ====================================================================
 module.exports = {
@@ -560,7 +500,5 @@ module.exports = {
   resolveCoordinates,
   bindSiteContext,
   triageSpokenOrTextNLP,
-  processMediaBatch,
-  handleInboundEmail,
-  fanOutToSubscribers
+  processMediaBatch
 };
