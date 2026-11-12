@@ -62,10 +62,6 @@ function updateSessionContext(phone, ctx) {
 // 2. SCHEMA & SELECT OPTION NORMALIZATION ENGINE
 // ====================================================================
 
-/**
- * Reconciles dynamic LLM field extractions against actual Airtable column names
- * and enforces Title Casing on select options so Airtable does not reject them with 422.
- */
 function normalizeSitePayload(rawFields, cachedSites = []) {
   const knownColumns = new Set();
   if (Array.isArray(cachedSites)) {
@@ -82,7 +78,6 @@ function normalizeSitePayload(rawFields, cachedSites = []) {
     let targetKey = key;
     const cleanKey = key.trim().toLowerCase();
 
-    // 1. Reconcile Canadian/US spelling and common aliases against live schema
     if (cleanKey === 'turf color' || cleanKey === 'turf colour') {
       targetKey = knownColumns.has('Turf Colour') ? 'Turf Colour' : 'Turf Color';
     } else if (cleanKey === 'turf supplier' || cleanKey === 'supplier' || cleanKey === 'turf manufacturer') {
@@ -92,7 +87,6 @@ function normalizeSitePayload(rawFields, cachedSites = []) {
     } else if (cleanKey === 'lights' || cleanKey === 'lighting') {
       targetKey = knownColumns.has('Lights') ? 'Lights' : (knownColumns.has('Lighting') ? 'Lighting' : 'Lights');
     } else {
-      // Find case-insensitive match in known columns if present
       for (const col of knownColumns) {
         if (col.toLowerCase() === cleanKey) {
           targetKey = col;
@@ -101,7 +95,6 @@ function normalizeSitePayload(rawFields, cachedSites = []) {
       }
     }
 
-    // 2. Format single-select values to Title Case (e.g., "green" -> "Green", "mondo" -> "Mondo")
     let targetVal = val;
     if (typeof val === 'boolean') {
       targetVal = val ? 'Yes' : 'No';
@@ -250,7 +243,6 @@ async function sendWhatsAppReaction(config, to, messageId, emoji) {
 async function resolveCoordinates(config, memoryCache, site, airtableWrite) {
   const fields = site.fields || {};
   
-  // Strict Airtable Lookup: Eliminate Google Maps Fallback Geocoding
   const latStr = fields['Latitude'] || fields['Lat'];
   const lonStr = fields['Longitude'] || fields['Long'] || fields['Lng'] || fields['Lon'];
 
@@ -258,7 +250,6 @@ async function resolveCoordinates(config, memoryCache, site, airtableWrite) {
     return { lat: Number(latStr), lon: Number(lonStr) };
   }
   
-  // Fallback for combined string fields (e.g., "25.3230734, -80.275413")
   const combined = fields['Coordinates'] || fields['Location'] || fields['GPS'];
   if (typeof combined === 'string' && combined.includes(',')) {
       const parts = combined.split(',');
@@ -329,14 +320,18 @@ TASK:
    - "CHANGE_ORDER": Modification of physical build scope or additional construction cost on-site.
    - "AR_LOOKUP": Inquires about outstanding invoice balances or aging receivables.
    - "ORACLE_QUERY": Engineering questions, specs, bolt torque, glass tolerances, or blueprint PDFs.
-   - "INVENTORY_QUERY": Queries regarding materials, turf stock, glass, steel, or parts.
+   - "INVENTORY_QUERY": Queries regarding consumable materials, turf stock, glass, steel, or parts.
+   - "INVENTORY_UPDATE": Requests to add, subtract, or update the count of consumable items in inventory.
+   - "EQUIPMENT_QUERY": Queries regarding the physical location or status of heavy tools (e.g. glass handler, trailers).
+   - "EQUIPMENT_UPDATE": Requests to update the location or status of heavy equipment.
+   - "NAVIGATION_QUERY": Requests for driving directions, maps, location coordinates, or satellite views of a specific site.
    - "METRICS_QUERY": System volume, leverage metrics, or telemetry reports.
    - "READINESS_QUERY": Readiness status check for mobilization on a court.
    - "GENERAL_UPDATE": Updating site parameters (turf color, turf supplier, lights, substrate, status) or reporting field progress.
    - "UNKNOWN": Conversational chatter or unrecognized command.
 
 2. Extract key parameters:
-   - "referenced_site_name": Court name explicitly mentioned (e.g., "Luke Pelosi", "Aurora", "RCOR Court 2").
+   - "referenced_site_name": Court name explicitly mentioned (e.g., "Luke Pelosi", "Lewinsky", "RCOR Court 2").
    - "qbo_customer_name": Client name mentioned for billing.
    - "qbo_amount": Explicit dollar amount mentioned.
    - "qbo_estimate_number": Estimate number referenced.
