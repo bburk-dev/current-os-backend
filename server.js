@@ -34,7 +34,7 @@ const cluster = require('cluster');
 const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
-const equipment = require('./equipment'); // Ensure Equipment Module is loaded
+// const equipment = require('./equipment'); // Temporarily disabled until equipment.js is uploaded to server
 const whatsapp = require('./whatsapp');
 const metrics = require('./metrics'); // Telemetry Layer
 
@@ -268,7 +268,6 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
       if (res.ok) {
         const data = await res.json();
         if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
-        // Return strictly what survived the write to preserve forensic integrity
         return { success: true, writtenFields: currentPayload.fields, record: data };
       }
 
@@ -371,8 +370,17 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   const siteName = site.fields['Site Name'];
   const latStr = site.fields['Latitude'] || site.fields['Lat'];
   const lonStr = site.fields['Longitude'] || site.fields['Lon'] || site.fields['Lng'];
-  const lat = latStr ? Number(latStr) : null;
-  const lon = lonStr ? Number(lonStr) : null;
+  
+  let lat = latStr ? Number(latStr) : null;
+  let lon = lonStr ? Number(lonStr) : null;
+  
+  if (!lat && site.fields['Site location']) {
+     const parts = String(site.fields['Site location']).split(',');
+     if (parts.length === 2) {
+         lat = Number(parts[0].trim());
+         lon = Number(parts[1].trim());
+     }
+  }
 
   const openAssignments = await getCachedOpenAssignments();
   const siteAssignments = openAssignments.filter(a => a.fields['Site'] && a.fields['Site'].includes(siteId));
@@ -1028,18 +1036,20 @@ app.post('/webhook', async (req, res) => {
             await inventory.handleSpokenInventorySnapshot(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
             return;
           }
-          if (spokenTriage.intent === 'EQUIPMENT_QUERY' && equipment?.handleSpokenEquipmentQuery) {
-            await equipment.handleSpokenEquipmentQuery(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
-            return;
-          }
+          // Temporarily bypassing equipment queries until equipment.js is uploaded
+          // if (spokenTriage.intent === 'EQUIPMENT_QUERY' && equipment?.handleSpokenEquipmentQuery) {
+          //   await equipment.handleSpokenEquipmentQuery(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
+          //   return;
+          // }
           if (spokenTriage.intent === 'INVENTORY_UPDATE' && inventory?.handleSpokenInventoryUpdate) {
             await inventory.handleSpokenInventoryUpdate(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
             return;
           }
-          if (spokenTriage.intent === 'EQUIPMENT_UPDATE' && equipment?.handleSpokenEquipmentUpdate) {
-            await equipment.handleSpokenEquipmentUpdate(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
-            return;
-          }
+          // Temporarily bypassing equipment updates until equipment.js is uploaded
+          // if (spokenTriage.intent === 'EQUIPMENT_UPDATE' && equipment?.handleSpokenEquipmentUpdate) {
+          //   await equipment.handleSpokenEquipmentUpdate(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
+          //   return;
+          // }
           if (spokenTriage.intent === 'READINESS_QUERY') {
              const targetSiteName = spokenTriage.qbo_customer_name || (boundSite ? boundSite.fields['Site Name'] : null);
              if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
@@ -1069,21 +1079,32 @@ app.post('/webhook', async (req, res) => {
                activeTargetSite = boundSite;
              }
              
-             if (activeTargetSite && (activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat']) && (activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'])) {
-                const lat = activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat'];
-                const lon = activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'];
-                const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
-                const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
+             if (activeTargetSite) {
+                let lat = activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat'];
+                let lon = activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'];
                 
-                const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
-                                `──────────────────────────────\n` +
-                                `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
-                                `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
-                                `──────────────────────────────\n` +
-                                `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
-                                `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+                if (!lat && activeTargetSite.fields['Site location']) {
+                    const parts = String(activeTargetSite.fields['Site location']).split(',');
+                    if (parts.length === 2) {
+                        lat = parts[0].trim();
+                        lon = parts[1].trim();
+                    }
+                }
                 
-                return await dM(dispatchTarget, navCard);
+                if (lat && lon) {
+                    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
+                    const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
+                    
+                    const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                                    `──────────────────────────────\n` +
+                                    `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
+                                    `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
+                                    `──────────────────────────────\n` +
+                                    `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
+                                    `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+                    
+                    return await dM(dispatchTarget, navCard);
+                }
              }
              return await dM(dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
           }
@@ -1164,6 +1185,8 @@ Transcript: "${transcript}"
 Known Airtable Columns: ${JSON.stringify(Array.from(knownColumns))}
 
 Extract any fields the user wants updated. Match extracted keys EXACTLY to the 'Known Airtable Columns' above (e.g. use "Turf Colour" not "Turf Color", use "Supplier" not "Turf Supplier").
+Format Single Select dropdowns in Title Case (e.g. "Green", "Mondo", "Yes").
+Format Checkboxes as strictly boolean true or false.
 Return ONLY valid JSON mapping exact field names to values.
 Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
 
@@ -1336,25 +1359,35 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             });
          }
 
-         if (targetSite && (targetSite.fields['Latitude'] || targetSite.fields['Lat']) && (targetSite.fields['Longitude'] || targetSite.fields['Lon'] || targetSite.fields['Lng'])) {
-           const lat = targetSite.fields['Latitude'] || targetSite.fields['Lat'];
-           const lon = targetSite.fields['Longitude'] || targetSite.fields['Lon'] || targetSite.fields['Lng'];
+         if (targetSite) {
+           let lat = targetSite.fields['Latitude'] || targetSite.fields['Lat'];
+           let lon = targetSite.fields['Longitude'] || targetSite.fields['Lon'] || targetSite.fields['Lng'];
            
-           // Google Maps driving directions link
-           const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
+           if (!lat && targetSite.fields['Site location']) {
+               const parts = String(targetSite.fields['Site location']).split(',');
+               if (parts.length === 2) {
+                   lat = parts[0].trim();
+                   lon = parts[1].trim();
+               }
+           }
            
-           // Google Maps satellite view link for logistics/unloading
-           const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
+           if (lat && lon) {
+               // Google Maps driving directions link
+               const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
+               
+               // Google Maps satellite view link for logistics/unloading
+               const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
 
-           const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
-                           `──────────────────────────────\n` +
-                           `🏟️ *Destination:* ${targetSite.fields['Site Name']}\n` +
-                           `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
-                           `──────────────────────────────\n` +
-                           `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
-                           `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
-           
-           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
+               const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                               `──────────────────────────────\n` +
+                               `🏟️ *Destination:* ${targetSite.fields['Site Name']}\n` +
+                               `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
+                               `──────────────────────────────\n` +
+                               `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
+                               `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+               
+               return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
+           }
          }
          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName}".`);
       }
@@ -1407,20 +1440,22 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
          return;
       }
       
-      if (triage && triage.intent === 'EQUIPMENT_QUERY' && equipment && equipment.handleSpokenEquipmentQuery) {
-         await equipment.handleSpokenEquipmentQuery(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
-         return;
-      }
+      // Temporarily bypassing equipment queries until equipment.js is uploaded
+      // if (triage && triage.intent === 'EQUIPMENT_QUERY' && equipment && equipment.handleSpokenEquipmentQuery) {
+      //    await equipment.handleSpokenEquipmentQuery(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
+      //    return;
+      // }
       
       if (triage && triage.intent === 'INVENTORY_UPDATE' && inventory && inventory.handleSpokenInventoryUpdate) {
          await inventory.handleSpokenInventoryUpdate(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
          return;
       }
       
-      if (triage && triage.intent === 'EQUIPMENT_UPDATE' && equipment && equipment.handleSpokenEquipmentUpdate) {
-         await equipment.handleSpokenEquipmentUpdate(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
-         return;
-      }
+      // Temporarily bypassing equipment updates until equipment.js is uploaded
+      // if (triage && triage.intent === 'EQUIPMENT_UPDATE' && equipment && equipment.handleSpokenEquipmentUpdate) {
+      //    await equipment.handleSpokenEquipmentUpdate(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
+      //    return;
+      // }
 
       const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
       const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site');
