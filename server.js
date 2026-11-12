@@ -1040,6 +1040,38 @@ app.post('/webhook', async (req, res) => {
             await equipment.handleSpokenEquipmentUpdate(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
             return;
           }
+          if (spokenTriage.intent === 'NAVIGATION_QUERY' || (spokenTriage.transcript_en || '').toLowerCase().includes('directions to') || (spokenTriage.transcript_en || '').toLowerCase().includes('location for')) {
+             let targetSiteName = spokenTriage.referenced_site_name;
+             if (!targetSiteName) {
+                 const tLower = (spokenTriage.transcript_en || '').toLowerCase();
+                 targetSiteName = tLower.replace(/can i get directions to\s*/i, '').replace(/directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+             }
+             
+             let activeTargetSite = null;
+             if (targetSiteName) {
+               activeTargetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(targetSiteName.toLowerCase()));
+             } else {
+               activeTargetSite = boundSite;
+             }
+             
+             if (activeTargetSite && (activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat']) && (activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'])) {
+                const lat = activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat'];
+                const lon = activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'];
+                const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
+                const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
+                
+                const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                                `──────────────────────────────\n` +
+                                `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
+                                `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
+                                `──────────────────────────────\n` +
+                                `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
+                                `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+                
+                return await dM(dispatchTarget, navCard);
+             }
+             return await dM(dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
+          }
           if (spokenTriage.intent === 'READINESS_QUERY') {
              const targetSiteName = spokenTriage.qbo_customer_name || (boundSite ? boundSite.fields['Site Name'] : null);
              if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
@@ -1280,8 +1312,8 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, helpMenu);
       }
 
-      if (lTxt.startsWith('/map ') || lTxt.includes('directions to')) {
-         const targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/\?/g, '').trim();
+      if (lTxt.startsWith('/map ') || lTxt.includes('directions to') || lTxt.includes('location for')) {
+         const targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
          const allSites = await getCachedSites();
          const targetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(targetSiteName.toLowerCase()));
 
@@ -1369,6 +1401,39 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
       if (triage && triage.intent === 'EQUIPMENT_UPDATE' && equipment && equipment.handleSpokenEquipmentUpdate) {
          await equipment.handleSpokenEquipmentUpdate(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
          return;
+      }
+
+      if (triage && triage.intent === 'NAVIGATION_QUERY') {
+         let targetSiteName = triage?.referenced_site_name;
+         if (!targetSiteName) {
+             targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+         }
+         
+         let activeTargetSite = null;
+         if (targetSiteName) {
+           activeTargetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(targetSiteName.toLowerCase()));
+         } else {
+           activeTargetSite = boundSite;
+         }
+
+         if (activeTargetSite && (activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat']) && (activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'])) {
+           const lat = activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat'];
+           const lon = activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'];
+           const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
+           const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
+           
+           const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                           `──────────────────────────────\n` +
+                           `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
+                           `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
+                           `──────────────────────────────\n` +
+                           `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
+                           `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+           
+           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
+         } else {
+           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
+         }
       }
 
       const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
