@@ -12,15 +12,15 @@
 // ====================================================================
 // 0. GLOBAL POLYFILLS & ENVIRONMENT
 // ====================================================================
-if (!globalThis.fetch) {
+if (typeof fetch === 'undefined') {
   try {
     const nodeFetch = require('node-fetch');
-    globalThis.fetch = nodeFetch;
-    globalThis.Headers = nodeFetch.Headers;
-    globalThis.Request = nodeFetch.Request;
-    globalThis.Response = nodeFetch.Response;
+    global.fetch = nodeFetch;
+    global.Headers = nodeFetch.Headers;
+    global.Request = nodeFetch.Request;
+    global.Response = nodeFetch.Response;
   } catch (err) {
-    console.warn('[System] native fetch not found and node-fetch not installed.');
+    console.error('[CRITICAL] node-fetch is missing. Native fetch is not available in this Node version. Run "npm install node-fetch" or set NODE_VERSION to 18+ in Render.');
   }
 }
 
@@ -29,7 +29,6 @@ try { require('dotenv').config(); } catch (e) {}
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cluster = require('cluster');
-const os = require('os');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
@@ -37,9 +36,7 @@ const oracle = require('./oracle');
 const inventory = require('./inventory');
 // const equipment = require('./equipment'); // Temporarily disabled until equipment.js is uploaded to server
 const whatsapp = require('./whatsapp');
-// Note: If metrics.js is not yet uploaded, ensure you have a dummy module or comment out incrementMetric calls.
-let metrics;
-try { metrics = require('./metrics'); } catch(e) {} 
+const metrics = require('./metrics'); // Telemetry Layer
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -80,14 +77,11 @@ const CONFIG = {
     accessToken: process.env.QBO_ACCESS_TOKEN,
     refreshToken: null,
     baseUrl: 'https://quickbooks.api.intuit.com/v3/company'
-  },
-  google: {
-    apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
   }
 };
 
 // ====================================================================
-// 2. STATE MACHINES & CACHE-ASIDE ENGINE (PAGINATED)
+// 2. STATE MACHINES & CACHE-ASIDE ENGINE
 // ====================================================================
 
 let oracleFileURIs = [];
@@ -113,40 +107,26 @@ const memoryCache = {
     accessToken: null,
     refreshToken: null,
     expiresAt: null
-  },
-  coordinates: new Map()
+  }
 };
 
 // Autonomously overcomes Airtable's 100-record limit by following pagination offsets
-async function fetchAllAirtableRecords(tableName, queryParams = '') {
-  let allRecords = [];
+async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig = '') {
+  let records = [];
   let offset = null;
-  let hasMore = true;
-
-  while (hasMore) {
-    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}?${queryParams}`;
-    if (offset) {
-      url += (queryParams ? '&' : '') + `offset=${encodeURIComponent(offset)}`;
-    }
-
-    try {
-      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      
-      allRecords = allRecords.concat(data.records || []);
-      
-      if (data.offset) {
-        offset = data.offset;
-      } else {
-        hasMore = false;
-      }
-    } catch (err) {
-      console.warn(`[Airtable] Failed to fetch page for ${tableName}:`, err.message);
-      hasMore = false; 
-    }
-  }
-  return allRecords;
+  do {
+    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}?`;
+    if (filterFormula) url += `filterByFormula=${encodeURIComponent(filterFormula)}&`;
+    if (sortConfig) url += `${sortConfig}&`;
+    if (offset) url += `offset=${encodeURIComponent(offset)}`;
+    
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.records) records = records.concat(data.records);
+    offset = data.offset;
+  } while (offset);
+  return records;
 }
 
 async function getCachedSites(forceRefresh = false) {
@@ -200,8 +180,8 @@ async function getCachedOpenAssignments(forceRefresh = false) {
   }
   try {
     const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
-    const query = `filterByFormula=${encodeURIComponent(formula)}&sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc`;
-    memoryCache.assignments = await fetchAllAirtableRecords('Daily Assignments', query);
+    const sort = `sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc`;
+    memoryCache.assignments = await fetchAllAirtableRecords('Daily Assignments', formula, sort);
     memoryCache.assignmentsLastFetched = now;
     return memoryCache.assignments;
   } catch (err) {
@@ -297,8 +277,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
       
       if (res.status === 422) {
         const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) ||
-                      errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i) ||
-                      errorMsg.match(/Unknown field name\s*["'\\]+([^"'\\]+)["'\\]+/i);
+                      errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
         if (match && match[1]) {
           const badField = match[1];
           console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}" from ${tableName}`);
@@ -1684,9 +1663,16 @@ app.post('/api/inbound-email', async (req, res) => {
 
     console.log(`[Email Ingress] Processing email from ${fromAddr}: "${subjectLine}"`);
     
-    // Calls handleInboundEmail added to whatsapp.js recently
     if (whatsapp && whatsapp.handleInboundEmail) {
-        await whatsapp.handleInboundEmail(CONFIG, req.body, getCachedContacts);
+        const emailPayload = {
+            from: fromAddr,
+            to: b.to || '',
+            cc: b.cc || '',
+            subject: subjectLine,
+            text: cleanText,
+            html: b.html || ''
+        };
+        await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
     }
   } catch (err) {
     console.error('[Runtime Exception in /api/inbound-email]:', err);
