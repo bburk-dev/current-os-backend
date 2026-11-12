@@ -29,15 +29,14 @@ try { require('dotenv').config(); } catch (e) {}
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cluster = require('cluster');
-const os = require('os');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
+// const equipment = require('./equipment'); // Temporarily disabled until equipment.js is uploaded to server
 const whatsapp = require('./whatsapp');
-let metrics;
-try { metrics = require('./metrics'); } catch(e) {}
+const metrics = require('./metrics'); // Telemetry Layer
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -114,6 +113,7 @@ const memoryCache = {
   }
 };
 
+// Autonomously overcomes Airtable's 100-record limit by following pagination offsets
 async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig = '') {
   let records = [];
   let offset = null;
@@ -276,6 +276,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
       if (res.ok) {
         const data = await res.json();
         if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
+        // Return strictly what survived the write to preserve forensic integrity
         return { success: true, writtenFields: currentPayload.fields, record: data };
       }
 
@@ -667,13 +668,19 @@ app.post('/webhook', async (req, res) => {
 
     const sessionSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : null;
     let site = null;
-    const allSites = await getCachedSites();
+    let allSites = [];
     
-    if (sessionSiteId) {
+    try {
+        allSites = await getCachedSites();
+    } catch (e) {
+        console.warn(`[Cache Log] Failed to retrieve sites from cache: ${e.message}`);
+    }
+    
+    if (sessionSiteId && allSites.length > 0) {
       site = allSites.find(s => s.id === sessionSiteId) || null;
     }
     
-    if (!site) {
+    if (!site && allSites.length > 0) {
       site = allSites.find(s => {
         const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
         return gid && (gid === fromPhone || fromPhone.includes(gid));
@@ -900,21 +907,22 @@ app.post('/webhook', async (req, res) => {
           console.warn(`[Meteorology Error] Failed to evaluate weather for ${fromPhone}:`, weatherError.message);
         }
 
-        let allSites = [];
+        let currentSites = [];
         try {
-           allSites = await getCachedSites(true);
+           currentSites = await getCachedSites(true);
         } catch (cacheError) {
            console.error('[Cache Error] Failed to retrieve sites:', cacheError.message);
         }
         
         const nearby = [];
         
-        for (const s of allSites) {
+        for (const s of currentSites) {
           try {
             const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
             if (coords) {
+              // Reverted threshold strictly to 800 meters as defined in the Founder's Log (Entry #024)
               const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
-              if (dist <= 2500) nearby.push({ site: s, distance: dist });
+              if (dist <= 800) nearby.push({ site: s, distance: dist });
             }
           } catch (geocodeError) {
              console.warn(`[Geocoding Error] Failed to resolve coordinates for site ${s.id}:`, geocodeError.message);
@@ -929,8 +937,6 @@ app.post('/webhook', async (req, res) => {
              .catch(e => console.error('[Context Binding Error]:', e.message));
         } else if (nearby.length > 1) {
           console.log(`[Location Triage] Multiple sites found. Dispatching selector buttons.`);
-          
-          // CRITICAL: Meta API enforces a strict 20-character limit on button titles.
           const buttons = nearby.slice(0, 3).map((n) => {
             let safeTitle = String(n.site.fields['Site Name'] || 'Site').trim();
             if (safeTitle.length > 20) {
@@ -942,7 +948,7 @@ app.post('/webhook', async (req, res) => {
             };
           });
           
-          await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 2.5km. Please select your active zone:`, buttons)
+          await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 800m. Please select your active zone:`, buttons)
               .catch(e => {
                   console.error('[Meta API] Button Message Error (falling back to text):', e.message);
                   const fallbackText = `📍 Multiple courts detected nearby:\n\n` + 
@@ -959,11 +965,10 @@ app.post('/webhook', async (req, res) => {
             timestamp: Date.now()
           });
 
-          // Only prompt for NEW SITE creation if no sites were found
           const promptMsg = `📍 *UNREGISTERED LOCATION DETECTED*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `Coordinates: \`${userLat.toFixed(5)}, ${userLon.toFixed(5)}\`\n` +
-            `No Bounce Padel courts were located within 2.5km.\n\n` +
+            `No Bounce Padel courts were located within 800m.\n\n` +
             `Would you like to register this as a *NEW SITE*?\n\n` +
             `Reply with the site name:\n` +
             `👉 *CREATE SITE: [Site Name]*\n` +
