@@ -115,6 +115,29 @@ const memoryCache = {
   }
 };
 
+// GLOBAL UTILITIES (EXPONENTIAL BACKOFF)
+async function fetchWithExponentialBackoff(url, options, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+      
+      // Do not retry on client-side 4xx errors (except 429 rate limits)
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        return res; 
+      }
+      
+      if (attempt === retries) return res;
+      throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      if (attempt === retries) throw err;
+      const delay = 1000 * Math.pow(2, attempt);
+      console.warn(`[Network Retry] Attempt ${attempt + 1} failed for ${url}. Retrying in ${delay}ms...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
 async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig = '') {
   let records = [];
   let offset = null;
@@ -140,32 +163,54 @@ async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig
 
 async function getCachedSites(forceRefresh = false) {
   const now = Date.now();
-  if (!forceRefresh && memoryCache.sites && (now - memoryCache.sitesLastFetched < CACHE_TTL_MS)) {
+  const isExpired = now - memoryCache.sitesLastFetched > CACHE_TTL_MS;
+
+  if (forceRefresh || (!memoryCache.sites && isExpired)) {
+    try {
+      memoryCache.sites = await fetchAllAirtableRecords('Sites');
+      memoryCache.sitesLastFetched = Date.now();
+      console.log(`[Cache Engine] Hard refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
+    } catch (err) {
+      console.warn('[Cache Engine] Hard Sites refresh failed:', err.message);
+      memoryCache.sites = memoryCache.sites || [];
+    }
     return memoryCache.sites;
   }
-  try {
-    memoryCache.sites = await fetchAllAirtableRecords('Sites');
-    memoryCache.sitesLastFetched = now;
-    console.log(`[Cache Engine] Refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
-    return memoryCache.sites;
-  } catch (err) {
-    console.warn('[Cache Engine] Sites refresh failed:', err.message);
-    return memoryCache.sites || [];
+
+  if (isExpired && memoryCache.sites) {
+    fetchAllAirtableRecords('Sites').then(freshData => {
+      memoryCache.sites = freshData;
+      memoryCache.sitesLastFetched = Date.now();
+      console.log(`[Cache Engine] Background rehydrated ${freshData.length} Sites into RAM`);
+    }).catch(err => {
+      console.warn('[Cache Engine] Background Sites rehydration failed:', err.message);
+    });
   }
+
+  return memoryCache.sites;
 }
 
 async function getCachedWorkers(forceRefresh = false) {
   const now = Date.now();
-  if (!forceRefresh && memoryCache.workers && (now - memoryCache.workersLastFetched < CACHE_TTL_MS)) {
+  const isExpired = now - memoryCache.workersLastFetched > CACHE_TTL_MS;
+
+  if (forceRefresh || (!memoryCache.workers && isExpired)) {
+    try {
+      memoryCache.workers = await fetchAllAirtableRecords('Workers');
+      memoryCache.workersLastFetched = Date.now();
+    } catch (err) {
+      memoryCache.workers = memoryCache.workers || [];
+    }
     return memoryCache.workers;
   }
-  try {
-    memoryCache.workers = await fetchAllAirtableRecords('Workers');
-    memoryCache.workersLastFetched = now;
-    return memoryCache.workers;
-  } catch (err) {
-    return memoryCache.workers || [];
+
+  if (isExpired && memoryCache.workers) {
+    fetchAllAirtableRecords('Workers').then(freshData => {
+      memoryCache.workers = freshData;
+      memoryCache.workersLastFetched = Date.now();
+    }).catch(() => {});
   }
+  return memoryCache.workers;
 }
 
 async function getCachedContacts(forceRefresh = false) {
@@ -216,18 +261,27 @@ async function getCachedContacts(forceRefresh = false) {
 
 async function getCachedOpenAssignments(forceRefresh = false) {
   const now = Date.now();
-  if (!forceRefresh && memoryCache.assignments && (now - memoryCache.assignmentsLastFetched < ASSIGNMENTS_CACHE_TTL_MS)) {
+  const isExpired = now - memoryCache.assignmentsLastFetched > ASSIGNMENTS_CACHE_TTL_MS;
+  const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
+  const sort = `sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc`;
+
+  if (forceRefresh || (!memoryCache.assignments && isExpired)) {
+    try {
+      memoryCache.assignments = await fetchAllAirtableRecords('Daily Assignments', formula, sort);
+      memoryCache.assignmentsLastFetched = Date.now();
+    } catch (err) {
+      memoryCache.assignments = memoryCache.assignments || [];
+    }
     return memoryCache.assignments;
   }
-  try {
-    const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
-    const sort = `sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc`;
-    memoryCache.assignments = await fetchAllAirtableRecords('Daily Assignments', formula, sort);
-    memoryCache.assignmentsLastFetched = now;
-    return memoryCache.assignments;
-  } catch (err) {
-    return memoryCache.assignments || [];
+
+  if (isExpired && memoryCache.assignments) {
+    fetchAllAirtableRecords('Daily Assignments', formula, sort).then(freshData => {
+      memoryCache.assignments = freshData;
+      memoryCache.assignmentsLastFetched = Date.now();
+    }).catch(() => {});
   }
+  return memoryCache.assignments;
 }
 
 async function hydrateQBOCache() {
@@ -518,14 +572,14 @@ ${rawText ? `Raw Text:\n"${rawText}"` : 'Process attached audio dictation.'}`;
   }
 
   try {
-    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+    const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts }],
         generationConfig: { temperature: 0.2 }
       })
-    });
+    }, 2);
 
     if (!res.ok) throw new Error(`Gemini Draft failed: ${res.status}`);
     const data = await res.json();
@@ -1294,14 +1348,14 @@ ${JSON.stringify(activeTargetSite.fields, null, 2)}
 
 Answer accurately based strictly on the record. If empty, state that it is not documented in the ledger.`;
 
-                const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     contents: [{ role: 'user', parts: [{ text: queryPrompt }] }],
                     generationConfig: { temperature: 0.1 }
                   })
-                });
+                }, 2);
 
                 if (geminiRes.ok) {
                   const aiData = await geminiRes.json();
@@ -1328,14 +1382,14 @@ Format Checkboxes as strictly boolean true or false.
 Return ONLY valid JSON mapping exact field names to values.
 Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
 
-                const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+                const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     contents: [{ role: 'user', parts: [{ text: extractionPrompt }] }],
                     generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
                   })
-                });
+                }, 2);
 
                 let payloadToPatch = {
                   'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
@@ -1584,85 +1638,85 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           }
           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
         }
-      }
 
-      const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
-      const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || triage?.intent === 'DYNAMIC_SITE_UPDATE';
+        const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
+        const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || triage?.intent === 'DYNAMIC_SITE_UPDATE';
 
-      if ((isQuestion || isUpdate) && (boundSite || triage?.referenced_site_name)) {
-        let activeTargetSite = null;
-        if (triage?.referenced_site_name) {
-          const ref = triage.referenced_site_name.toLowerCase();
-          activeTargetSite = allSites.find(s => {
-            const sName = (s.fields['Site Name'] || '').toLowerCase();
-            return sName.includes(ref) || ref.includes(sName);
-          });
-        }
-        if (!activeTargetSite) {
-          activeTargetSite = allSites.find(s => {
-            const sName = (s.fields['Site Name'] || '').toLowerCase();
-            if (lTxt.includes(sName)) return true;
-            const words = sName.split(' ').filter(w => w.length > 4);
-            return words.some(w => lTxt.includes(w));
-          });
-        }
-        if (!activeTargetSite) activeTargetSite = boundSite;
-
-        if (!activeTargetSite) return;
-
-        if (isQuestion && !isUpdate) {
-          const queryPrompt = `Answer the question from this record:\nQuery: "${txt}"\nRecord: ${JSON.stringify(activeTargetSite.fields, null, 2)}`;
-          const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: queryPrompt }] }] })
-          });
-          if (geminiRes.ok) {
-            const data = await geminiRes.json();
-            const ans = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (ans) return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${ans.trim()}`);
+        if ((isQuestion || isUpdate) && (boundSite || triage?.referenced_site_name)) {
+          let activeTargetSite = null;
+          if (triage?.referenced_site_name) {
+            const ref = triage.referenced_site_name.toLowerCase();
+            activeTargetSite = allSites.find(s => {
+              const sName = (s.fields['Site Name'] || '').toLowerCase();
+              return sName.includes(ref) || ref.includes(sName);
+            });
           }
-        }
-        if (isUpdate) {
-          const knownColumns = new Set();
-          allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
+          if (!activeTargetSite) {
+            activeTargetSite = allSites.find(s => {
+              const sName = (s.fields['Site Name'] || '').toLowerCase();
+              if (lTxt.includes(sName)) return true;
+              const words = sName.split(' ').filter(w => w.length > 4);
+              return words.some(w => lTxt.includes(w));
+            });
+          }
+          if (!activeTargetSite) activeTargetSite = boundSite;
 
-          const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns.`;
-          const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
-              generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-            })
-          });
-          if (geminiRes.ok) {
-            const data = await geminiRes.json();
-            const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (rawJson) {
-              const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-              const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
+          if (!activeTargetSite) return;
 
-              const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
-              for (const [key, value] of Object.entries(normalized)) {
-                payload[key] = value;
-              }
+          if (isQuestion && !isUpdate) {
+            const queryPrompt = `Answer the question from this record:\nQuery: "${txt}"\nRecord: ${JSON.stringify(activeTargetSite.fields, null, 2)}`;
+            const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: queryPrompt }] }] })
+            }, 2);
+            if (geminiRes.ok) {
+              const data = await geminiRes.json();
+              const ans = data.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (ans) return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${ans.trim()}`);
+            }
+          }
+          if (isUpdate) {
+            const knownColumns = new Set();
+            allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
 
-              const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
-              await getCachedSites(true);
+            const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns.`;
+            const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
+                generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+              })
+            }, 2);
+            if (geminiRes.ok) {
+              const data = await geminiRes.json();
+              const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (rawJson) {
+                const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+                const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
 
-              if (writeResult && writeResult.success) {
-                const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
-                if (writtenKeys.length > 0) {
-                  const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
-                } else {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
+                for (const [key, value] of Object.entries(normalized)) {
+                  payload[key] = value;
                 }
-              } else {
-                await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+
+                const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
+                await getCachedSites(true);
+
+                if (writeResult && writeResult.success) {
+                  const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
+                  if (writtenKeys.length > 0) {
+                    const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
+                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                  } else {
+                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                  }
+                } else {
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+                }
+                return;
               }
-              return;
             }
           }
         }
