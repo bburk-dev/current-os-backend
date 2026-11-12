@@ -28,13 +28,14 @@ try { require('dotenv').config(); } catch (e) {}
 
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
+const cluster = require('cluster');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
-const metrics = require('./metrics');
+const metrics = require('./metrics'); // Telemetry Layer
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -104,8 +105,11 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
 
+// In-Memory Message Deduplication Store (Guaranteed Singleton)
 const processedMessageIds = new Map();
 const DEDUP_TTL_MS = 300 * 1000;
+
+// In-Memory Drafting State (For Voice-Drafting Replies)
 const draftingSessions = new Map();
 
 const memoryCache = {
@@ -1527,7 +1531,7 @@ app.post('/webhook', async (req, res) => {
 
            if (!activeTargetSite) {
              if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: txt });
-             await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site does this update apply to?`);
+             await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at? (Reply with the court name).`);
              return;
            }
 
@@ -1594,7 +1598,7 @@ app.post('/webhook', async (req, res) => {
                        'Last Intent': 'DYNAMIC_SITE_UPDATE'
                    };
 
-                   let updatedList = [];
+                   let updatedFieldsList = [];
                    
                    if (geminiRes.ok) {
                        const aiData = await geminiRes.json();
@@ -1633,7 +1637,7 @@ app.post('/webhook', async (req, res) => {
                                        }
 
                                        payloadToPatch[k] = v;
-                                       updatedList.push(`${k}: *${v}*`);
+                                       updatedFieldsList.push(`${k}: *${v}*`);
                                    }
                                }
                            } catch (parseErr) {
@@ -1646,8 +1650,8 @@ app.post('/webhook', async (req, res) => {
                    await getCachedSites(true);
                    if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
 
-                   const summary = updatedList.length > 0 ? `\n\n*Updated Specifications:*\n• ` + updatedList.join('\n• ') : '';
-                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger and dynamically updated specifications.${summary}`);
+                   const summaryStr = updatedFieldsList.length > 0 ? `\n\n*Updated Specifications:*\n• ` + updatedFieldsList.join('\n• ') : '';
+                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger and dynamically updated specifications.${summaryStr}`);
                    return;
                    
                } catch (e) {
@@ -1733,7 +1737,7 @@ app.post('/api/telemetry/iot', async (req, res) => {
 });
 
 // ====================================================================
-// G. COMMERCIAL EMAIL INGRESS (ZAPIER / MAKE WEBHOOK TARGET)
+// G. COMMERCIAL EMAIL INGRESS (AIRTABLE AUTOMATION WEBHOOK TARGET)
 // ====================================================================
 app.post('/api/inbound-email', async (req, res) => {
   res.sendStatus(200);
@@ -1741,24 +1745,29 @@ app.post('/api/inbound-email', async (req, res) => {
   try {
     const b = req.body || {};
     
-    // Aggressive fallback extraction to handle nested payloads from Make/Zapier
-    const fromAddr = b.from || b.sender || b.From || b.reply_to || (b.message && b.message.from) || '';
-    const subjectLine = b.subject || b.Subject || (b.message && b.message.subject) || 'No Subject';
-    const rawText = b.text || b.body_plain || b.TextBody || b.html || b.body_html || b.HtmlBody || (b.message && (b.message.text || b.message.html)) || JSON.stringify(b);
+    // Airtable Scripting payload extraction
+    const fromAddr = b.from || b.sender || b.From || '';
+    const subjectLine = b.subject || b.Subject || 'No Subject';
+    const rawText = b.text || b.body_plain || b.html || b.body_html || JSON.stringify(b);
     const cleanText = rawText.replace(/<[^>]*>?/gm, '').trim();
 
     if (!fromAddr || !cleanText) {
-      console.warn('[Email Ingress] Ignored malformed email payload:', JSON.stringify(b).substring(0, 100));
+      console.warn('[Email Ingress] Ignored malformed email payload from Airtable automation.');
       return;
     }
 
     console.log(`[Email Ingress] Processing email from ${fromAddr}: "${subjectLine}"`);
     
-    // AI COMMERCIAL LEAD CLASSIFIER
+    // AI COMMERCIAL LEAD CLASSIFIER (Strict Mode)
     const emailPrompt = `You are Titan OS for Bounce Padel. Review this inbound email.
-Determine if it is a GENUINE COMMERCIAL LEAD (e.g., someone asking to build a padel court, buy a court, or asking for court maintenance).
-REJECT (return false) for SEO spam, unsolicited software sales, invoices, newsletters, or generic feedback.
-Return STRICTLY JSON: {"is_commercial_lead": boolean, "summary": "1 sentence summary"}
+Determine if it is a GENUINE COMMERCIAL LEAD (e.g., someone explicitly asking to build a padel court, buy a court, or requesting court maintenance).
+STRICTLY REJECT (return false) for ANY of the following:
+- SEO spam or marketing solicitations
+- Software or B2B service sales
+- Invoices, bill payments, or accounting requests
+- Newsletters or generic feedback/chatter
+
+Return STRICTLY JSON: {"is_commercial_lead": boolean, "summary": "1 sentence concise summary of the lead"}
 Subject: ${subjectLine}
 Body: ${cleanText.substring(0, 1500)}`;
 
@@ -1796,9 +1805,7 @@ Body: ${cleanText.substring(0, 1500)}`;
                                `_To reply, tap below and dictate your response._`;
              
              const buttons = [{ id: 'DRAFT_REPLY', title: "Draft AI Reply" }];
-             if (whatsapp && whatsapp.sendWhatsAppButtons) {
-                 await whatsapp.sendWhatsAppButtons(CONFIG, CONFIG.meta.targetVerifiedPhone, alertCard, buttons);
-             }
+             await dispatchOutboundButtons(CONFIG.meta.targetVerifiedPhone, alertCard, buttons);
           } else {
              console.log(`[Email Engine] Rejected non-commercial email from ${fromAddr}`);
           }
