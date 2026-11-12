@@ -29,14 +29,15 @@ try { require('dotenv').config(); } catch (e) {}
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cluster = require('cluster');
+const os = require('os');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
-// const equipment = require('./equipment'); // Temporarily disabled until equipment.js is uploaded to server
 const whatsapp = require('./whatsapp');
-const metrics = require('./metrics'); // Telemetry Layer
+let metrics;
+try { metrics = require('./metrics'); } catch(e) {}
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -113,7 +114,6 @@ const memoryCache = {
   }
 };
 
-// Autonomously overcomes Airtable's 100-record limit by following pagination offsets
 async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig = '') {
   let records = [];
   let offset = null;
@@ -131,7 +131,7 @@ async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig
       offset = data.offset;
     } catch (err) {
       console.warn(`[Airtable Fetch] Error fetching page for ${tableName}:`, err.message);
-      offset = null; // Break loop on error
+      offset = null; 
     }
   } while (offset);
   return records;
@@ -276,7 +276,6 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
       if (res.ok) {
         const data = await res.json();
         if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
-        // Return strictly what survived the write to preserve forensic integrity
         return { success: true, writtenFields: currentPayload.fields, record: data };
       }
 
@@ -920,7 +919,7 @@ app.post('/webhook', async (req, res) => {
           try {
             const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
             if (coords) {
-              // Reverted threshold strictly to 800 meters as defined in the Founder's Log (Entry #024)
+              // As per Founder's Log, Enforce strict 800 meter physical presence geofence
               const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
               if (dist <= 800) nearby.push({ site: s, distance: dist });
             }
@@ -937,6 +936,7 @@ app.post('/webhook', async (req, res) => {
              .catch(e => console.error('[Context Binding Error]:', e.message));
         } else if (nearby.length > 1) {
           console.log(`[Location Triage] Multiple sites found. Dispatching selector buttons.`);
+          
           const buttons = nearby.slice(0, 3).map((n) => {
             let safeTitle = String(n.site.fields['Site Name'] || 'Site').trim();
             if (safeTitle.length > 20) {
