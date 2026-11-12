@@ -742,117 +742,122 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     return;
   }
 
-  const siteName = site.fields['Site Name'] || 'Active Court';
-  const workflowMode = site.fields['Workflow Mode'] || 'INSTALLATION';
-  const siteStatus = site.fields['Site Status'] || 'ACTIVE';
+  try {
+    const siteName = site.fields['Site Name'] || 'Active Court';
+    const workflowMode = site.fields['Workflow Mode'] || 'INSTALLATION';
+    const siteStatus = site.fields['Site Status'] || 'ACTIVE';
 
-  // Stage 1: Blind Visual Ground-Truth Verification (Cold Inspection)
-  const firstVisual = items.find(i => i.type === 'image' || i.type === 'video');
-  if (firstVisual) {
-    const groundTruth = await inspectBlindVisualGroundTruth(config, firstVisual, combinedCaptions, dispatchTarget, site, site, airtableWriteWithAutoDrop);
-    if (groundTruth && groundTruth.is_padel_court === false) {
-      await logToDarkMatterVault(config, siteName, workerName, 'PARTIAL_HARDWARE', combinedCaptions, groundTruth.detected_scene);
-      return;
+    // Stage 1: Blind Visual Ground-Truth Verification (Cold Inspection)
+    const firstVisual = items.find(i => i.type === 'image' || i.type === 'video');
+    if (firstVisual) {
+      const groundTruth = await inspectBlindVisualGroundTruth(config, firstVisual, combinedCaptions, dispatchTarget, site, site, airtableWriteWithAutoDrop);
+      if (groundTruth && groundTruth.is_padel_court === false) {
+        await logToDarkMatterVault(config, siteName, workerName, 'PARTIAL_HARDWARE', combinedCaptions, groundTruth.detected_scene);
+        return;
+      }
     }
-  }
 
-  // Stage 2: Parallel Supabase Vault Archival + 12-Gate Forensic Evaluation
-  const uploadPromises = items.map(item => uploadMediaToSupabaseVault(config, item));
-  const evalPromise = evaluateCourtMediaBatch(config, items, {
-    siteName,
-    workflowMode,
-    siteStatus,
-    workerLanguage: workerLang,
-    captions: combinedCaptions
-  });
+    // Stage 2: Parallel Supabase Vault Archival + 12-Gate Forensic Evaluation
+    const uploadPromises = items.map(item => uploadMediaToSupabaseVault(config, item));
+    const evalPromise = evaluateCourtMediaBatch(config, items, {
+      siteName,
+      workflowMode,
+      siteStatus,
+      workerLanguage: workerLang,
+      captions: combinedCaptions
+    });
 
-  const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
-  const validLinks = signedUrls.filter(Boolean);
+    const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
+    const validLinks = signedUrls.filter(Boolean);
 
-  // Enforce Gate 12 Non-Monotonic Cleanliness Guardrail
-  let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates] : [];
-  if (audit.cleanliness_passed === false) {
-    verifiedGates = verifiedGates.filter(g => g !== 12);
-  }
-  const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
-  const gateLabel = workflowMode === 'MAINTENANCE' ? 'Maintenance Sweep' : `Gate ${highestGate} (${verifiedGates.length}/12 Verified)`;
+    // Enforce Gate 12 Non-Monotonic Cleanliness Guardrail
+    let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates] : [];
+    if (audit.cleanliness_passed === false) {
+      verifiedGates = verifiedGates.filter(g => g !== 12);
+    }
+    const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
+    const gateLabel = workflowMode === 'MAINTENANCE' ? 'Maintenance Sweep' : `Gate ${highestGate} (${verifiedGates.length}/12 Verified)`;
 
-  // Stage 3: Ledger Mutation (Sites & Reports 2) + Dark Matter Capture
-  const auditNote = `[FORENSIC SWEEP] ${workerName}: ${gateLabel}. ${audit.summary || ''}${validLinks.length > 0 ? `\nVault: ${validLinks[0]}` : ''}`;
+    // Stage 3: Ledger Mutation (Sites & Reports 2) + Dark Matter Capture
+    const auditNote = `[FORENSIC SWEEP] ${workerName}: ${gateLabel}. ${audit.summary || ''}${validLinks.length > 0 ? `\nVault: ${validLinks[0]}` : ''}`;
 
-  const sitePatch = {
-    'Last Note': auditNote,
-    'Last Intent': workflowMode === 'MAINTENANCE' ? 'MAINTENANCE_SWEEP' : 'FORENSIC_GATE_AUDIT'
-  };
-  if (workflowMode === 'INSTALLATION' && highestGate > 0) {
-    sitePatch['Current Gate'] = gateLabel;
-  }
+    const sitePatch = {
+      'Last Note': auditNote,
+      'Last Intent': workflowMode === 'MAINTENANCE' ? 'MAINTENANCE_SWEEP' : 'FORENSIC_GATE_AUDIT'
+    };
+    if (workflowMode === 'INSTALLATION' && highestGate > 0) {
+      sitePatch['Current Gate'] = gateLabel;
+    }
 
-  await airtableWriteWithAutoDrop('Sites', sitePatch, site.id);
+    await airtableWriteWithAutoDrop('Sites', sitePatch, site.id);
 
-  const reportPatch = {
-    'Workflow Mode': workflowMode,
-    'Action Items': (audit.blockers_detected && audit.blockers_detected.length > 0) ? audit.blockers_detected.join('; ') : 'None',
-    'Last Note': auditNote,
-    'Site': [site.id]
-  };
-  if (worker?.id) reportPatch['Worker'] = [worker.id];
-  if (validLinks.length > 0) reportPatch['Media Links'] = validLinks.join('\n');
+    const reportPatch = {
+      'Workflow Mode': workflowMode,
+      'Action Items': (audit.blockers_detected && audit.blockers_detected.length > 0) ? audit.blockers_detected.join('; ') : 'None',
+      'Last Note': auditNote,
+      'Site': [site.id]
+    };
+    if (worker?.id) reportPatch['Worker'] = [worker.id];
+    if (validLinks.length > 0) reportPatch['Media Links'] = validLinks.join('\n');
 
-  await airtableWriteWithAutoDrop('Reports 2', reportPatch);
+    await airtableWriteWithAutoDrop('Reports 2', reportPatch);
 
-  if (audit.field_observations) {
-    await logToDarkMatterVault(config, siteName, workerName, workflowMode, combinedCaptions, audit.field_observations);
-  }
+    if (audit.field_observations) {
+      await logToDarkMatterVault(config, siteName, workerName, workflowMode, combinedCaptions, audit.field_observations);
+    }
 
-  // Stage 4: Automated BOM Depletion on Structural Gates
-  if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
-    try {
-      const inventory = require('./inventory');
-      if (inventory && inventory.processMilestoneBOMDeduction) {
-        for (const g of verifiedGates) {
-          if ([2, 4, 6].includes(g)) {
-            await inventory.processMilestoneBOMDeduction(config, site, g);
+    // Stage 4: Automated BOM Depletion on Structural Gates
+    if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
+      try {
+        const inventory = require('./inventory');
+        if (inventory && inventory.processMilestoneBOMDeduction) {
+          for (const g of verifiedGates) {
+            if ([2, 4, 6].includes(g)) {
+              await inventory.processMilestoneBOMDeduction(config, site, g);
+            }
           }
         }
+      } catch (bomErr) {
+        console.warn('[BOM Trigger Warning]:', bomErr.message);
       }
-    } catch (bomErr) {
-      console.warn('[BOM Trigger Warning]:', bomErr.message);
     }
-  }
 
-  // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + Joy Cannon)
-  const blockersBlock = (audit.blockers_detected && audit.blockers_detected.length > 0)
-    ? `\n⚠️ *Adjustments / Holds:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
-    : '';
-  const cleanWarning = (audit.cleanliness_passed === false)
-    ? `\n🧹 *Gate 12 Held:* Debris/tools visible on apron. Clear site to seal Gate 12.\n`
-    : '';
+    // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + Joy Cannon)
+    const blockersBlock = (audit.blockers_detected && audit.blockers_detected.length > 0)
+      ? `\n⚠️ *Adjustments / Holds:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
+      : '';
+    const cleanWarning = (audit.cleanliness_passed === false)
+      ? `\n🧹 *Gate 12 Held:* Debris/tools visible on apron. Clear site to seal Gate 12.\n`
+      : '';
 
-  const punchCard = `🏗️ *TITAN OS | FORENSIC AUDIT RECEIPT*\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `🏟️ *Court:* ${siteName}\n` +
-    `👷 *Operative:* ${workerName}\n` +
-    `📊 *Milestone:* ${gateLabel}\n` +
-    `📸 *Evidence:* ${items.length} file(s) sealed in vault\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `${audit.summary || 'Progress logged to digital twin.'}` +
-    `${blockersBlock}${cleanWarning}`;
-
-  await sendWhatsAppMessage(config, dispatchTarget, punchCard);
-
-  // Joy Cannon: Broadcast milestone progress to external subscribers registered on the Site
-  const subscriberPhones = site.fields['Subscriber Phones'] || site.fields['Subscribers'] || site.fields['Client Phone'];
-  if (subscriberPhones && workflowMode === 'INSTALLATION' && highestGate > 0) {
-    const joyMsg = `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*\n` +
+    const punchCard = `🏗️ *TITAN OS | FORENSIC AUDIT RECEIPT*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🏟️ *Project:* ${siteName}\n` +
-      `✅ *Status:* ${gateLabel}\n` +
+      `🏟️ *Court:* ${siteName}\n` +
+      `👷 *Operative:* ${workerName}\n` +
+      `📊 *Milestone:* ${gateLabel}\n` +
+      `📸 *Evidence:* ${items.length} file(s) sealed in vault\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `${audit.summary || 'Construction progressing on schedule.'}` +
-      (validLinks.length > 0 ? `\n\n📸 *Latest Site Capture:*\n${validLinks[0]}` : '');
+      `${audit.summary || 'Progress logged to digital twin.'}` +
+      `${blockersBlock}${cleanWarning}`;
 
-    await fanOutToSubscribers(config, subscriberPhones, joyMsg);
+    await sendWhatsAppMessage(config, dispatchTarget, punchCard);
+
+    // Joy Cannon: Broadcast milestone progress to external subscribers in 'Subscribed Phones'
+    const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
+    if (subscriberPhones && workflowMode === 'INSTALLATION' && highestGate > 0) {
+      const joyMsg = `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `🏟️ *Project:* ${siteName}\n` +
+        `✅ *Status:* ${gateLabel}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `${audit.summary || 'Construction progressing on schedule.'}` +
+        (validLinks.length > 0 ? `\n\n📸 *Latest Site Capture:*\n${validLinks[0]}` : '');
+
+      await fanOutToSubscribers(config, subscriberPhones, joyMsg);
+    }
+  } catch (err) {
+    console.error('[processMediaBatch Runtime Error]:', err.message);
+    await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Forensic audit encountered a temporary interruption: ${err.message}`);
   }
 }
 
