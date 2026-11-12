@@ -28,7 +28,6 @@ try { require('dotenv').config(); } catch (e) {}
 
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const cluster = require('cluster');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
@@ -1146,7 +1145,7 @@ app.post('/webhook', async (req, res) => {
                        Extract ANY field updates requested by the user. Match extracted keys EXACTLY to this list of known columns if possible: ${JSON.stringify(Array.from(knownColumns))}.
                        (e.g., use "Turf Colour" instead of "Turf Color", "Supplier" instead of "Turf Supplier").
                        Format Single Select dropdown values in strict Title Case (e.g. "Green", "Mondo").
-                       Format Checkboxes as strictly boolean true or false (e.g. Lights: true).
+                       Format Checkboxes as strictly boolean true or false.
                        Return ONLY a valid JSON object mapping exact field names to values. Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                        
                        const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
@@ -1177,29 +1176,24 @@ app.post('/webhook', async (req, res) => {
                                    for (const [key, value] of Object.entries(extractedFields)) {
                                        if (value !== null && value !== undefined && value !== '') {
                                            let k = key;
-                                           let v = value;
+                                           let v = String(value).trim();
                                            
                                            // Reconcile common aliases
-                                           if (/turf color/i.test(k)) k = 'Turf Colour';
-                                           if (/turf supplier/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
-                                           if (/structure color/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
+                                           if (/turf col/i.test(k) || /turf colour/i.test(k)) k = 'Turf Colour';
+                                           if (/turf sup/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
+                                           if (/structure col/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
                                            if (/lights/i.test(k) || /lighting/i.test(k)) k = 'Lights';
 
-                                           // Force Boolean casting for checkboxes
-                                           if (typeof v === 'string') {
-                                               if (v.toLowerCase() === 'true' || v.toLowerCase() === 'yes') v = true;
-                                               else if (v.toLowerCase() === 'false' || v.toLowerCase() === 'no') v = false;
-                                           }
-                                           
-                                           // Force Title Case for Single Select drop-downs to bypass 422 errors
-                                           if (typeof v === 'string') {
-                                              if (v.toLowerCase() === 'green') v = 'Green';
-                                              else if (v.toLowerCase() === 'blue') v = 'Blue';
-                                              else if (v.toLowerCase() === 'terracotta') v = 'Terracotta';
-                                              else if (v.toLowerCase() === 'black') v = 'Black';
-                                              else if (v.toLowerCase() === 'mondo') v = 'Mondo';
-                                              else if (v.toLowerCase() === 'real turf' || v.toLowerCase() === 'realturf') v = 'Real Turf';
-                                           }
+                                           // Force everything to String to prevent 422 Dropdown Errors
+                                           let vLower = v.toLowerCase();
+                                           if (vLower === 'true' || vLower === 'yes') v = 'Yes';
+                                           else if (vLower === 'false' || vLower === 'no') v = 'No';
+                                           else if (vLower === 'green') v = 'Green';
+                                           else if (vLower === 'blue') v = 'Blue';
+                                           else if (vLower === 'terracotta') v = 'Terracotta';
+                                           else if (vLower === 'black') v = 'Black';
+                                           else if (vLower === 'mondo') v = 'Mondo';
+                                           else if (vLower === 'real turf' || vLower === 'realturf') v = 'Real Turf';
 
                                            payloadToPatch[k] = v;
                                            updatedList.push(`${k}: *${v}*`);
@@ -1514,22 +1508,8 @@ app.post('/webhook', async (req, res) => {
         const isActionable = lTxt.length > 10 && (lTxt.includes('need') || lTxt.includes('broken') || lTxt.includes('missing') || lTxt.includes('finished') || isUpdate);
         
         if (isQuestion || isUpdate || isActionable) {
-           let activeTargetSite = null;
-           
-           // PRIORITY 1: Explicitly Named Site
-           if (triage?.referenced_site_name) {
-             activeTargetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(triage.referenced_site_name.toLowerCase()));
-           }
-           if (!activeTargetSite) {
-             activeTargetSite = allSites.find(s => s.fields['Site Name'] && lTxt.includes(s.fields['Site Name'].toLowerCase()));
-           }
-
-           // PRIORITY 2: Fallback to Currently Bound Site
-           if (!activeTargetSite) {
-             activeTargetSite = boundSite;
-           }
-
-           if (!activeTargetSite) {
+           console.log(`[Text Engine] Ambiguous operational intent detected. Triggering clarification.`);
+           if (!boundSite) {
              if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(fromPhone, { pendingText: txt });
              await dispatchOutboundWhatsApp(dispatchTarget, `Got it. Which site are you currently working at? (Reply with the court name).`);
              return;
@@ -1537,12 +1517,12 @@ app.post('/webhook', async (req, res) => {
 
            // 1. DYNAMIC READ: Answer questions from Airtable Database
            if (isQuestion && !isUpdate) {
-               console.log(`[Text Engine] Site Query phrase detected. Querying digital twin for ${activeTargetSite.fields['Site Name']}...`);
+               console.log(`[Text Engine] Site Query phrase detected. Querying digital twin for ${boundSite.fields['Site Name']}...`);
                try {
                    const queryPrompt = `You are Titan OS, assisting a field worker.
                    The user asked: "${txt}"
-                   Here is the current database record for their active site (${activeTargetSite.fields['Site Name']}):
-                   ${JSON.stringify(activeTargetSite.fields, null, 2)}
+                   Here is the current database record for their active site (${boundSite.fields['Site Name']}):
+                   ${JSON.stringify(boundSite.fields, null, 2)}
                    
                    Answer their question accurately and concisely using ONLY the data provided above. If the data is missing or empty, state that it is not documented in the ledger. Do not hallucinate.`;
                    
@@ -1559,7 +1539,7 @@ app.post('/webhook', async (req, res) => {
                        const aiData = await geminiRes.json();
                        const answer = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
                        if (answer) {
-                           await dispatchOutboundWhatsApp(dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
+                           await dispatchOutboundWhatsApp(dispatchTarget, `🏟️ *${boundSite.fields['Site Name']} Ledger:*\n${answer.trim()}`);
                            return;
                        }
                    }
@@ -1570,7 +1550,7 @@ app.post('/webhook', async (req, res) => {
 
            // 2. DYNAMIC WRITE: Arbitrary Column Extraction
            if (isUpdate) {
-               console.log(`[Text Engine] Site Update phrase detected. Extracting dynamic columns for ${activeTargetSite.fields['Site Name']}...`);
+               console.log(`[Text Engine] Site Update phrase detected. Extracting dynamic columns for ${boundSite.fields['Site Name']}...`);
                try {
                    const knownColumns = new Set();
                    allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
@@ -1612,30 +1592,25 @@ app.post('/webhook', async (req, res) => {
                                for (const [key, value] of Object.entries(extractedFields)) {
                                    if (value !== null && value !== undefined && value !== '') {
                                        let k = key;
-                                       let v = value;
+                                       let v = String(value).trim();
                                        
                                        // Reconcile common aliases
-                                       if (/turf color/i.test(k)) k = 'Turf Colour';
-                                       if (/turf supplier/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
-                                       if (/structure color/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
+                                       if (/turf col/i.test(k) || /turf colour/i.test(k)) k = 'Turf Colour';
+                                       if (/turf sup/i.test(k) || /manufacturer/i.test(k)) k = 'Supplier';
+                                       if (/structure col/i.test(k) || /frame/i.test(k)) k = 'Structure Colour';
                                        if (/lights/i.test(k) || /lighting/i.test(k)) k = 'Lights';
 
-                                       // Force Boolean casting for checkboxes
-                                       if (typeof v === 'string') {
-                                           if (v.toLowerCase() === 'true' || v.toLowerCase() === 'yes') v = true;
-                                           else if (v.toLowerCase() === 'false' || v.toLowerCase() === 'no') v = false;
-                                       }
+                                       // Force all values to Strict String matching Airtable Single Select Dropdowns
+                                       let vLower = v.toLowerCase();
+                                       if (vLower === 'true' || vLower === 'yes') v = 'Yes';
+                                       else if (vLower === 'false' || vLower === 'no') v = 'No';
+                                       else if (vLower === 'green') v = 'Green';
+                                       else if (vLower === 'blue') v = 'Blue';
+                                       else if (vLower === 'terracotta') v = 'Terracotta';
+                                       else if (vLower === 'black') v = 'Black';
+                                       else if (vLower === 'mondo') v = 'Mondo';
+                                       else if (vLower === 'real turf' || vLower === 'realturf') v = 'Real Turf';
                                        
-                                       // Force Title Case for Single Select drop-downs to bypass 422 errors
-                                       if (typeof v === 'string') {
-                                          if (v.toLowerCase() === 'green') v = 'Green';
-                                          else if (v.toLowerCase() === 'blue') v = 'Blue';
-                                          else if (v.toLowerCase() === 'terracotta') v = 'Terracotta';
-                                          else if (v.toLowerCase() === 'black') v = 'Black';
-                                          else if (v.toLowerCase() === 'mondo') v = 'Mondo';
-                                          else if (v.toLowerCase() === 'real turf' || v.toLowerCase() === 'realturf') v = 'Real Turf';
-                                       }
-
                                        payloadToPatch[k] = v;
                                        updatedFieldsList.push(`${k}: *${v}*`);
                                    }
@@ -1646,12 +1621,12 @@ app.post('/webhook', async (req, res) => {
                        }
                    }
                    
-                   await airtableWriteWithAutoDrop('Sites', payloadToPatch, activeTargetSite.id);
+                   await airtableWriteWithAutoDrop('Sites', payloadToPatch, boundSite.id);
                    await getCachedSites(true);
                    if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
 
                    const summaryStr = updatedFieldsList.length > 0 ? `\n\n*Updated Specifications:*\n• ` + updatedFieldsList.join('\n• ') : '';
-                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger and dynamically updated specifications.${summaryStr}`);
+                   await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the *${boundSite.fields['Site Name']}* ledger and dynamically updated specifications.${summaryStr}`);
                    return;
                    
                } catch (e) {
@@ -1663,9 +1638,9 @@ app.post('/webhook', async (req, res) => {
            await airtableWriteWithAutoDrop('Sites', {
              'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${txt}"`,
              'Last Intent': 'GENERAL_UPDATE'
-           }, activeTargetSite.id);
+           }, boundSite.id);
            if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-           await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${activeTargetSite.fields['Site Name']} ledger.`);
+           await dispatchOutboundWhatsApp(dispatchTarget, `✅ Logged to the ${boundSite.fields['Site Name']} ledger.`);
            return;
         }
         console.log(`[Text Engine] General conversational fallthrough: ignored.`);
