@@ -395,4 +395,287 @@ async function handleSpokenInventorySnapshot(arg1, arg2, arg3, arg4, arg5, arg6)
     const parsed = await parseInventoryAdjustmentWithAI(config, cleanText, items);
 
     // 3. Targeted Query Branch (e.g. "Do we have 12mm glass?", "Check sand stock")
-    if (parsed && parsed.intent === 'QUERY' && parsed.record_
+    if (parsed && parsed.intent === 'QUERY' && parsed.record_id) {
+      const targetRecord = items.find(i => i.id === parsed.record_id);
+      if (targetRecord) {
+        const card = buildTargetedSkuCard(targetRecord);
+        await sendWhatsAppMessage(config, dispatchTarget, card);
+        return;
+      }
+    }
+
+    // Fallback to categorized card if no adjustment delta is provided
+    if (!parsed || parsed.intent !== 'ADJUST' || !parsed.record_id || !parsed.quantity) {
+      const card = buildInventorySnapshotCard(items);
+      await sendWhatsAppMessage(config, dispatchTarget, card);
+      return;
+    }
+
+    // 4. Stock Adjustment Execution Branch (e.g., "Used 2 tubs of turf glue")
+    const targetRecord = items.find(i => i.id === parsed.record_id);
+    if (!targetRecord) {
+      await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Material "${parsed.item_name || 'Item'}" could not be reconciled in Airtable.`);
+      return;
+    }
+
+    const fields = targetRecord.fields;
+    const qtyFieldName = resolveQtyFieldName(fields);
+    const currentQty = Number(fields[qtyFieldName] ?? 0);
+    const unit = fields['Unit'] || fields['Units'] || 'units';
+    const itemName = fields['Item Name'] || fields['Name'] || parsed.item_name || 'Material Item';
+    const threshold = Number(fields['Reorder Threshold'] ?? fields['Min Stock'] ?? 5);
+
+    let delta = Math.abs(Number(parsed.quantity));
+    let newQty = currentQty;
+
+    if (parsed.adjustment_type === 'DEDUCT') {
+      newQty = Math.max(0, currentQty - delta);
+    } else {
+      newQty = currentQty + delta;
+    }
+
+    const patchPayload = { [qtyFieldName]: newQty };
+    if ('Last Adjusted' in fields || 'Notes' in fields) {
+      patchPayload['Notes'] = `Adjusted by ${callerIdentity?.name || 'Field Operative'} on ${new Date().toLocaleDateString('en-CA')}: ${parsed.notes || cleanText}`;
+    }
+
+    const updated = await writeAirtableInventory(config, targetRecord.id, patchPayload);
+
+    if (updated) {
+      // Invalidate memory cache so next query pulls updated state
+      await refreshInventoryCache(config, true);
+
+      let statusEmoji = '🟢';
+      let statusWarning = '';
+
+      if (newQty <= 0) {
+        statusEmoji = '🔴';
+        statusWarning = `\n🚨 *CRITICAL DEPLETION:* Stock at 0 ${unit}. Restock order flagged.`;
+      } else if (newQty <= threshold) {
+        statusEmoji = '🟡';
+        statusWarning = `\n⚠️ *LOW STOCK ALERT:* Remaining stock is below minimum threshold (${threshold} ${unit}).`;
+      }
+
+      const operatorName = callerIdentity?.name || 'Field Operative';
+      const adjSymbol = parsed.adjustment_type === 'DEDUCT' ? '-' : '+';
+      const siteStr = parsed.site_context ? `\n📍 *Jobsite:* ${parsed.site_context}` : '';
+
+      const confirmCard = `📦 *TITAN OS | INVENTORY LOGGED*\n` +
+                          `──────────────────────────────\n` +
+                          `👤 *Operative:* ${operatorName}\n` +
+                          `🔧 *Material:* ${itemName}\n` +
+                          `📊 *Adjustment:* ${adjSymbol}${delta} ${unit}\n` +
+                          `📈 *Current Stock:* ${newQty} ${unit} ${statusEmoji}${siteStr}${statusWarning}\n` +
+                          `──────────────────────────────\n` +
+                          `✅ Master stock ledger updated.`;
+
+      await sendWhatsAppMessage(config, dispatchTarget, confirmCard);
+      await checkLowStockRadar(config, dispatchTarget);
+    } else {
+      await sendWhatsAppMessage(config, dispatchTarget, `❌ Failed to update inventory record in Airtable. Retrying queued in background.`);
+    }
+
+  } catch (err) {
+    console.error('[Inventory Orchestrator Error]:', err);
+    await sendWhatsAppMessage(config, dispatchTarget, `⚠️ Inventory Engine error: ${err.message}`);
+  }
+}
+
+// ====================================================================
+// 4. BILL OF MATERIALS (BOM) & AUTO-REORDER RADAR
+// ====================================================================
+
+/**
+ * Autonomous Radar: Alerts Headquarters when available stock drops below lead-time buffers.
+ */
+async function checkLowStockRadar(config, dispatchTarget) {
+  if (!dispatchTarget) return;
+  const items = await refreshInventoryCache(config);
+  const alerts = [];
+
+  for (const item of items) {
+    const f = item.fields;
+    const name = f['Item Name'] || f['Name'] || 'Unknown Item';
+    const qty = Number(f['Quantity on hand'] ?? f['Quantity on Hand'] ?? f['Quantity'] ?? 0);
+    const committed = Number(f['Committed'] ?? 0);
+    const bomQty = Number(f['Standard BOM Qty'] ?? 0);
+    const leadTimeDays = Number(f['Lead Time (Days)'] ?? 0);
+    
+    const available = qty - committed;
+
+    if ((bomQty > 0 || leadTimeDays >= 14) && available <= 2 && qty > 0) {
+      alerts.push(`• *${name}:* ${Math.max(0, available)} Avail (${leadTimeDays ? leadTimeDays + 'd lead time' : 'Reorder needed'})`);
+    }
+  }
+
+  if (alerts.length > 0) {
+    const alertCard = `⚠️ *TITAN OS | REORDER RADAR ALERT*\n` +
+      `──────────────────────────────\n` +
+      `Available buffer has reached critical threshold:\n\n` +
+      alerts.slice(0, 5).join('\n') + `\n\n` +
+      `👉 *Action:* Initiate supplier PO to protect forward installation runway.`;
+    
+    const whatsapp = require('./whatsapp');
+    if (whatsapp && whatsapp.sendWhatsAppMessage) {
+      await whatsapp.sendWhatsAppMessage(config, dispatchTarget, alertCard);
+    }
+  }
+}
+
+/**
+ * Automates the depletion of bulk BOM items when structural gates are cleared.
+ * Highly resilient against new Gate Names formatting (e.g. "2. Steel Frame").
+ */
+async function processMilestoneBOMDeduction(config, siteRecord, clearedGate) {
+  const siteName = siteRecord.fields['Site Name'] || 'Unknown Site';
+  if (siteRecord.fields['Manufacturer'] !== 'BPC') {
+    console.log(`[BOM Engine] Bypassing BOM deduction for ${siteName} (Manufacturer is ${siteRecord.fields['Manufacturer']}, not BPC).`);
+    return;
+  }
+  
+  const items = await refreshInventoryCache(config);
+  let deductedItems = [];
+  
+  // Make gate parsing robust to string variations (e.g., "Gate 2", "2. Steel Frame", or just 2)
+  const gateStr = String(clearedGate).toLowerCase();
+
+  // Gate 2: Steel Frame
+  if (gateStr === '2' || gateStr.includes('gate 2') || gateStr.includes('steel')) {
+    console.log(`⚙️ [BOM Engine] Gate 2 (Steel) cleared at ${siteName}. Deducting Steel & Fasteners.`);
+    
+    for (const item of items) {
+      const f = item.fields;
+      const category = f['Category'] || '';
+      const qtyFieldName = resolveQtyFieldName(f);
+      const qty = Number(f[qtyFieldName] ?? 0);
+      const bomQty = Number(f['Standard BOM Qty'] ?? 0);
+
+      if (['Steel Inventory', 'Fasteners', 'Consumables'].includes(category) && bomQty > 0) {
+        const newQty = Math.max(0, qty - bomQty);
+        await writeAirtableInventory(config, item.id, { [qtyFieldName]: newQty });
+        deductedItems.push(`${f['Item Name']} (-${bomQty})`);
+      }
+    }
+  }
+  
+  // Gate 4: Glass Seating or Gate 6: Turf Layout
+  if (gateStr === '4' || gateStr.includes('gate 4') || gateStr.includes('glass') || 
+      gateStr === '6' || gateStr.includes('gate 6') || gateStr.includes('turf')) {
+    console.log(`⚙️ [BOM Engine] Gate ${clearedGate} cleared at ${siteName}. Shifting specific materials from Committed to Consumed.`);
+    
+    for (const item of items) {
+      const f = item.fields;
+      const category = f['Category'] || '';
+      const qtyFieldName = resolveQtyFieldName(f);
+      const qty = Number(f[qtyFieldName] ?? 0);
+      const committed = Number(f['Committed'] ?? 0);
+      const bomQty = Number(f['Standard BOM Qty'] ?? 0);
+
+      // Only deduct Glass if it's Gate 4, Turf if it's Gate 6
+      const isGlassMatch = (gateStr.includes('4') || gateStr.includes('glass')) && category.includes('Glass');
+      const isTurfMatch = (gateStr.includes('6') || gateStr.includes('turf')) && category.includes('Turf');
+
+      if ((isGlassMatch || isTurfMatch) && bomQty > 0) {
+        const newQty = Math.max(0, qty - bomQty);
+        const newCommitted = Math.max(0, committed - bomQty);
+        
+        await writeAirtableInventory(config, item.id, { 
+          [qtyFieldName]: newQty,
+          'Committed': newCommitted 
+        });
+        deductedItems.push(`${f['Item Name']} (-${bomQty})`);
+      }
+    }
+  }
+
+  if (deductedItems.length > 0) {
+    console.log(`✅ [BOM Engine] Successfully deducted: ${deductedItems.join(', ')}`);
+    await refreshInventoryCache(config, true);
+    await checkLowStockRadar(config, config.meta?.targetVerifiedPhone);
+  }
+}
+
+/**
+ * Triggers when a site registers a deposit. Binds the materials to the 'Committed' pipeline.
+ */
+async function reserveCourtBOM(config, siteName, dispatchTarget = null) {
+  console.log(`📦 [BOM Engine] Deposit received for ${siteName}. Reserving materials in Committed pipeline.`);
+  const items = await refreshInventoryCache(config);
+  
+  for (const item of items) {
+    const f = item.fields;
+    const committed = Number(f['Committed'] ?? 0);
+    const bomQty = Number(f['Standard BOM Qty'] ?? 0);
+
+    if (bomQty > 0) {
+      const newCommitted = committed + bomQty;
+      await writeAirtableInventory(config, item.id, { 'Committed': newCommitted });
+    }
+  }
+
+  await refreshInventoryCache(config, true);
+  await checkLowStockRadar(config, dispatchTarget || config.meta?.targetVerifiedPhone);
+}
+
+// ====================================================================
+// 5. PHYSICAL INVENTORY TALLY COUNTS
+// ====================================================================
+
+/**
+ * Bulk executes physical inventory counts retrieved from multimodal analysis (Clipboards, voice notes).
+ */
+async function executeInventoryCount(config, inventoryCounts, dispatchTarget, workerName = 'HQ Admin', sendWhatsAppMessage) {
+  if (!inventoryCounts || inventoryCounts.length === 0) return;
+  const items = await refreshInventoryCache(config);
+  
+  let updatedList = [];
+  let notFoundList = [];
+
+  for (const count of inventoryCounts) {
+    const query = (count.item_name || '').toLowerCase();
+    const newQty = parseFloat(count.new_quantity);
+    
+    if (isNaN(newQty) || !query) continue;
+
+    const matchedItem = items.find(i => {
+      const itemName = String(i.fields['Item Name'] || i.fields['Name'] || '').toLowerCase();
+      return itemName.includes(query) || query.includes(itemName);
+    });
+    
+    if (matchedItem) {
+      const qtyFieldName = resolveQtyFieldName(matchedItem.fields);
+
+      await writeAirtableInventory(config, matchedItem.id, {
+        [qtyFieldName]: newQty,
+        'Count Status': 'Verified'
+      });
+      updatedList.push(`• *${matchedItem.fields['Item Name'] || matchedItem.fields['Name']}:* ${newQty}`);
+    } else {
+      notFoundList.push(`• "${count.item_name}"`);
+    }
+  }
+
+  await refreshInventoryCache(config, true);
+
+  let card = `📋 *TITAN OS | INVENTORY AUDIT LOGGED*\n──────────────────────────────\n👤 *Auditor:* ${workerName}\n──────────────────────────────\n`;
+  if (updatedList.length > 0) {
+    card += `✅ *Stock Updated:*\n${updatedList.join('\n')}\n\n`;
+  }
+  if (notFoundList.length > 0) {
+    card += `⚠️ *Unknown SKUs:*\n${notFoundList.join('\n')}\n\n`;
+  }
+  card += `_Airtable Inventory Ledger synchronized._`;
+  
+  if (typeof sendWhatsAppMessage === 'function') {
+    await sendWhatsAppMessage(config, dispatchTarget, card.trim());
+  }
+}
+
+module.exports = {
+  refreshInventoryCache,
+  handleSpokenInventorySnapshot,
+  executeInventoryCount,
+  processMilestoneBOMDeduction,
+  reserveCourtBOM,
+  checkLowStockRadar
+};
