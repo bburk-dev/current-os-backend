@@ -222,7 +222,7 @@ async function hydrateQBOCache() {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Authorization': `Basic ${basicAuth}`
           },
-          body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: data.refresh_token })
+          body: newSearchParams({ grant_type: 'refresh_token', refresh_token: data.refresh_token })
         });
 
         if (refreshRes.ok) {
@@ -739,8 +739,11 @@ app.post('/webhook', async (req, res) => {
              }
           }
           
-          await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr)
-            .catch(e => console.error('[Context Binding Error]:', e.message));
+          try {
+             await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, fromPhone, dist, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
+          } catch (e) {
+             console.error('[Context Binding Error]:', e.message);
+          }
         }
         return;
       }
@@ -883,8 +886,11 @@ app.post('/webhook', async (req, res) => {
     if (message.type === 'location') {
       console.log(`[Location Triage] Received pin from ${fromPhone}. Triggering reaction...`);
       
-      whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍')
-        .catch(e => console.error('[Meta API] Reaction Error:', e.message));
+      try {
+         await whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, '📍');
+      } catch(e) {
+         console.error('[Meta API] Reaction Error:', e.message);
+      }
         
       const userLat = message.location?.latitude;
       const userLon = message.location?.longitude;
@@ -897,8 +903,9 @@ app.post('/webhook', async (req, res) => {
           const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
           if (!weatherCheck.safe) {
             weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`;
-            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, weatherStr)
-                .catch(e => console.error('[Meta API] Weather Warning Message Error:', e.message));
+            try {
+               await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, weatherStr);
+            } catch (e) {}
           } else if (weatherCheck.telemetry) {
             weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
           }
@@ -919,7 +926,6 @@ app.post('/webhook', async (req, res) => {
           try {
             const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
             if (coords) {
-              // As per Founder's Log, Enforce strict 800 meter physical presence geofence
               const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
               if (dist <= 800) nearby.push({ site: s, distance: dist });
             }
@@ -932,8 +938,11 @@ app.post('/webhook', async (req, res) => {
 
         if (nearby.length === 1) {
           console.log(`[Location Triage] Single site found (${nearby[0].site.fields['Site Name']}). Binding context.`);
-          await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr)
-             .catch(e => console.error('[Context Binding Error]:', e.message));
+          try {
+             await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, fromPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
+          } catch (e) {
+             console.error('[Context Binding Error]:', e.message);
+          }
         } else if (nearby.length > 1) {
           console.log(`[Location Triage] Multiple sites found. Dispatching selector buttons.`);
           
@@ -948,14 +957,17 @@ app.post('/webhook', async (req, res) => {
             };
           });
           
-          await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 800m. Please select your active zone:`, buttons)
-              .catch(e => {
-                  console.error('[Meta API] Button Message Error (falling back to text):', e.message);
-                  const fallbackText = `📍 Multiple courts detected nearby:\n\n` + 
-                                       buttons.map(b => `👉 ${b.title}`).join('\n') + 
-                                       `\n\nReply with the exact name to bind context.`;
-                  return whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, fallbackText);
-              });
+          try {
+             await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 800m. Please select your active zone:`, buttons);
+          } catch (e) {
+             console.error('[Meta API] Button Message Error (falling back to text):', e.message);
+             const fallbackText = `📍 Multiple courts detected nearby:\n\n` + 
+                                  buttons.map(b => `👉 ${b.title}`).join('\n') + 
+                                  `\n\nReply with the exact name to bind context.`;
+             try {
+                await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, fallbackText);
+             } catch (e) {}
+          }
         } else {
           console.log(`[Site Engine] Unmapped location pin dropped at (${userLat.toFixed(5)}, ${userLon.toFixed(5)}) by ${dispatchTarget}`);
           
@@ -974,8 +986,11 @@ app.post('/webhook', async (req, res) => {
             `👉 *CREATE SITE: [Site Name]*\n` +
             `_(e.g., CREATE SITE: RCOR Court 1)_`;
 
-          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, promptMsg)
-              .catch(e => console.error('[Meta API] Unregistered Location Message Error:', e.message));
+          try {
+             await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, promptMsg);
+          } catch (e) {
+             console.error('[Meta API] Unregistered Location Message Error:', e.message);
+          }
         }
       }
       return;
@@ -1357,272 +1372,6 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
               } catch (e) {
                 console.error('[Dynamic Extraction Failure]', e.message);
               }
-            }
-          }
-        }
-      }
-      return;
-    }
-
-    const payloadText = message.text?.body || message.interactive?.button_reply?.title || '';
-    if (message.type === 'text' || message.type === 'interactive' || payloadText) {
-      const txt = payloadText.trim();
-      const lTxt = txt.toLowerCase();
-
-      console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
-
-      if (draftingSessions.has(fromPhone) && draftingSessions.get(fromPhone).active && !interactiveButtonId) {
-         const draftCtx = draftingSessions.get(fromPhone).context;
-         draftingSessions.delete(fromPhone);
-         await executeDraftingMode(CONFIG, txt, null, null, draftCtx, dispatchTarget);
-         return;
-      }
-
-      if (lTxt === '/help' || lTxt === 'help') {
-        const helpMenu = `🛠️ *TITAN OS | COMMAND CENTER*\n` +
-                         `━━━━━━━━━━━━━━━━━━━━\n` +
-                         `*👷 Field Installation*\n` +
-                         `• Drop a 📍 Pin to check in.\n` +
-                         `• Send photos/receipts to log expenses or progress.\n` +
-                         `• Send voice notes to dynamically update specifications.\n\n` +
-                         `*🚚 Navigation & Telemetry*\n` +
-                         `• \`/map [Site Name]\` for routing\n` +
-                         `• \`/readiness [Site Name]\` for audit matrix\n` +
-                         `• \`/metrics\` for system throughput\n\n` +
-                         `*📦 Resources*\n` +
-                         `• "Check inventory"\n` +
-                         `• "What equipment is at [Site]?"\n\n` +
-                         `*💰 Finance & Exec*\n` +
-                         `• "What is my 30+ AR?"\n` +
-                         `• "Create an estimate for [Client]..."`;
-        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, helpMenu);
-      }
-
-      if (lTxt.startsWith('/map ') || lTxt.includes('directions to') || lTxt.includes('location for')) {
-         let targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
-         const allSites = await getCachedSites();
-         
-         let targetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(targetSiteName.toLowerCase()));
-
-         if (!targetSite) {
-            targetSite = allSites.find(s => {
-                const sName = (s.fields['Site Name'] || '').toLowerCase();
-                const words = sName.split(' ').filter(w => w.length > 3);
-                return words.some(w => targetSiteName.toLowerCase().includes(w));
-            });
-         }
-
-         if (targetSite) {
-           let lat = targetSite.fields['Latitude'] || targetSite.fields['Lat'];
-           let lon = targetSite.fields['Longitude'] || targetSite.fields['Lon'] || targetSite.fields['Lng'];
-           
-           if (!lat && targetSite.fields['Site location']) {
-               const parts = String(targetSite.fields['Site location']).split(',');
-               if (parts.length === 2) {
-                   lat = parts[0].trim();
-                   lon = parts[1].trim();
-               }
-           }
-           
-           if (lat && lon) {
-               const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
-               const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
-
-               const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
-                               `──────────────────────────────\n` +
-                               `🏟️ *Destination:* ${targetSite.fields['Site Name']}\n` +
-                               `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
-                               `──────────────────────────────\n` +
-                               `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
-                               `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
-               
-               return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
-           }
-         }
-         return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName}".`);
-      }
-
-      if (lTxt === '/metrics' || lTxt === '/telemetry') {
-        const userRole = String(callerIdentity.role || '').trim().toLowerCase();
-        if (userRole !== 'admin') return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Restricted to Admin.`);
-        if (metrics && metrics.getTelemetryReport) {
-            return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, metrics.getTelemetryReport());
-        }
-        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Metrics module offline.`);
-      }
-
-      if (lTxt.startsWith('/readiness')) {
-        const siteNameStr = txt.replace(/^\/readiness\s*/i, '').trim();
-        return await evaluateVirtualSiteReadiness(CONFIG, siteNameStr, dispatchTarget);
-      }
-
-      if (lTxt.startsWith('create site') || lTxt.startsWith('new site') || (pendingNewSiteRequests.has(fromPhone) && (lTxt.startsWith('yes') || lTxt.startsWith('site:')))) {
-        let siteName = txt.replace(/^create\s+site:?/i, '').replace(/^new\s+site:?/i, '').replace(/^site:?/i, '').trim();
-        const pendingGeo = pendingNewSiteRequests.get(fromPhone) || whatsapp.lastDroppedCoordinates.get(fromPhone);
-
-        if (!pendingGeo) {
-          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Drop a WhatsApp pin first, then reply with CREATE SITE: [Name]`);
-        }
-
-        const newRecord = await airtableWriteWithAutoDrop('Sites', {
-          'Site Name': siteName,
-          'Workflow Mode': 'INSTALLATION',
-          'Site Status': 'ACTIVE',
-          'Latitude': pendingGeo.lat,
-          'Longitude': pendingGeo.lon
-        });
-
-        if (newRecord?.success) {
-          pendingNewSiteRequests.delete(fromPhone);
-          await getCachedSites(true);
-          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *NEW SITE CREATED*\nDigital twin active for *${siteName}* at \`${pendingGeo.lat.toFixed(5)}, ${pendingGeo.lon.toFixed(5)}\`.`);
-        }
-        return;
-      }
-
-      // Check text-based dynamic read / write
-      const allSites = await getCachedSites();
-      const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
-      const boundSiteId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(fromPhone) : null;
-      const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
-
-      const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, registeredSiteNames, false, [], fromPhone, boundSite);
-      
-      if (triage && triage.intent === 'INVENTORY_QUERY' && inventory && inventory.handleSpokenInventorySnapshot) {
-         await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
-         return;
-      }
-      
-      if (triage && triage.intent === 'INVENTORY_UPDATE' && inventory && inventory.handleSpokenInventoryUpdate) {
-         await inventory.handleSpokenInventoryUpdate(CONFIG, txt, dispatchTarget, (t,m)=>whatsapp.sendWhatsAppMessage(CONFIG,t,m), callerIdentity, airtableWriteWithAutoDrop);
-         return;
-      }
-
-      if (triage && triage.intent === 'NAVIGATION_QUERY') {
-         let targetSiteName = triage?.referenced_site_name;
-         if (!targetSiteName) {
-             targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
-         }
-         
-         let activeTargetSite = null;
-         if (targetSiteName) {
-           activeTargetSite = allSites.find(s => {
-               const sName = (s.fields['Site Name'] || '').toLowerCase();
-               if (sName.includes(targetSiteName.toLowerCase())) return true;
-               
-               const words = sName.split(' ').filter(w => w.length > 3);
-               return words.some(w => targetSiteName.toLowerCase().includes(w));
-           });
-         } else {
-           activeTargetSite = boundSite;
-         }
-
-         if (activeTargetSite) {
-           let lat = activeTargetSite.fields['Latitude'] || activeTargetSite.fields['Lat'];
-           let lon = activeTargetSite.fields['Longitude'] || activeTargetSite.fields['Lon'] || activeTargetSite.fields['Lng'];
-           
-           if (!lat && activeTargetSite.fields['Site location']) {
-               const parts = String(activeTargetSite.fields['Site location']).split(',');
-               if (parts.length === 2) {
-                   lat = parts[0].trim();
-                   lon = parts[1].trim();
-               }
-           }
-           
-           if (lat && lon) {
-               const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&dir_action=navigate`;
-               const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${lat},${lon}&zoom=19&basemap=satellite`;
-               
-               const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
-                               `──────────────────────────────\n` +
-                               `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
-                               `🌐 *Coordinates:* \`${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}\`\n` +
-                               `──────────────────────────────\n` +
-                               `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
-                               `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
-               
-               return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
-           }
-         }
-         return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
-      }
-
-      const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
-      const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site');
-
-      if ((isQuestion || isUpdate) && boundSite) {
-        
-        let activeTargetSite = null;
-        if (triage?.referenced_site_name) {
-          const ref = triage.referenced_site_name.toLowerCase();
-          activeTargetSite = allSites.find(s => {
-              const sName = (s.fields['Site Name'] || '').toLowerCase();
-              return sName.includes(ref) || ref.includes(sName);
-          });
-        }
-        if (!activeTargetSite) {
-           activeTargetSite = allSites.find(s => {
-              const sName = (s.fields['Site Name'] || '').toLowerCase();
-              if (lTxt.includes(sName)) return true;
-              const words = sName.split(' ').filter(w => w.length > 4);
-              return words.some(w => lTxt.includes(w));
-          });
-        }
-        if (!activeTargetSite) activeTargetSite = boundSite;
-        
-        if (isQuestion && !isUpdate) {
-          const queryPrompt = `Answer the question from this record:\nQuery: "${txt}"\nRecord: ${JSON.stringify(activeTargetSite.fields, null, 2)}`;
-          const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: queryPrompt }] }] })
-          });
-          if (geminiRes.ok) {
-            const data = await geminiRes.json();
-            const ans = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (ans) return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${ans.trim()}`);
-          }
-        }
-        if (isUpdate) {
-          const knownColumns = new Set();
-          allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
-          
-          const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns.`;
-          const geminiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
-              generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-            })
-          });
-          if (geminiRes.ok) {
-            const data = await geminiRes.json();
-            const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (rawJson) {
-              const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-              const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
-              
-              const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
-              for (const [key, value] of Object.entries(normalized)) {
-                  payload[key] = value;
-              }
-              
-              const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
-              await getCachedSites(true);
-              
-              if (writeResult && writeResult.success) {
-                const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
-                if (writtenKeys.length > 0) {
-                  const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
-                } else {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
-                }
-              } else {
-                await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
-              }
-              return;
             }
           }
         }
