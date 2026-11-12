@@ -222,7 +222,7 @@ async function hydrateQBOCache() {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Authorization': `Basic ${basicAuth}`
           },
-          body: newSearchParams({ grant_type: 'refresh_token', refresh_token: data.refresh_token })
+          body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: data.refresh_token })
         });
 
         if (refreshRes.ok) {
@@ -276,6 +276,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
       if (res.ok) {
         const data = await res.json();
         if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
+        // Return strictly what survived the write to preserve forensic integrity
         return { success: true, writtenFields: currentPayload.fields, record: data };
       }
 
@@ -719,6 +720,7 @@ app.post('/webhook', async (req, res) => {
           let dist = 0;
           if (userLat && userLon) {
              try {
+                // Ensure coordinates resolve from the comma-separated Site location field if needed
                 const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, selectedSite, airtableWriteWithAutoDrop);
                 if (coords) {
                     dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
@@ -924,6 +926,7 @@ app.post('/webhook', async (req, res) => {
         
         for (const s of currentSites) {
           try {
+            // Ensure coordinates resolve from the comma-separated Site location field
             const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
             if (coords) {
               const dist = whatsapp.haversineDistanceKm(userLat, userLon, coords.lat, coords.lon) * 1000;
