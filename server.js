@@ -29,14 +29,15 @@ try { require('dotenv').config(); } catch (e) {}
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cluster = require('cluster');
+const os = require('os');
 
 // Import Decoupled Titan OS Modules
 const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
-// const equipment = require('./equipment'); // Temporarily disabled until equipment.js is uploaded to server
 const whatsapp = require('./whatsapp');
-const metrics = require('./metrics'); // Telemetry Layer
+let metrics;
+try { metrics = require('./metrics'); } catch(e) {}
 
 // ====================================================================
 // 1. GLOBAL CONFIGURATION & SECRETS
@@ -113,7 +114,6 @@ const memoryCache = {
   }
 };
 
-// Autonomously overcomes Airtable's 100-record limit by following pagination offsets
 async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig = '') {
   let records = [];
   let offset = null;
@@ -123,11 +123,16 @@ async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig
     if (sortConfig) url += `${sortConfig}&`;
     if (offset) url += `offset=${encodeURIComponent(offset)}`;
     
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.records) records = records.concat(data.records);
-    offset = data.offset;
+    try {
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.records) records = records.concat(data.records);
+      offset = data.offset;
+    } catch (err) {
+      console.warn(`[Airtable Fetch] Error fetching page for ${tableName}:`, err.message);
+      offset = null; // Break loop on error
+    }
   } while (offset);
   return records;
 }
@@ -271,7 +276,6 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
       if (res.ok) {
         const data = await res.json();
         if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
-        // Return strictly what survived the write to preserve forensic integrity
         return { success: true, writtenFields: currentPayload.fields, record: data };
       }
 
@@ -925,11 +929,11 @@ app.post('/webhook', async (req, res) => {
              .catch(e => console.error('[Context Binding Error]:', e.message));
         } else if (nearby.length > 1) {
           console.log(`[Location Triage] Multiple sites found. Dispatching selector buttons.`);
-          // WhatsApp API hard limit: Interactive Button titles cannot exceed 20 characters.
+          
+          // CRITICAL: Meta API enforces a strict 20-character limit on button titles.
           const buttons = nearby.slice(0, 3).map((n) => {
             let safeTitle = String(n.site.fields['Site Name'] || 'Site').trim();
             if (safeTitle.length > 20) {
-               // Try to keep the critical identifier, often at the start (e.g. "RCOR Court 1")
                safeTitle = safeTitle.substring(0, 20).trim();
             }
             return {
@@ -939,7 +943,13 @@ app.post('/webhook', async (req, res) => {
           });
           
           await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📍 Multiple courts detected within 2.5km. Please select your active zone:`, buttons)
-              .catch(e => console.error('[Meta API] Button Message Error:', e.message));
+              .catch(e => {
+                  console.error('[Meta API] Button Message Error (falling back to text):', e.message);
+                  const fallbackText = `📍 Multiple courts detected nearby:\n\n` + 
+                                       buttons.map(b => `👉 ${b.title}`).join('\n') + 
+                                       `\n\nReply with the exact name to bind context.`;
+                  return whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, fallbackText);
+              });
         } else {
           console.log(`[Site Engine] Unmapped location pin dropped at (${userLat.toFixed(5)}, ${userLon.toFixed(5)}) by ${dispatchTarget}`);
           
@@ -949,6 +959,7 @@ app.post('/webhook', async (req, res) => {
             timestamp: Date.now()
           });
 
+          // Only prompt for NEW SITE creation if no sites were found
           const promptMsg = `📍 *UNREGISTERED LOCATION DETECTED*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `Coordinates: \`${userLat.toFixed(5)}, ${userLon.toFixed(5)}\`\n` +
@@ -1146,20 +1157,10 @@ app.post('/webhook', async (req, res) => {
             await inventory.handleSpokenInventorySnapshot(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
             return;
           }
-          // Temporarily bypassing equipment queries until equipment.js is uploaded
-          // if (spokenTriage.intent === 'EQUIPMENT_QUERY' && equipment?.handleSpokenEquipmentQuery) {
-          //   await equipment.handleSpokenEquipmentQuery(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
-          //   return;
-          // }
           if (spokenTriage.intent === 'INVENTORY_UPDATE' && inventory?.handleSpokenInventoryUpdate) {
             await inventory.handleSpokenInventoryUpdate(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
             return;
           }
-          // Temporarily bypassing equipment updates until equipment.js is uploaded
-          // if (spokenTriage.intent === 'EQUIPMENT_UPDATE' && equipment?.handleSpokenEquipmentUpdate) {
-          //   await equipment.handleSpokenEquipmentUpdate(CONFIG, spokenTriage.transcript_en || '', dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
-          //   return;
-          // }
           if (spokenTriage.intent === 'READINESS_QUERY') {
              const targetSiteName = spokenTriage.qbo_customer_name || (activeBoundSite ? activeBoundSite.fields['Site Name'] : null);
              if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
