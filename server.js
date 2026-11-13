@@ -117,22 +117,23 @@ const memoryCache = {
 
 // GLOBAL UTILITIES (EXPONENTIAL BACKOFF)
 async function fetchWithExponentialBackoff(url, options, retries = 2) {
+  const safeUrl = String(url).split('?')[0];
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, options);
       if (res.ok) return res;
-      
+
       // Do not retry on client-side 4xx errors (except 429 rate limits)
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-        return res; 
+        return res;
       }
-      
+
       if (attempt === retries) return res;
       throw new Error(`HTTP ${res.status}`);
     } catch (err) {
       if (attempt === retries) throw err;
       const delay = 1000 * Math.pow(2, attempt);
-      console.warn(`[Network Retry] Attempt ${attempt + 1} failed for ${url}. Retrying in ${delay}ms...`);
+      console.warn(`[Network Retry] Attempt ${attempt + 1} failed for ${safeUrl}. Retrying in ${delay}ms...`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -581,7 +582,7 @@ ${rawText ? `Raw Text:\n"${rawText}"` : 'Process attached audio dictation.'}`;
       })
     }, 2);
 
-    if (!res.ok) throw new Error(`Gemini Draft failed: ${res.status}`);
+    if (!res || !res.ok) throw new Error(`Gemini Draft failed: ${res ? res.status : 'Network timeout'}`);
     const data = await res.json();
     const draftedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
@@ -650,16 +651,16 @@ Synthesize into a bulleted FIELD INTELLIGENCE SIGNAL for leadership:
 4. Technical knowledge gaps
 Only report categories with actual evidence. Be concise. No preamble.`;
 
-          const aiRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+          const aiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{ role: 'user', parts: [{ text: radarPrompt }] }],
               generationConfig: { temperature: 0.2 }
             })
-          });
+          }, 2);
 
-          if (aiRes.ok) {
+          if (aiRes && aiRes.ok) {
             const aiData = await aiRes.json();
             const text = aiData.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
             if (text) darkMatterContent = text;
@@ -1127,7 +1128,7 @@ app.post('/webhook', async (req, res) => {
               const firstImg = currentBatch.items[0];
               const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
 
-              const checkRes = await fetch(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+              const checkRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1140,9 +1141,9 @@ app.post('/webhook', async (req, res) => {
                   }],
                   generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
                 })
-              });
+              }, 2);
 
-              if (checkRes.ok) {
+              if (checkRes && checkRes.ok) {
                 const checkData = await checkRes.json();
                 const parsedCheck = JSON.parse(checkData.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
                 if (parsedCheck.is_receipt === true) isReceipt = true;
@@ -1357,7 +1358,7 @@ Answer accurately based strictly on the record. If empty, state that it is not d
                   })
                 }, 2);
 
-                if (geminiRes.ok) {
+                if (geminiRes && geminiRes.ok) {
                   const aiData = await geminiRes.json();
                   const answer = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
                   if (answer) {
@@ -1396,7 +1397,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                   'Last Intent': 'DYNAMIC_SITE_UPDATE'
                 };
 
-                if (geminiRes.ok) {
+                if (geminiRes && geminiRes.ok) {
                   const aiData = await geminiRes.json();
                   const rawJson = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
                   if (rawJson) {
@@ -1670,7 +1671,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: queryPrompt }] }] })
             }, 2);
-            if (geminiRes.ok) {
+            if (geminiRes && geminiRes.ok) {
               const data = await geminiRes.json();
               const ans = data.candidates?.[0]?.content?.parts?.[0]?.text;
               if (ans) return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${ans.trim()}`);
@@ -1689,7 +1690,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                 generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
               })
             }, 2);
-            if (geminiRes.ok) {
+            if (geminiRes && geminiRes.ok) {
               const data = await geminiRes.json();
               const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
               if (rawJson) {
