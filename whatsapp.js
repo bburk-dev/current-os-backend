@@ -1,11 +1,38 @@
 /**
  * TITAN OS V6.0.22 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
- * Purpose: Webhooks, Debouncing, NLP Intent Routing, 12-Gate Forensic Vision,
+ * Purpose: Webhooks, Debouncing, NLP Intent Routing, 9-Gate Forensic Vision,
  *          Supabase Private Vault Storage, BOM Triggers, and Semantic Email Triage
  */
 
 const crypto = require('crypto');
+
+// ====================================================================
+// 0. GLOBAL UTILITIES (EXPONENTIAL BACKOFF)
+// ====================================================================
+
+async function fetchWithExponentialBackoff(url, options = {}, retries = 2) {
+  const safeUrl = String(url).split('?')[0];
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+
+      // Do not retry on client-side 4xx errors (except 429 rate limits)
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        return res;
+      }
+
+      if (attempt === retries) return res;
+      throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      if (attempt === retries) throw err;
+      const delay = 1000 * Math.pow(2, attempt);
+      console.warn(`[Network Retry] Attempt ${attempt + 1} failed for ${safeUrl}. Retrying in ${delay}ms...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
 
 // ====================================================================
 // 1. IN-MEMORY DEBOUNCERS & GEOSPATIAL CACHES
@@ -34,15 +61,15 @@ async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') 
   };
 
   try {
-    const res = await fetch(`${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`, {
+    const res = await fetchWithExponentialBackoff(`${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${config.meta.accessToken}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
-    });
-    return res.ok;
+    }, 2);
+    return Boolean(res && res.ok);
   } catch (err) {
     return false;
   }
@@ -67,32 +94,26 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
 
   const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
 
-  for (let attempt = 1; attempt <= retries + 1; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${config.meta.accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+  try {
+    const res = await fetchWithExponentialBackoff(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.meta.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    }, retries);
 
-      if (!res.ok) {
-        const errData = await res.text();
-        console.error(`WhatsApp dispatch failed to ${cleanDestination} (${res.status}): ${errData}`);
-        return false;
-      }
-      return true;
-    } catch (err) {
-      if (attempt <= retries) {
-        await new Promise(r => setTimeout(r, 1000 * attempt));
-      } else {
-        return false;
-      }
+    if (!res || !res.ok) {
+      const errData = res ? await res.text() : 'Network failure';
+      console.error(`WhatsApp dispatch failed to ${cleanDestination}: ${errData}`);
+      return false;
     }
+    return true;
+  } catch (err) {
+    console.error(`WhatsApp dispatch exception to ${cleanDestination}:`, err.message);
+    return false;
   }
-  return false;
 }
 
 async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
@@ -129,18 +150,18 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
 
   const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithExponentialBackoff(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${config.meta.accessToken}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
-    });
+    }, 2);
 
-    if (!res.ok) {
-      const errTxt = await res.text();
-      console.warn(`[Meta Buttons] Rejected (${res.status}): ${errTxt}. Falling back to text.`);
+    if (!res || !res.ok) {
+      const errTxt = res ? await res.text() : 'Network failure';
+      console.warn(`[Meta Buttons] Rejected: ${errTxt}. Falling back to text.`);
       const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
       return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
     }
@@ -191,8 +212,8 @@ async function geocodeAddressWithGoogle(config, addressString) {
   try {
     const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
     const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${apiKey}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
+    const res = await fetchWithExponentialBackoff(url, {}, 2);
+    if (!res || !res.ok) return null;
     const data = await res.json();
 
     if (data.status === 'OK' && data.results && data.results.length > 0) {
@@ -224,8 +245,8 @@ function haversineDistanceKm(lat1, lon1, lat2, lon2) {
 async function getHyperlocalWeather(lat, lon) {
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m&hourly=precipitation_probability,weather_code&forecast_hours=6`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
+    const res = await fetchWithExponentialBackoff(url, {}, 2);
+    if (!res || !res.ok) return null;
     const data = await res.json();
 
     const maxPrecipProb = Math.max(...(data.hourly?.precipitation_probability || [0]));
@@ -489,13 +510,16 @@ Respond STRICTLY with JSON:
     }
   };
 
-  const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+  const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
-  });
+  }, 2);
 
-  if (!res.ok) throw new Error(`Gemini NLP failed (${res.status}): ${await res.text()}`);
+  if (!res || !res.ok) {
+    const errorText = res ? await res.text() : 'Network timeout';
+    throw new Error(`Gemini NLP failed: ${errorText}`);
+  }
 
   const data = await res.json();
   const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -505,30 +529,27 @@ Respond STRICTLY with JSON:
 }
 
 // ====================================================================
-// 6. BLIND VISUAL FORENSICS, SUPABASE VAULT, & 12-GATE BATCH PIPELINE
+// 6. BLIND VISUAL FORENSICS, SUPABASE VAULT, & 9-GATE BATCH PIPELINE
 // ====================================================================
 
-const INDUSTRIAL_12_GATE_PROMPT = `You are the Lead Forensic Construction Auditor for Bounce Padel.
-Evaluate the attached field photos/videos against the 12-Gate Padel Court Installation Standard:
-Gate 1: Concrete Slab / Foundation / Sub-base Prepped
-Gate 2: Perimeter Steel Frame Erected & Anchored
-Gate 3: Structural Wire Mesh Panels Installed
-Gate 4: 12mm Tempered Glass Panels Seated & Clamped
-Gate 5: LED Lighting Columns & Fixtures Mounted
-Gate 6: Shock Pad / Underlayment Installed
-Gate 7: Artificial Turf Unrolled, Cut & Seamed
-Gate 8: Court Playing Lines Cut & Glued
-Gate 9: Silica Sand Infill Brushed In
-Gate 10: Center Net Posts & Tensioned Net Installed
-Gate 11: Entrance Gates, Hinges & Latches Operational
-Gate 12: Site Cleanliness & Complete Debris/Tool Removal
+const INDUSTRIAL_9_GATE_PROMPT = `You are the Lead Forensic Construction Auditor for Bounce Padel.
+Evaluate the attached field photos/videos against the 9-Gate Padel Court Installation Standard:
+Gate 1: Concrete Slab / Foundation / Sub-base Prepped (Includes bare cement foundations, indoor warehouse floors, or pre-existing tennis/sport courts. CRITICAL: Flag any large concrete cracks or pools of water as blockers).
+Gate 2: Perimeter Steel Frame Erected & Anchored (Super panoramic frames lack corner posts. Credit this gate if bottom steel is complete and top steel is connected. Temporary 4x4 wooden supports holding the top steel are expected and validate this stage prior to glass. Note: Third-party manufactured courts listed in Site Context may feature standard corner posts).
+Gate 3: Structural Wire Mesh Panels & Entrance Gates Installed (Credit when both the lower and top wire mesh panels, including the integrated lower mesh entrance gates, are fully installed and visually straight, forming the distinct recognizable cage of a padel court).
+Gate 4: 12mm Tempered Glass Panels Seated & Clamped (Verify glass panels are fully erected. Check the connection tabs/brackets: ensure all bolts are visually present, none are missing, and they sit flush. Do not evaluate or require tensioning).
+Gate 5: LED Lighting Columns & Fixtures Mounted (CONDITIONAL: Only evaluate if the provided Site Context states Lights = 'Yes'. If 'Yes', verify 4 light posts are erected, each with exactly 2 LED light fixtures attached. Do not require the lights to be turned on. If the Site Context states Lights = 'No', automatically mark Gate 5 as verified/skipped to prevent blocking progress).
+Gate 6: Artificial Turf Unrolled, Cut & Seamed (Turf arrives in 3 pre-lined rolls. Verify turf is laid, cut cleanly around the perimeter, and seams are joined with minimal visual gaps. Credit photos showing seam tape and adhesive applied as valid progress for this gate).
+Gate 7: Silica Sand Infill Brushed In (Verify silica sand is visibly present and evenly brushed across the turf. Flag any unbrushed swirls, heavy clumps, or isolated mounds of sand as blockers, as this indicates improper pouring or spreading without final brushing).
+Gate 8: Center Net Posts & Tensioned Net Installed (Verify the physical presence of two center posts and the net strung tightly between them without excessive sagging. Ensure safety padding is visibly installed around both posts).
+Gate 9: Site Cleanliness & Complete Debris/Tool Removal
 
 CRITICAL RULES:
 1. ADDITIVE INGESTION: Credit every gate clearly supported by visual evidence. Never punish missing angles; list unverified gates as pending adjustments.
-2. GATE 12 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, or construction debris are visible anywhere on or around the playing surface, Gate 12 MUST be marked false/withheld even if Gates 1–11 are complete.
+2. GATE 9 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, or construction debris are visible anywhere on or around the playing surface, Gate 9 MUST be marked false/withheld even if Gates 1–8 are complete.
 3. Return STRICTLY JSON:
 {
-  "highest_gate": number (0 to 12),
+  "highest_gate": number (0 to 9),
   "verified_gates": [number],
   "cleanliness_passed": boolean,
   "blockers_detected": ["string"],
@@ -540,8 +561,8 @@ const MAINTENANCE_TRIAGE_PROMPT = `You are the Lead Maintenance Inspector for Bo
 Inspect the attached court photos/videos for turf wear, sand compaction, glass alignment, net tension, lighting outages, rust, or drainage issues.
 Return STRICTLY JSON:
 {
-  "highest_gate": 12,
-  "verified_gates": [12],
+  "highest_gate": 9,
+  "verified_gates": [9],
   "cleanliness_passed": boolean,
   "blockers_detected": ["string (any maintenance defects found)"],
   "field_observations": "string (concise asset health notes)",
@@ -558,7 +579,7 @@ async function uploadMediaToSupabaseVault(config, item) {
     const filePath = `${yyyy}/${mm}/${crypto.randomUUID()}.${ext}`;
     const bucket = config.supabase.bucket || 'titan-private-media';
 
-    const uploadRes = await fetch(`${config.supabase.url}/storage/v1/object/${bucket}/${filePath}`, {
+    const uploadRes = await fetchWithExponentialBackoff(`${config.supabase.url}/storage/v1/object/${bucket}/${filePath}`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${config.supabase.serviceRoleKey}`,
@@ -566,14 +587,14 @@ async function uploadMediaToSupabaseVault(config, item) {
         'Content-Type': item.mimeType
       },
       body: item.buffer
-    });
+    }, 2);
 
-    if (!uploadRes.ok) {
-      console.warn(`[Supabase Vault] Upload failed (${uploadRes.status})`);
+    if (!uploadRes || !uploadRes.ok) {
+      console.warn(`[Supabase Vault] Upload failed (${uploadRes ? uploadRes.status : 'Network error'})`);
       return null;
     }
 
-    const signRes = await fetch(`${config.supabase.url}/storage/v1/object/sign/${bucket}/${filePath}`, {
+    const signRes = await fetchWithExponentialBackoff(`${config.supabase.url}/storage/v1/object/sign/${bucket}/${filePath}`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${config.supabase.serviceRoleKey}`,
@@ -581,9 +602,9 @@ async function uploadMediaToSupabaseVault(config, item) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ expiresIn: 604800 })
-    });
+    }, 2);
 
-    if (!signRes.ok) return null;
+    if (!signRes || !signRes.ok) return null;
     const signData = await signRes.json();
     return signData?.signedURL ? `${config.supabase.url}/storage/v1${signData.signedURL}` : null;
   } catch (err) {
@@ -595,7 +616,7 @@ async function uploadMediaToSupabaseVault(config, item) {
 async function logToDarkMatterVault(config, siteName, workerName, category, rawText, distilledContext) {
   if (!config?.supabase?.url || !config?.supabase?.serviceRoleKey || !distilledContext) return;
   try {
-    await fetch(`${config.supabase.url}/rest/v1/${config.supabase.tableDarkMatter}`, {
+    await fetchWithExponentialBackoff(`${config.supabase.url}/rest/v1/${config.supabase.tableDarkMatter}`, {
       method: 'POST',
       headers: {
         'apikey': config.supabase.serviceRoleKey,
@@ -610,7 +631,7 @@ async function logToDarkMatterVault(config, siteName, workerName, category, rawT
         raw_text: rawText || '',
         distilled_context: distilledContext
       })
-    });
+    }, 2);
   } catch (err) {
     console.warn('[Dark Matter Vault] Insert warning:', err.message);
   }
@@ -639,13 +660,13 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   };
 
   try {
-    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+    const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    });
+    }, 2);
 
-    if (!res.ok) return { is_padel_court: true, detected_scene: 'Bypassed on API error' };
+    if (!res || !res.ok) return { is_padel_court: true, detected_scene: 'Bypassed on API error' };
 
     const data = await res.json();
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -678,9 +699,17 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   }
 }
 
-async function evaluateCourtMediaBatch(config, items, cumulativeContext, maintenanceTriagePrompt = MAINTENANCE_TRIAGE_PROMPT, industrialSystemPrompt = INDUSTRIAL_12_GATE_PROMPT) {
+async function evaluateCourtMediaBatch(config, items, cumulativeContext, maintenanceTriagePrompt = MAINTENANCE_TRIAGE_PROMPT, industrialSystemPrompt = INDUSTRIAL_9_GATE_PROMPT) {
   const contentParts = [
-    { text: `Context: You are evaluating a Padel court at site: ${cumulativeContext.siteName}. The workflow mode is ${cumulativeContext.workflowMode}. The site is currently at Status: ${cumulativeContext.siteStatus}. The target language for the output receipt card is ${cumulativeContext.workerLanguage}. Captions provided: "${cumulativeContext.captions || 'None'}"` }
+    {
+      text: `Context: You are evaluating a Padel court at site: ${cumulativeContext.siteName}. ` +
+            `Workflow Mode: ${cumulativeContext.workflowMode}. ` +
+            `Site Status: ${cumulativeContext.siteStatus}. ` +
+            `Manufacturer: ${cumulativeContext.manufacturer || 'Bounce Padel'}. ` +
+            `Lights: ${cumulativeContext.hasLights || 'Unknown'}. ` +
+            `Target language for the output receipt card: ${cumulativeContext.workerLanguage}. ` +
+            `Captions provided: "${cumulativeContext.captions || 'None'}"`
+    }
   ];
 
   for (const item of items) {
@@ -704,14 +733,14 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
   };
 
   try {
-    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+    const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    });
+    }, 2);
 
-    if (!res.ok) {
-      console.error('[Gemini Evaluation API Error]:', await res.text());
+    if (!res || !res.ok) {
+      console.error('[Gemini Evaluation API Error]:', res ? await res.text() : 'Network failure');
       return { highest_gate: 0, verified_gates: [], cleanliness_passed: true, blockers_detected: [], summary: 'API evaluation failed.' };
     }
 
@@ -746,6 +775,8 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     const siteName = site.fields['Site Name'] || 'Active Court';
     const workflowMode = site.fields['Workflow Mode'] || 'INSTALLATION';
     const siteStatus = site.fields['Site Status'] || 'ACTIVE';
+    const hasLights = site.fields['Lights'] || 'Unknown';
+    const manufacturer = site.fields['Manufacturer'] || 'Bounce Padel';
 
     // Stage 1: Blind Visual Ground-Truth Verification (Cold Inspection)
     const firstVisual = items.find(i => i.type === 'image' || i.type === 'video');
@@ -757,12 +788,14 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       }
     }
 
-    // Stage 2: Parallel Supabase Vault Archival + 12-Gate Forensic Evaluation
+    // Stage 2: Parallel Supabase Vault Archival + 9-Gate Forensic Evaluation
     const uploadPromises = items.map(item => uploadMediaToSupabaseVault(config, item));
     const evalPromise = evaluateCourtMediaBatch(config, items, {
       siteName,
       workflowMode,
       siteStatus,
+      hasLights,
+      manufacturer,
       workerLanguage: workerLang,
       captions: combinedCaptions
     });
@@ -770,29 +803,37 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
     const validLinks = signedUrls.filter(Boolean);
 
-    // Enforce Gate 12 Non-Monotonic Cleanliness Guardrail
+    // Enforce Gate 9 Non-Monotonic Cleanliness Guardrail
     let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates] : [];
     if (audit.cleanliness_passed === false) {
-      verifiedGates = verifiedGates.filter(g => g !== 12);
+      verifiedGates = verifiedGates.filter(g => g !== 9);
     }
     const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
-    const gateLabel = workflowMode === 'MAINTENANCE' ? 'Maintenance Sweep' : `Gate ${highestGate} (${verifiedGates.length}/12 Verified)`;
+    const isInstallationComplete = workflowMode === 'INSTALLATION' && verifiedGates.includes(9) && audit.cleanliness_passed !== false;
+    const gateLabel = workflowMode === 'MAINTENANCE'
+      ? 'Maintenance Sweep'
+      : (isInstallationComplete ? 'Gate 9 (9/9 Verified — Build Complete)' : `Gate ${highestGate} (${verifiedGates.length}/9 Verified)`);
 
-    // Stage 3: Ledger Mutation (Sites & Reports 2) + Dark Matter Capture
+    // Stage 3: Ledger Mutation (Sites & Reports 2) + Auto-Transition to Maintenance Mode
     const auditNote = `[FORENSIC SWEEP] ${workerName}: ${gateLabel}. ${audit.summary || ''}${validLinks.length > 0 ? `\nVault: ${validLinks[0]}` : ''}`;
 
     const sitePatch = {
       'Last Note': auditNote,
-      'Last Intent': workflowMode === 'MAINTENANCE' ? 'MAINTENANCE_SWEEP' : 'FORENSIC_GATE_AUDIT'
+      'Last Intent': isInstallationComplete
+        ? 'INSTALLATION_COMPLETE_MAINTENANCE_FLIP'
+        : (workflowMode === 'MAINTENANCE' ? 'MAINTENANCE_SWEEP' : 'FORENSIC_GATE_AUDIT')
     };
-    if (workflowMode === 'INSTALLATION' && highestGate > 0) {
+    if (isInstallationComplete) {
+      sitePatch['Current Gate'] = gateLabel;
+      sitePatch['Workflow Mode'] = 'MAINTENANCE';
+    } else if (workflowMode === 'INSTALLATION' && highestGate > 0) {
       sitePatch['Current Gate'] = gateLabel;
     }
 
     await airtableWriteWithAutoDrop('Sites', sitePatch, site.id);
 
     const reportPatch = {
-      'Workflow Mode': workflowMode,
+      'Workflow Mode': isInstallationComplete ? 'MAINTENANCE' : workflowMode,
       'Action Items': (audit.blockers_detected && audit.blockers_detected.length > 0) ? audit.blockers_detected.join('; ') : 'None',
       'Last Note': auditNote,
       'Site': [site.id]
@@ -806,7 +847,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       await logToDarkMatterVault(config, siteName, workerName, workflowMode, combinedCaptions, audit.field_observations);
     }
 
-    // Stage 4: Automated BOM Depletion on Structural Gates
+    // Stage 4: Automated BOM Depletion on Structural Gates (2: Steel, 4: Glass, 6: Turf)
     if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
       try {
         const inventory = require('./inventory');
@@ -827,7 +868,10 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       ? `\n⚠️ *Adjustments / Holds:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
       : '';
     const cleanWarning = (audit.cleanliness_passed === false)
-      ? `\n🧹 *Gate 12 Held:* Debris/tools visible on apron. Clear site to seal Gate 12.\n`
+      ? `\n🧹 *Gate 9 Held:* Debris/tools visible on apron. Clear site to seal Gate 9.\n`
+      : '';
+    const completionNotice = isInstallationComplete
+      ? `\n🔄 *Lifecycle Transition:* Court automatically flipped to *Maintenance Mode*.\n`
       : '';
 
     const punchCard = `🏗️ *TITAN OS | FORENSIC AUDIT RECEIPT*\n` +
@@ -838,14 +882,17 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       `📸 *Evidence:* ${items.length} file(s) sealed in vault\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `${audit.summary || 'Progress logged to digital twin.'}` +
-      `${blockersBlock}${cleanWarning}`;
+      `${blockersBlock}${cleanWarning}${completionNotice}`;
 
     await sendWhatsAppMessage(config, dispatchTarget, punchCard);
 
     // Joy Cannon: Broadcast milestone progress to external subscribers in 'Subscribed Phones'
     const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
     if (subscriberPhones && workflowMode === 'INSTALLATION' && highestGate > 0) {
-      const joyMsg = `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*\n` +
+      const joyHeader = isInstallationComplete
+        ? `🏆 *BOUNCE PADEL | COURT BUILD COMPLETE*`
+        : `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`;
+      const joyMsg = `${joyHeader}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `🏟️ *Project:* ${siteName}\n` +
         `✅ *Status:* ${gateLabel}\n` +
@@ -941,7 +988,7 @@ Return STRICTLY JSON:
   "draft_reply": "If is_critical is true, draft a warm, concise reply from Bob Burk (no subject line, sign off simply as 'Best regards, Bob Burk', mention availability via call/text/WhatsApp at 437-928-7172 if relevant). If false, return empty string."
 }`;
 
-    const res = await fetch(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+    const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -951,10 +998,10 @@ Return STRICTLY JSON:
           responseMimeType: 'application/json'
         }
       })
-    });
+    }, 2);
 
-    if (!res.ok) {
-      console.error('[Email Handler] Gemini triage failed:', await res.text());
+    if (!res || !res.ok) {
+      console.error('[Email Handler] Gemini triage failed:', res ? await res.text() : 'Network timeout');
       return;
     }
 
