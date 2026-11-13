@@ -1275,8 +1275,8 @@ app.post('/webhook', async (req, res) => {
           }
           if (spokenTriage.intent === 'LOGISTICS_DISPATCH') {
             const requestedItem = spokenTriage.structured_payload?.item || spokenTriage.transcript_en || 'Logistics Items';
-            const siteId = activeBoundSite ? activeBoundSite.id : null;
-            const targetSiteName = activeBoundSite ? activeBoundSite.fields['Site Name'] : 'Unknown Field Site';
+            const siteId = activeBoundSite ? activeBoundSite.id : (boundSite ? boundSite.id : null);
+            const targetSiteName = activeBoundSite ? activeBoundSite.fields['Site Name'] : (boundSite ? boundSite.fields['Site Name'] : 'Unknown Field Site');
 
             const assignment = await airtableWriteWithAutoDrop('Daily Assignments', {
                 'Assignment Type': 'Service',
@@ -1364,11 +1364,29 @@ app.post('/webhook', async (req, res) => {
 
             if (targetSiteName) {
               activeTargetSite = allSites.find(s => {
-                const sName = (s.fields['Site Name'] || '').toLowerCase();
-                if (sName.includes(targetSiteName.toLowerCase())) return true;
-                const words = sName.split(' ').filter(w => w.length > 3);
-                return words.some(w => targetSiteName.toLowerCase().includes(w));
+                const sName = (s.fields['Site Name'] || '').toLowerCase().trim();
+                return sName === targetSiteName.toLowerCase().trim();
               });
+
+              if (!activeTargetSite && whatsapp.lastDroppedCoordinates?.has(fromPhone)) {
+                   const userGeo = whatsapp.lastDroppedCoordinates.get(fromPhone);
+                   for (const s of allSites) {
+                       const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
+                       if (coords) {
+                           const dist = whatsapp.haversineDistanceKm(userGeo.lat, userGeo.lon, coords.lat, coords.lon) * 1000;
+                           if (dist <= 800) { activeTargetSite = s; break; }
+                       }
+                   }
+              }
+
+              if (!activeTargetSite) {
+                activeTargetSite = allSites.find(s => {
+                  const sName = (s.fields['Site Name'] || '').toLowerCase();
+                  const searchStr = targetSiteName.toLowerCase().trim();
+                  if (searchStr.length > 5 && sName.includes(searchStr)) return true;
+                  return false;
+                });
+              }
             } else {
               activeTargetSite = activeBoundSite;
             }
@@ -1831,23 +1849,19 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         if ((isQuestion || isUpdate) && (boundSite || triage?.referenced_site_name)) {
           let activeTargetSite = null;
           if (triage?.referenced_site_name) {
-            activeTargetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().trim() === triage.referenced_site_name.toLowerCase().trim());
-            if (!activeTargetSite) {
-              activeTargetSite = allSites.find(s => {
-                const sName = (s.fields['Site Name'] || '').toLowerCase();
-                const searchStr = triage.referenced_site_name.toLowerCase().trim();
-                if (searchStr.length > 4 && sName.includes(searchStr)) return true;
-                return false;
-              });
-            }
+            const ref = triage.referenced_site_name.toLowerCase();
+            activeTargetSite = allSites.find(s => {
+              const sName = (s.fields['Site Name'] || '').toLowerCase();
+              return sName.includes(ref) || ref.includes(sName);
+            });
           }
           if (!activeTargetSite) {
-              activeTargetSite = allSites.find(s => {
-                const sName = (s.fields['Site Name'] || '').toLowerCase();
-                const searchStr = lTxt.trim();
-                if (searchStr.length > 5 && sName.includes(searchStr)) return true;
-                return false;
-              });
+            activeTargetSite = allSites.find(s => {
+              const sName = (s.fields['Site Name'] || '').toLowerCase();
+              if (lTxt.includes(sName)) return true;
+              const words = sName.split(' ').filter(w => w.length > 4);
+              return words.some(w => lTxt.includes(w));
+            });
           }
           if (!activeTargetSite) activeTargetSite = boundSite;
 
@@ -2040,6 +2054,33 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy', version: '6.0.22' });
 });
+
+async function resolveIdentity(fromPhone) {
+  const workers = await getCachedWorkers();
+  const cleanDigits = String(fromPhone).replace(/\D/g, '');
+
+  const worker = workers.find(w => {
+    const rawNumber = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
+    return rawNumber && (rawNumber === cleanDigits || cleanDigits.endsWith(rawNumber) || rawNumber.endsWith(cleanDigits));
+  });
+
+  if (worker) {
+    let roles = worker.fields['Role'];
+    if (!roles) roles = ['Installer'];
+    if (!Array.isArray(roles)) roles = [roles];
+
+    return {
+      type: 'WORKER',
+      id: worker.id,
+      name: worker.fields['Full Name'] || 'Field Tech',
+      roles: roles,
+      workerRecord: worker,
+      phone: fromPhone,
+      language: worker.fields['Language'] || 'English'
+    };
+  }
+  return { type: 'UNKNOWN', name: 'External Caller', roles: ['Unknown'], phone: fromPhone, language: 'English' };
+}
 
 // ====================================================================
 // SINGLE-THREADED ATOMIC BOOT SEQUENCE
