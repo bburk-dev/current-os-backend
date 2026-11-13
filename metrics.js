@@ -16,7 +16,9 @@ const telemetry = {
   sites_updated: 0,
   database_mutations: 0,
   readiness_checks: 0,
-  remote_audits_completed: 0
+  remote_audits_completed: 0,
+  logistics_dispatches: 0,
+  inventory_queries: 0
 };
 
 const MINUTES_SAVED_PER_ACTION = 15; 
@@ -33,7 +35,8 @@ function getTelemetryReport() {
     (telemetry.estimates_generated + 
      telemetry.invoices_generated + 
      telemetry.oracle_queries + 
-     telemetry.sites_updated) * MINUTES_SAVED_PER_ACTION
+     telemetry.sites_updated +
+     telemetry.logistics_dispatches) * MINUTES_SAVED_PER_ACTION
   ) / 60;
 
   const likelyVisitsAvoided = Math.floor(
@@ -49,9 +52,11 @@ function getTelemetryReport() {
          `• Media Sweeps Ingested: ${telemetry.photos_processed}\n` +
          `• Voice Directives Executed: ${telemetry.voice_commands}\n` +
          `──────────────────────────────\n` +
-         `*Commercial & Ledger Output*\n` +
+         `*Commercial & Logistics Output*\n` +
          `• Estimates Generated: ${telemetry.estimates_generated}\n` +
          `• Invoices & Draws Sealed: ${telemetry.invoices_generated}\n` +
+         `• Field Logistics Dispatched: ${telemetry.logistics_dispatches}\n` +
+         `• Stock / Inventory Lookups: ${telemetry.inventory_queries}\n` +
          `• Core Database Mutations: ${telemetry.database_mutations}\n` +
          `──────────────────────────────\n` +
          `*Quantified Operational Leverage*\n` +
