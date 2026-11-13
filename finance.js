@@ -938,7 +938,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   if (hstTaxRef && hstTaxRef.value) {
     invoicePayload.TxnTaxDetail = {
       TxnTaxCodeRef: { value: String(hstTaxRef.value) }
-    };
+    }
   }
 
   if (customerRef.email) {
