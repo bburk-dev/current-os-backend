@@ -30,10 +30,34 @@ async function refreshQboToken(config) {
     const data = await res.json();
     
     if (data.access_token) {
+      // 1. Hydrate the active RAM cache
       config.qbo.accessToken = data.access_token;
       if (data.refresh_token) {
         config.qbo.refreshToken = data.refresh_token;
       }
+      
+      const newExpiresAt = new Date(Date.now() + (data.expires_in * 1000)).toISOString();
+
+      // 2. Headless Vault Persistence (The Fix)
+      // Ensures the new refresh token survives Render container restarts
+      if (config.supabase.url && config.supabase.serviceRoleKey) {
+        await fetch(`${config.supabase.url}/rest/v1/qbo_credentials?id=eq.primary_tenant`, {
+          method: 'PATCH',
+          headers: {
+            'apikey': config.supabase.serviceRoleKey,
+            'Authorization': `Bearer ${config.supabase.serviceRoleKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            access_token: config.qbo.accessToken,
+            refresh_token: config.qbo.refreshToken,
+            expires_at: newExpiresAt,
+            updated_at: new Date().toISOString()
+          })
+        }).catch(err => console.warn('[QBO Auth] Supabase vault persistence warning:', err.message));
+      }
+
       return true;
     }
   } catch (e) { 
