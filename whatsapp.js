@@ -482,12 +482,15 @@ Input: "${typeof rawInput === 'string' ? rawInput : 'Spoken Voice Memo'}"
 
 Respond STRICTLY with JSON:
 {
-  "intent": "CREATE_ESTIMATE|CONVERT_ESTIMATE|CREATE_INVOICE|CHANGE_ORDER|AR_LOOKUP|ORACLE_QUERY|INVENTORY_QUERY|INVENTORY_UPDATE|EQUIPMENT_QUERY|EQUIPMENT_UPDATE|READINESS_QUERY|NAVIGATION_QUERY|DYNAMIC_SITE_UPDATE|UNKNOWN",
+  "intent": "CREATE_ESTIMATE|CONVERT_ESTIMATE|CREATE_INVOICE|CHANGE_ORDER|AR_LOOKUP|ORACLE_QUERY|INVENTORY_QUERY|INVENTORY_UPDATE|EQUIPMENT_QUERY|EQUIPMENT_UPDATE|READINESS_QUERY|NAVIGATION_QUERY|DYNAMIC_SITE_UPDATE|LOGISTICS_DISPATCH|UNKNOWN",
   "referenced_site_name": "string (extract the site name if mentioned)",
   "qbo_customer_name": "string (extract the client name if mentioned for finance)",
   "transcript_en": "string (the english translation of the text or audio)",
-  "structured_payload": {}
-}`;
+  "structured_payload": {"item": "string (for LOGISTICS_DISPATCH only: what is explicitly missing or needed in the field)"}
+}
+
+Rules:
+- If the user states they are missing parts, need a delivery, or require materials brought to the site (e.g., "We need sand", "Missing entrance plates"), classify as LOGISTICS_DISPATCH.`;
 
   const contentParts = [{ text: intentPrompt }];
 
@@ -546,7 +549,7 @@ Gate 9: Site Cleanliness & Complete Debris/Tool Removal
 
 CRITICAL RULES:
 1. ADDITIVE INGESTION: Credit every gate clearly supported by visual evidence. Never punish missing angles; list unverified gates as pending adjustments.
-2. GATE 9 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, or construction debris are visible anywhere on or around the playing surface, Gate 9 MUST be marked false/withheld even if Gates 1–8 are complete.
+​2. GATE 9 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, or construction debris are visible anywhere on or around the playing surface, Gate 9 MUST be marked false/withheld even if Gates 1–8 are complete.
 3. Return STRICTLY JSON:
 {
   "highest_gate": number (0 to 9),
