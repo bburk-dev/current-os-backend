@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.25 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+ * TITAN OS V6.0.26 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
  * Purpose: Webhooks, Debouncing, NLP Intent Routing, 9-Gate Forensic Vision,
  *          Supabase Private Vault Storage, BOM Triggers, and Semantic Email Triage
