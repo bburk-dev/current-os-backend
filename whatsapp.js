@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.26 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+ * TITAN OS V6.0.29 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
  * Purpose: Webhooks, Debouncing, NLP Intent Routing, 9-Gate Forensic Vision,
  *          Supabase Private Vault Storage, BOM Triggers, and Semantic Email Triage
@@ -543,7 +543,7 @@ Gate 1: Concrete Slab / Foundation / Sub-base Prepped (Includes bare cement foun
 Gate 2: Perimeter Steel Frame Erected & Anchored (Super panoramic frames lack corner posts. Credit this gate if bottom steel is complete and top steel is connected. Temporary 4x4 wooden supports holding the top steel are expected and validate this stage prior to glass. Note: Third-party manufactured courts listed in Site Context may feature standard corner posts).
 Gate 3: Structural Wire Mesh Panels & Entrance Gates Installed (Credit when both the lower and top wire mesh panels, including the integrated lower mesh entrance gates, are fully installed and visually straight, forming the distinct recognizable cage of a padel court).
 Gate 4: 12mm Tempered Glass Panels Seated & Clamped (Verify glass panels are fully erected. Check the connection tabs/brackets: ensure all bolts are visually present, none are missing, and they sit flush. Do not evaluate or require tensioning).
-Gate 5: LED Lighting Columns & Fixtures Mounted (CONDITIONAL: Only evaluate if the provided Site Context states Lights = 'Yes'. If 'Yes', verify 4 light posts are erected, each with exactly 2 LED light fixtures attached. Do not require the lights to be turned on. If the Site Context states Lights = 'No', automatically mark Gate 5 as verified/skipped to prevent blocking progress).
+Gate 5: LED Lighting Columns & Fixtures Mounted (CONDITIONAL: Only evaluate if the provided Site Context states Lights = 'Yes'. If 'Yes', verify 4 light posts are erected, each with exactly 2 LED light fixtures attached. Do not require the lights to be turned on. If the Site Context states Lights = 'No' or the site does not feature lights, automatically mark Gate 5 as verified/skipped to prevent blocking progress).
 Gate 6: Artificial Turf Unrolled, Cut & Seamed (Turf arrives in 3 pre-lined rolls. Verify turf is laid, cut cleanly around the perimeter, and seams are joined with minimal visual gaps. Credit photos showing seam tape and adhesive applied as valid progress for this gate).
 Gate 7: Silica Sand Infill Brushed In (Verify silica sand is visibly present and evenly brushed across the turf. Flag any unbrushed swirls, heavy clumps, or isolated mounds of sand as blockers, as this indicates improper pouring or spreading without final brushing).
 Gate 8: Center Net Posts & Tensioned Net Installed (Verify the physical presence of two center posts and the net strung tightly between them without excessive sagging. Ensure safety padding is visibly installed around both posts).
@@ -551,7 +551,7 @@ Gate 9: Site Cleanliness & Complete Debris/Tool Removal
 
 CRITICAL RULES:
 1. ADDITIVE INGESTION: Credit every gate clearly supported by visual evidence. Never punish missing angles; list unverified gates as pending adjustments.
-2. GATE 9 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, buckets, brooms, or construction debris are visible anywhere on or around the playing surface, Gate 9 MUST be marked false/withheld even if Gates 1–8 are complete.
+2. GATE 9 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, buckets, brooms, or construction debris are visible anywhere on or around the playing surface, Gate 9 MUST be marked false/withheld even if Gates 1–8 are complete. Do not flag permanently mounted club accessories (e.g., wastepaper baskets attached to the exterior mesh, or tennis ball tubes strapped to the fence) as construction debris. These are permitted final fixtures.
 3. VISUAL TRUTH OVERRIDES AUDIO: If the provided captions or audio claim the court is clean, finished, or ready, you MUST ignore those claims and rely STRICTLY on the visual pixel evidence. Do not let user dictation override visual reality.
 4. NO HALLUCINATION: There are exactly 9 gates. DO NOT output gates 10, 11, or 12 under any circumstances.
 5. Return STRICTLY JSON:
@@ -566,7 +566,7 @@ CRITICAL RULES:
 
 const MAINTENANCE_TRIAGE_PROMPT = `You are the Lead Maintenance Inspector for Bounce Padel.
 Inspect the attached court photos/videos for turf wear, sand compaction, glass alignment, net tension, lighting outages, rust, debris, or drainage issues.
-CRITICAL RULE: VISUAL TRUTH OVERRIDES AUDIO. If the user claims the court is clean or perfect, ignore it and rely STRICTLY on visual pixel evidence. If tools, buckets, brooms, or trash are visible, cleanliness_passed must be false.
+CRITICAL RULE: VISUAL TRUTH OVERRIDES AUDIO. If the user claims the court is clean or perfect, ignore it and rely STRICTLY on visual pixel evidence. If tools, buckets, brooms, or trash are visible, cleanliness_passed must be false. Do not flag permanently mounted club accessories (e.g., wastepaper baskets attached to the exterior mesh, or tennis ball tubes strapped to the fence) as construction debris.
 Return STRICTLY JSON:
 {
   "highest_gate": 9,
