@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.26 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.27 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Multilingual Hive
  *          Group Identity Resolution, Auto-Hive Registration, QBO Finance Copilot,
@@ -1520,44 +1520,40 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                     generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
                   })
                 }, 2);
-
-                let payloadToPatch = {
-                  'Last Note': `[FIELD UPDATE] ${callerIdentity.name}: "${transcript}"`,
-                  'Last Intent': 'DYNAMIC_SITE_UPDATE'
-                };
-
+                
                 if (geminiRes && geminiRes.ok) {
-                  const aiData = await geminiRes.json();
-                  const rawJson = aiData.candidates?.[0]?.content?.parts?.[0]?.text;
+                  const data = await geminiRes.json();
+                  const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
                   if (rawJson) {
                     const cleanJson = rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
                     const parsed = JSON.parse(cleanJson);
                     const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
 
+                    const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${transcript}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
                     for (const [key, value] of Object.entries(normalized)) {
                       if (!protectedColumns.includes(key)) {
-                        payloadToPatch[key] = value;
+                        payload[key] = value;
                       }
                     }
+
+                    const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
+                    await getCachedSites(true);
+                    if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
+
+                    if (writeResult && writeResult.success) {
+                      const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
+                      if (writtenKeys.length > 0) {
+                        const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
+                        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                      } else {
+                        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                      }
+                    } else {
+                      await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+                    }
+                    return;
                   }
                 }
-
-                const writeResult = await airtableWriteWithAutoDrop('Sites', payloadToPatch, activeTargetSite.id);
-                await getCachedSites(true);
-                if (metrics && metrics.incrementMetric) metrics.incrementMetric('sites_updated');
-
-                if (writeResult && writeResult.success) {
-                  const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
-                  if (writtenKeys.length > 0) {
-                    const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
-                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
-                  } else {
-                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
-                  }
-                } else {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
-                }
-                return;
               } catch (e) {
                 console.error('[Dynamic Extraction Failure]', e.message);
               }
@@ -2149,7 +2145,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.26' });
+  res.status(200).json({ status: 'healthy', version: '6.0.27' });
 });
 
 async function resolveIdentity(speakerPhone) {
@@ -2189,7 +2185,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.26 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.27 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`====================================================================`);
 
   const server = app.listen(PORT, '0.0.0.0', async () => {
