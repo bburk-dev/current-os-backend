@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.23 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.26 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Multilingual Hive
  *          Group Identity Resolution, Auto-Hive Registration, QBO Finance Copilot,
@@ -719,52 +719,49 @@ app.get('/webhook', (req, res) => {
 // Single-Threaded Atomic Deduplication Flow
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
-
-  const body = req.body;
-  if (!body) return;
-
-  const entry = body.entry?.[0];
-  const changes = entry?.changes?.[0]?.value;
-  if (changes?.statuses) return;
-
-  const message = changes?.messages?.[0];
-  if (!message) return;
-
-  const rawFrom = message.from || '';
-  const rawParticipant = message.participant || '';
-  const messageId = message.id || `msg_${Date.now()}`;
-
-  // dispatchTarget = Group ID (in Hives) or User E.164 (in 1-to-1 DMs)
-  // speakerPhone   = Individual sender's E.164 number inside a group, or User E.164 in DMs
-  const dispatchTarget = String(rawFrom).replace(/\D/g, '');
-  const speakerPhone = rawParticipant
-    ? String(rawParticipant).replace(/\D/g, '')
-    : dispatchTarget;
-  const isGroupMessage = Boolean(rawParticipant) || dispatchTarget.length > 13;
-
-  // Prevent recursive self-dispatch loops from Titan OS's own WhatsApp line
-  const displayBotPhone = String(changes?.metadata?.display_phone_number || CONFIG.meta.botPhoneNumber || '').replace(/\D/g, '');
-  if (displayBotPhone && speakerPhone === displayBotPhone) {
-    console.log(`[Meta Ingress] 🛡️ Ignored self-authored message from ${speakerPhone}`);
-    return;
-  }
-
-  if (metrics && metrics.incrementMetric) metrics.incrementMetric('messages_processed');
-
-  const now = Date.now();
-  if (processedMessageIds.has(messageId)) {
-    console.log(`[Meta Ingress] 🛡️ Deduplicated messageId: ${messageId}`);
-    return;
-  }
-  processedMessageIds.set(messageId, now);
-
-  for (const [id, timestamp] of processedMessageIds.entries()) {
-    if (now - timestamp > DEDUP_TTL_MS) processedMessageIds.delete(id);
-  }
-
-  console.log(`[Meta Ingress] Processing message ${messageId} | Thread: ${dispatchTarget} | Speaker: ${speakerPhone} | Group: ${isGroupMessage} | Type: ${message.type || 'text'}`);
-
+  
   try {
+    const body = req.body;
+    if (!body) return;
+
+    const entry = body.entry?.[0];
+    const changes = entry?.changes?.[0]?.value;
+    if (changes?.statuses) return;
+
+    const message = changes?.messages?.[0];
+    if (!message) return;
+
+    const rawFrom = message.from || '';
+    const rawParticipant = message.participant || '';
+    const messageId = message.id || `msg_${Date.now()}`;
+
+    const dispatchTarget = String(rawFrom).replace(/\D/g, '');
+    const speakerPhone = rawParticipant
+      ? String(rawParticipant).replace(/\D/g, '')
+      : dispatchTarget;
+    const isGroupMessage = Boolean(rawParticipant) || dispatchTarget.length > 13;
+
+    const displayBotPhone = String(changes?.metadata?.display_phone_number || CONFIG.meta.botPhoneNumber || '').replace(/\D/g, '');
+    if (displayBotPhone && speakerPhone === displayBotPhone) {
+      console.log(`[Meta Ingress] 🛡️ Ignored self-authored message from ${speakerPhone}`);
+      return;
+    }
+
+    if (metrics && metrics.incrementMetric) metrics.incrementMetric('messages_processed');
+
+    const now = Date.now();
+    if (processedMessageIds.has(messageId)) {
+      console.log(`[Meta Ingress] 🛡️ Deduplicated messageId: ${messageId}`);
+      return;
+    }
+    processedMessageIds.set(messageId, now);
+
+    for (const [id, timestamp] of processedMessageIds.entries()) {
+      if (now - timestamp > DEDUP_TTL_MS) processedMessageIds.delete(id);
+    }
+
+    console.log(`[Meta Ingress] Processing message ${messageId} | Thread: ${dispatchTarget} | Speaker: ${speakerPhone} | Group: ${isGroupMessage} | Type: ${message.type || 'text'}`);
+
     const callerIdentity = await resolveIdentity(speakerPhone);
     const userRoles = callerIdentity.roles.map(r => String(r).toLowerCase());
     console.log(`[Bouncer] Resolved Speaker ${speakerPhone}: ${callerIdentity.type} (${callerIdentity.name}) | Lang: ${callerIdentity.language} | Roles: [${userRoles.join(', ')}]`);
@@ -1435,7 +1432,7 @@ app.post('/webhook', async (req, res) => {
           const transcript = spokenTriage.transcript_en || '';
           const transcriptLower = transcript.toLowerCase();
           const isQuestion = transcriptLower.includes('what') || transcriptLower.includes('who') || transcriptLower.includes('how') || transcriptLower.includes('tell me') || transcript.includes('?');
-          const isUpdate = transcriptLower.includes('update site') || transcriptLower.includes('change site') || transcriptLower.includes('set site') || transcriptLower.includes('update');
+          const isUpdate = transcriptLower.includes('update site') || transcriptLower.includes('change site') || transcriptLower.includes('set site') || transcriptLower.includes('update') || triage?.intent === 'DYNAMIC_SITE_UPDATE';
 
           if (isQuestion || isUpdate) {
             let activeTargetSite = null;
@@ -1494,14 +1491,22 @@ Answer accurately based strictly on the record. If empty, state that it is not d
 
             if (isUpdate) {
               try {
+                const protectedColumns = ['Current Gate', 'Workflow Mode', 'Site Status', 'Deposit Status', 'WhatsApp Group ID', 'Subscribed Phones', 'Last Note', 'Last Intent', 'Worker', 'Assignment ID', 'Latitude', 'Longitude', 'Site location', 'Action Items', 'Media Links'];
                 const knownColumns = new Set();
-                allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
+                allSites.forEach(s => {
+                  if (s.fields) {
+                    Object.keys(s.fields).forEach(k => {
+                      if (!protectedColumns.includes(k)) knownColumns.add(k);
+                    });
+                  }
+                });
 
                 const extractionPrompt = `You are an AI extracting database patches for the 'Sites' table.
 Transcript: "${transcript}"
 Known Airtable Columns: ${JSON.stringify(Array.from(knownColumns))}
 
-Extract any fields the user wants updated. Match extracted keys EXACTLY to the 'Known Airtable Columns' above (e.g. use "Turf Colour" not "Turf Color", use "Supplier" not "Turf Supplier").
+Extract any fields the user wants updated. Match extracted keys EXACTLY to the 'Known Airtable Columns' above.
+DO NOT hallucinate or extract financial status, milestones, or system configuration columns.
 Format Single Select dropdowns in Title Case (e.g. "Green", "Mondo", "Yes").
 Format Checkboxes as strictly boolean true or false.
 Return ONLY valid JSON mapping exact field names to values.
@@ -1530,7 +1535,9 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                     const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
 
                     for (const [key, value] of Object.entries(normalized)) {
-                      payloadToPatch[key] = value;
+                      if (!protectedColumns.includes(key)) {
+                        payloadToPatch[key] = value;
+                      }
                     }
                   }
                 }
@@ -1870,7 +1877,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           let activeTargetSite = null;
           if (targetSiteName) {
             activeTargetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().trim() === targetSiteName.toLowerCase().trim());
-
+            
             if (!activeTargetSite && whatsapp.lastDroppedCoordinates?.has(speakerPhone)) {
               const userGeo = whatsapp.lastDroppedCoordinates.get(speakerPhone);
               for (const s of allSites) {
@@ -1951,10 +1958,17 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             }
           }
           if (isUpdate) {
+            const protectedColumns = ['Current Gate', 'Workflow Mode', 'Site Status', 'Deposit Status', 'WhatsApp Group ID', 'Subscribed Phones', 'Last Note', 'Last Intent', 'Worker', 'Assignment ID', 'Latitude', 'Longitude', 'Site location', 'Action Items', 'Media Links'];
             const knownColumns = new Set();
-            allSites.forEach(s => { if (s.fields) Object.keys(s.fields).forEach(k => knownColumns.add(k)); });
+            allSites.forEach(s => {
+              if (s.fields) {
+                Object.keys(s.fields).forEach(k => {
+                  if (!protectedColumns.includes(k)) knownColumns.add(k);
+                });
+              }
+            });
 
-            const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns.`;
+            const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns. DO NOT hallucinate financial, milestone, or system columns.`;
             const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1963,6 +1977,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                 generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
               })
             }, 2);
+            
             if (geminiRes && geminiRes.ok) {
               const data = await geminiRes.json();
               const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -1972,7 +1987,9 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
 
                 const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
                 for (const [key, value] of Object.entries(normalized)) {
-                  payload[key] = value;
+                  if (!protectedColumns.includes(key)) {
+                    payload[key] = value;
+                  }
                 }
 
                 const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
@@ -1999,7 +2016,17 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
     }
 
   } catch (err) {
-    console.error('[Runtime Exception in /webhook]:', err);
+    console.error('[Runtime Exception in /webhook]:', err.message);
+    try {
+      const body = req.body;
+      const entry = body?.entry?.[0];
+      const message = entry?.changes?.[0]?.value?.messages?.[0];
+      const rawFrom = message?.from || '';
+      const dispatchTarget = String(rawFrom).replace(/\D/g, '');
+      if (dispatchTarget && dispatchTarget.length > 5) {
+        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ System processing error or timeout. Please try your request again.`);
+      }
+    } catch(e) {}
   }
 });
 
@@ -2099,7 +2126,7 @@ app.post('/api/inbound-email', async (req, res) => {
       await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
     }
   } catch (err) {
-    console.error('[Runtime Exception in /api/inbound-email]:', err);
+    console.error('[Runtime Exception in /api/inbound-email]:', err.message);
   }
 });
 
@@ -2117,12 +2144,12 @@ app.post('/api/sync-oracle', async (req, res) => {
       oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
     }
   } catch (error) {
-    console.error('[Titan OS Oracle] Manual Sync execution failed:', error);
+    console.error('[Titan OS Oracle] Manual Sync execution failed:', error.message);
   }
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.23' });
+  res.status(200).json({ status: 'healthy', version: '6.0.26' });
 });
 
 async function resolveIdentity(speakerPhone) {
@@ -2158,11 +2185,11 @@ async function resolveIdentity(speakerPhone) {
 if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   globalThis.__TITAN_SERVER_INITIALIZED__ = true;
 
-  process.on('uncaughtException', (err) => console.error('[CRITICAL] Uncaught Exception:', err));
+  process.on('uncaughtException', (err) => console.error('[CRITICAL] Uncaught Exception:', err.message));
   process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.23 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.26 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`====================================================================`);
 
   const server = app.listen(PORT, '0.0.0.0', async () => {
@@ -2193,7 +2220,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
     if (err.code === 'EADDRINUSE') {
       console.warn(`[Core Engine] Port ${PORT} already bound in this process space. Bypassing secondary bind.`);
     } else {
-      console.error('[Core Engine] Listener Error:', err);
+      console.error('[Core Engine] Listener Error:', err.message);
     }
   });
 
