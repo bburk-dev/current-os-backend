@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.29 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+ * TITAN OS V6.0.30 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
  * Purpose: Webhooks, Debouncing, NLP Intent Routing, 9-Gate Forensic Vision,
  *          Supabase Private Vault Storage, BOM Triggers, and Semantic Email Triage
@@ -172,17 +172,34 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   }
 }
 
-async function fanOutToSubscribers(config, phoneNumbersString, messageBody, buttons = []) {
-  if (!phoneNumbersString) return;
+async function fanOutToSubscribers(config, phoneNumbersData, messageBody, buttons = []) {
+  if (!phoneNumbersData) return;
+  
+  // Handle both string and array formats from Airtable
+  let rawNumbers = [];
+  if (Array.isArray(phoneNumbersData)) {
+      rawNumbers = phoneNumbersData;
+  } else if (typeof phoneNumbersData === 'string') {
+      rawNumbers = phoneNumbersData.split(',');
+  } else {
+      return;
+  }
 
-  const rawNumbers = String(phoneNumbersString).split(',');
   const cleanNumbers = rawNumbers.map(n => {
-    let num = n.replace(/\D/g, '').trim();
+    let num = String(n).replace(/\D/g, '').trim();
+    // Auto-append US/Canada country code if missing
     if (num.length === 10) num = '1' + num;
     return num;
   }).filter(n => n.length >= 10);
 
   const uniqueTargets = [...new Set(cleanNumbers)];
+  
+  if(uniqueTargets.length === 0) {
+      console.log(`[Joy Cannon] No valid E164 subscriber numbers found.`);
+      return;
+  }
+
+  console.log(`[Joy Cannon] Broadcasting to ${uniqueTargets.length} subscribers...`);
 
   for (const target of uniqueTargets) {
     if (buttons.length > 0) {
@@ -491,7 +508,7 @@ Respond STRICTLY with JSON:
 
 Rules:
 - If the user states they are missing parts, need a delivery, or require materials brought to the site (e.g., "We need sand", "Missing entrance plates"), MUST classify as LOGISTICS_DISPATCH.
-- If the user asks a conversational or clarification question about a previous sweep (e.g., "anything else you see?"), classify as UNKNOWN to trigger conversational Q&A.
+- If the user asks a conversational or clarification question about a previous sweep (e.g., "anything else you see?", "this isn't maintenance"), classify as UNKNOWN to trigger conversational Q&A.
 - Only classify as READINESS_QUERY if they explicitly ask if a site is ready to mobilize or build.`;
 
   const contentParts = [{ text: intentPrompt }];
@@ -819,7 +836,8 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
     
     // Core Structural Gates Required for a complete court
-    const coreGates = [1, 2, 3, 4, 6, 7, 8, 9];
+    // Check if the only missing gate is Gate 9
+    const coreGates = [1, 2, 3, 4, 6, 7, 8];
     const hasAllCore = coreGates.every(g => verifiedGates.includes(g));
     const isInstallationComplete = workflowMode === 'INSTALLATION' && hasAllCore && audit.cleanliness_passed !== false;
     
