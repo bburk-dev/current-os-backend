@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.22 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+ * TITAN OS V6.0.25 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
  * Purpose: Webhooks, Debouncing, NLP Intent Routing, 9-Gate Forensic Vision,
  *          Supabase Private Vault Storage, BOM Triggers, and Semantic Email Triage
@@ -490,7 +490,9 @@ Respond STRICTLY with JSON:
 }
 
 Rules:
-- If the user states they are missing parts, need a delivery, or require materials brought to the site (e.g., "We need sand", "Missing entrance plates"), classify as LOGISTICS_DISPATCH.`;
+- If the user states they are missing parts, need a delivery, or require materials brought to the site (e.g., "We need sand", "Missing entrance plates"), MUST classify as LOGISTICS_DISPATCH.
+- If the user asks a conversational or clarification question about a previous sweep (e.g., "anything else you see?"), classify as UNKNOWN to trigger conversational Q&A.
+- Only classify as READINESS_QUERY if they explicitly ask if a site is ready to mobilize or build.`;
 
   const contentParts = [{ text: intentPrompt }];
 
@@ -549,11 +551,13 @@ Gate 9: Site Cleanliness & Complete Debris/Tool Removal
 
 CRITICAL RULES:
 1. ADDITIVE INGESTION: Credit every gate clearly supported by visual evidence. Never punish missing angles; list unverified gates as pending adjustments.
-​2. GATE 9 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, or construction debris are visible anywhere on or around the playing surface, Gate 9 MUST be marked false/withheld even if Gates 1–8 are complete.
-3. Return STRICTLY JSON:
+2. GATE 9 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, buckets, brooms, or construction debris are visible anywhere on or around the playing surface, Gate 9 MUST be marked false/withheld even if Gates 1–8 are complete.
+3. VISUAL TRUTH OVERRIDES AUDIO: If the provided captions or audio claim the court is clean, finished, or ready, you MUST ignore those claims and rely STRICTLY on the visual pixel evidence. Do not let user dictation override visual reality.
+4. NO HALLUCINATION: There are exactly 9 gates. DO NOT output gates 10, 11, or 12 under any circumstances.
+5. Return STRICTLY JSON:
 {
   "highest_gate": number (0 to 9),
-  "verified_gates": [number],
+  "verified_gates": [number] (ONLY integers between 1 and 9),
   "cleanliness_passed": boolean,
   "blockers_detected": ["string"],
   "field_observations": "string (concise material/hardware/friction notes for Dark Matter log)",
@@ -561,13 +565,14 @@ CRITICAL RULES:
 }`;
 
 const MAINTENANCE_TRIAGE_PROMPT = `You are the Lead Maintenance Inspector for Bounce Padel.
-Inspect the attached court photos/videos for turf wear, sand compaction, glass alignment, net tension, lighting outages, rust, or drainage issues.
+Inspect the attached court photos/videos for turf wear, sand compaction, glass alignment, net tension, lighting outages, rust, debris, or drainage issues.
+CRITICAL RULE: VISUAL TRUTH OVERRIDES AUDIO. If the user claims the court is clean or perfect, ignore it and rely STRICTLY on visual pixel evidence. If tools, buckets, brooms, or trash are visible, cleanliness_passed must be false.
 Return STRICTLY JSON:
 {
   "highest_gate": 9,
   "verified_gates": [9],
   "cleanliness_passed": boolean,
-  "blockers_detected": ["string (any maintenance defects found)"],
+  "blockers_detected": ["string (any maintenance defects or left-behind tools found)"],
   "field_observations": "string (concise asset health notes)",
   "summary": "string (concise 2-sentence maintenance report in target language)"
 }`;
@@ -806,13 +811,18 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
     const validLinks = signedUrls.filter(Boolean);
 
-    // Enforce Gate 9 Non-Monotonic Cleanliness Guardrail
-    let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates] : [];
+    // Enforce Gate 9 Non-Monotonic Cleanliness Guardrail and clamp to 1-9
+    let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates].filter(g => g >= 1 && g <= 9) : [];
     if (audit.cleanliness_passed === false) {
       verifiedGates = verifiedGates.filter(g => g !== 9);
     }
     const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
-    const isInstallationComplete = workflowMode === 'INSTALLATION' && verifiedGates.includes(9) && audit.cleanliness_passed !== false;
+    
+    // Core Structural Gates Required for a complete court
+    const coreGates = [1, 2, 3, 4, 6, 7, 8, 9];
+    const hasAllCore = coreGates.every(g => verifiedGates.includes(g));
+    const isInstallationComplete = workflowMode === 'INSTALLATION' && hasAllCore && audit.cleanliness_passed !== false;
+    
     const gateLabel = workflowMode === 'MAINTENANCE'
       ? 'Maintenance Sweep'
       : (isInstallationComplete ? 'Gate 9 (9/9 Verified — Build Complete)' : `Gate ${highestGate} (${verifiedGates.length}/9 Verified)`);
