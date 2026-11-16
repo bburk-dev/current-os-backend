@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.32 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.33 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Multilingual Hive
  *          Group Identity Resolution, QBO Finance Copilot, Role-Based Intent Routing,
@@ -37,6 +37,7 @@ const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
+const gmail = require('./gmail'); // NEW GMAIL MODULE
 let metrics;
 try { metrics = require('./metrics'); } catch (e) {}
 
@@ -83,6 +84,11 @@ const CONFIG = {
   },
   google: {
     apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
+  },
+  gmail: { // NEW GMAIL CONFIG
+    clientId: process.env.GMAIL_CLIENT_ID,
+    clientSecret: process.env.GMAIL_CLIENT_SECRET,
+    refreshToken: process.env.GMAIL_REFRESH_TOKEN
   }
 };
 
@@ -551,6 +557,67 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, card);
 }
 
+// OMNI-QUERY: Ledger Analytics execution
+async function executeLedgerQuery(config, queryText, dispatchTarget) {
+  await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⏳ Querying ledger analytics...`);
+  try {
+    const sites = await getCachedSites();
+    const assignments = await getCachedOpenAssignments();
+    
+    // Strip verbose fields to save context window space
+    const leanSites = sites.map(s => ({
+      name: s.fields['Site Name'],
+      status: s.fields['Site Status'],
+      mode: s.fields['Workflow Mode'],
+      manufacturer: s.fields['Manufacturer'],
+      total_courts: s.fields['Total Courts'],
+      gate: s.fields['Current Gate'],
+      lat: s.fields['Latitude'],
+      lon: s.fields['Longitude']
+    }));
+
+    const leanAssignments = assignments.map(a => ({
+      id: a.fields['Assignment ID'],
+      status: a.fields['Status'],
+      type: a.fields['Assignment Type'],
+      category: a.fields['Task Category'],
+      priority: a.fields['Priority']
+    }));
+
+    const systemPrompt = `You are Titan OS, the data analyst for Bounce Padel. 
+The user asked: "${queryText}"
+
+Calculate the answer based strictly on the JSON data provided below. Do not hallucinate data. 
+Return your answer as a concise, natural, professional response formatted for WhatsApp.
+If the data does not contain the answer, politely state that the information is not tracked in the current ledger.
+
+Data context:
+SITES: ${JSON.stringify(leanSites)}
+ASSIGNMENTS: ${JSON.stringify(leanAssignments)}`;
+
+    const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
+        generationConfig: { temperature: 0.1 }
+      })
+    }, 2);
+
+    if (res && res.ok) {
+      const data = await res.json();
+      const answer = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (answer) {
+        return await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `📊 *TITAN OS | LEDGER QUERY*\n${answer.trim()}`);
+      }
+    }
+    throw new Error('Gemini returned an empty query result.');
+  } catch (err) {
+    console.error('[Ledger Query Error]', err.message);
+    await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⚠️ Failed to execute ledger query: ${err.message}`);
+  }
+}
+
 async function executeDraftingMode(config, rawText, audioBuffer, mimeType, draftContext, dispatchTarget) {
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, "⏳ Structuring professional executive response...");
 
@@ -587,8 +654,21 @@ ${rawText ? `Raw Text:\n"${rawText}"` : 'Process attached audio dictation.'}`;
     const data = await res.json();
     const draftedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
+    // Save the finalized draft into the active session for the outbound dispatch
+    const session = draftingSessions.get(dispatchTarget) || { active: true };
+    session.draftedBody = draftedText.trim();
+    draftingSessions.set(dispatchTarget, session);
+
     const finalMsg = `✅ *Drafted Response:*\n──────────────────────────────\n${draftedText.trim()}\n──────────────────────────────\n_Ready to review or forward._`;
-    await whatsapp.sendWhatsAppMessage(config, dispatchTarget, finalMsg);
+    
+    // Add the Dispatch button if a target email is registered
+    if (session.targetEmail) {
+      const buttons = [{ id: `SEND_DRAFTED_EMAIL`, title: 'Dispatch via Email' }];
+      await whatsapp.sendWhatsAppButtons(config, dispatchTarget, finalMsg, buttons);
+    } else {
+      await whatsapp.sendWhatsAppMessage(config, dispatchTarget, finalMsg);
+    }
+
   } catch (e) {
     await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⚠️ Failed to draft response: ${e.message}`);
   }
@@ -766,8 +846,9 @@ app.post('/webhook', async (req, res) => {
     const userRoles = callerIdentity.roles.map(r => String(r).toLowerCase());
     console.log(`[Bouncer] Resolved Speaker ${speakerPhone}: ${callerIdentity.type} (${callerIdentity.name}) | Lang: ${callerIdentity.language} | Roles: [${userRoles.join(', ')}]`);
 
-    const hasFinanceAccess = userRoles.some(r => ['admin', 'finance', 'executive leadership'].includes(r));
-    const hasInventoryAccess = userRoles.some(r => ['admin', 'fabrication', 'central warehouse and inventory', 'supervisor', 'executive leadership'].includes(r));
+    // UPDATED RBAC Checks to ensure resilience against spelling variations
+    const hasFinanceAccess = userRoles.some(r => r.includes('admin') || r.includes('finance') || r.includes('executive'));
+    const hasInventoryAccess = userRoles.some(r => r.includes('admin') || r.includes('fabrication') || r.includes('warehouse') || r.includes('supervisor') || r.includes('executive'));
 
     const sessionSiteId = whatsapp.getUserBoundSiteId
       ? (whatsapp.getUserBoundSiteId(dispatchTarget) || whatsapp.getUserBoundSiteId(speakerPhone))
@@ -808,10 +889,36 @@ app.post('/webhook', async (req, res) => {
 
     const interactiveButtonId = message.interactive?.button_reply?.id || '';
     if (interactiveButtonId) {
-      if (interactiveButtonId === 'DRAFT_REPLY' || interactiveButtonId === 'REPLY_VIA_EMAIL') {
+      if (interactiveButtonId.startsWith('DRAFT_REPLY_')) {
+        const replyTargetEmail = interactiveButtonId.replace('DRAFT_REPLY_', '');
         const existingSession = draftingSessions.get(speakerPhone) || {};
-        draftingSessions.set(speakerPhone, { active: true, context: existingSession.context || null });
+        
+        draftingSessions.set(speakerPhone, { 
+          active: true, 
+          context: existingSession.context || null,
+          targetEmail: replyTargetEmail 
+        });
+        
         await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🎙️ *Drafting Mode Active*\nSend a voice note or text message to draft your reply. I will remove filler words and format it professionally.`);
+        return;
+      }
+
+      // NEW: Intercept the dispatch button to send via Gmail
+      if (interactiveButtonId === 'SEND_DRAFTED_EMAIL') {
+        const session = draftingSessions.get(speakerPhone);
+        if (session && session.draftedBody && session.targetEmail) {
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, "⏳ Discarding to Outbox...");
+          
+          const success = await gmail.sendOutboundEmail(CONFIG, session.targetEmail, session.subject || "Re: Commercial Inquiry", session.draftedBody);
+          if (success) {
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Email Dispatched Successfully* to ${session.targetEmail}.`);
+            draftingSessions.delete(speakerPhone); // Clear the session
+          } else {
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to send email via Gmail API. Check Render logs.`);
+          }
+        } else {
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Drafting session expired or target email missing.`);
+        }
         return;
       }
 
@@ -1288,6 +1395,11 @@ app.post('/webhook', async (req, res) => {
           const dM = (t, m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m);
           const dB = (t, m, b) => whatsapp.sendWhatsAppButtons(CONFIG, t, m, b);
 
+          if (spokenTriage.intent === 'LEDGER_QUERY') {
+            await executeLedgerQuery(CONFIG, spokenTriage.transcript_en, dispatchTarget);
+            return;
+          }
+
           if (spokenTriage.intent === 'CREATE_ESTIMATE' && finance?.handleEstimateCreation) {
             if (!hasFinanceAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Financial operations require Admin or Finance roles.`);
             await finance.handleEstimateCreation(CONFIG, spokenTriage, dispatchTarget, oracleFileURIs, dM, dB);
@@ -1331,7 +1443,7 @@ app.post('/webhook', async (req, res) => {
               if (!Array.isArray(r)) r = [r];
               const rLower = r.map(role => String(role).toLowerCase());
 
-              if (rLower.includes('delivery') || rLower.includes('admin') || rLower.includes('supervisor')) {
+              if (rLower.includes('delivery') || rLower.includes('admin') || rLower.includes('supervisor') || rLower.includes('logistics and freight')) {
                 const phoneNum = String(w.fields['WhatsApp Number'] || w.fields['Phone'] || '').replace(/\D/g, '');
                 let e164 = phoneNum;
                 if (e164.length === 10) e164 = '1' + e164;
@@ -1587,6 +1699,363 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
       return;
     }
 
+    const payloadText = message.text?.body || message.interactive?.button_reply?.title || '';
+    if (message.type === 'text' || message.type === 'interactive' || payloadText) {
+      const txt = payloadText.trim();
+      const lTxt = txt.toLowerCase();
+
+      console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
+
+      if (draftingSessions.has(speakerPhone) && draftingSessions.get(speakerPhone).active && !interactiveButtonId) {
+        const draftCtx = draftingSessions.get(speakerPhone).context;
+        draftingSessions.delete(speakerPhone);
+        await executeDraftingMode(CONFIG, txt, null, null, draftCtx, dispatchTarget);
+        return;
+      }
+
+      if (lTxt === '/help' || lTxt === 'help') {
+        const helpMenu = `🛠️ *TITAN OS | COMMAND CENTER*\n` +
+                         `━━━━━━━━━━━━━━━━━━━━\n` +
+                         `*👷 Field Installation*\n` +
+                         `• Drop a 📍 Pin to check in.\n` +
+                         `• Send photos/receipts to log expenses or progress.\n` +
+                         `• Send voice notes to dynamically update specifications.\n\n` +
+                         `*🚚 Navigation & Telemetry*\n` +
+                         `• \`/map [Site Name]\` for routing\n` +
+                         `• \`/readiness [Site Name]\` for audit matrix\n` +
+                         `• \`/metrics\` for system throughput\n\n` +
+                         `*📦 Resources*\n` +
+                         `• "Check inventory"\n` +
+                         `• "Where is the auto glass mover?"\n\n` +
+                         `*💰 Finance & Exec*\n` +
+                         `• "What is my 30+ AR?"\n` +
+                         `• "Create an estimate for [Client]..."`;
+        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, helpMenu);
+      }
+
+      if (lTxt.startsWith('/map ') || lTxt.includes('directions to') || lTxt.includes('location for')) {
+        let targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+
+        let targetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(targetSiteName.toLowerCase()));
+
+        if (!targetSite) {
+          targetSite = allSites.find(s => {
+            const sName = (s.fields['Site Name'] || '').toLowerCase();
+            const words = sName.split(' ').filter(w => w.length > 3);
+            return words.some(w => targetSiteName.toLowerCase().includes(w));
+          });
+        }
+
+        if (targetSite) {
+          const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, targetSite, airtableWriteWithAutoDrop);
+          if (coords) {
+            const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
+            const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
+
+            const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                            `──────────────────────────────\n` +
+                            `🏟️ *Destination:* ${targetSite.fields['Site Name']}\n` +
+                            `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\`\n` +
+                            `──────────────────────────────\n` +
+                            `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
+                            `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+
+            return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
+          }
+        }
+        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName}".`);
+      }
+
+      if (lTxt === '/metrics' || lTxt === '/telemetry') {
+        const userRole = String(callerIdentity.role || '').trim().toLowerCase();
+        if (userRole !== 'admin') return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Restricted to Admin.`);
+        if (metrics && metrics.getTelemetryReport) {
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, metrics.getTelemetryReport());
+        }
+        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Metrics module offline.`);
+      }
+
+      if (lTxt.startsWith('/readiness')) {
+        const siteNameStr = txt.replace(/^\/readiness\s*/i, '').trim();
+        return await evaluateVirtualSiteReadiness(CONFIG, siteNameStr, dispatchTarget);
+      }
+
+      if (lTxt.startsWith('create site') || lTxt.startsWith('new site') || (pendingNewSiteRequests.has(speakerPhone) && (lTxt.startsWith('yes') || lTxt.startsWith('site:')))) {
+        let siteName = txt.replace(/^create\s+site:?/i, '').replace(/^new\s+site:?/i, '').replace(/^site:?/i, '').trim();
+        const pendingGeo = pendingNewSiteRequests.get(speakerPhone) || whatsapp.lastDroppedCoordinates.get(speakerPhone);
+
+        if (!pendingGeo) {
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Drop a WhatsApp pin first, then reply with CREATE SITE: [Name]`);
+        }
+
+        const newRecord = await airtableWriteWithAutoDrop('Sites', {
+          'Site Name': siteName,
+          'Workflow Mode': 'INSTALLATION',
+          'Site Status': 'ACTIVE',
+          'Site location': `${pendingGeo.lat.toFixed(6)}, ${pendingGeo.lon.toFixed(6)}`
+        });
+
+        if (newRecord?.success) {
+          pendingNewSiteRequests.delete(speakerPhone);
+          await getCachedSites(true);
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *NEW SITE CREATED*\nDigital twin active for *${siteName}* at \`${pendingGeo.lat.toFixed(5)}, ${pendingGeo.lon.toFixed(5)}\`.`);
+        }
+        return;
+      }
+
+      // Symmetric Text & Voice NLP Triage
+      const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
+      const boundSiteId = whatsapp.getUserBoundSiteId
+        ? (whatsapp.getUserBoundSiteId(dispatchTarget) || whatsapp.getUserBoundSiteId(speakerPhone))
+        : null;
+      const boundSite = boundSiteId ? allSites.find(s => s.id === boundSiteId) : site;
+
+      const triage = await whatsapp.triageSpokenOrTextNLP(CONFIG, txt, registeredSiteNames, false, [], speakerPhone, boundSite);
+      const dM = (t, m) => whatsapp.sendWhatsAppMessage(CONFIG, t, m);
+      const dB = (t, m, b) => whatsapp.sendWhatsAppButtons(CONFIG, t, m, b);
+
+      if (triage) {
+        if (triage.intent === 'LEDGER_QUERY') {
+          await executeLedgerQuery(CONFIG, triage.transcript_en || txt, dispatchTarget);
+          return;
+        }
+        
+        if (triage.intent === 'CREATE_ESTIMATE' && finance?.handleEstimateCreation) {
+          if (!hasFinanceAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Financial operations require Admin or Finance roles.`);
+          await finance.handleEstimateCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dM, dB);
+          return;
+        }
+        if (triage.intent === 'CONVERT_ESTIMATE' && finance?.handleInvoiceApproval) {
+          if (!hasFinanceAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Financial operations require Admin or Finance roles.`);
+          await finance.handleInvoiceApproval(CONFIG, triage, dispatchTarget, dM, dB);
+          return;
+        }
+        if (triage.intent === 'CREATE_INVOICE' && finance?.handleInvoiceCreation) {
+          if (!hasFinanceAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Financial operations require Admin or Finance roles.`);
+          await finance.handleInvoiceCreation(CONFIG, triage, dispatchTarget, oracleFileURIs, dM, dB);
+          return;
+        }
+        if (triage.intent === 'CHANGE_ORDER' && finance?.handleConversationalChangeOrder) {
+          if (!hasFinanceAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Financial operations require Admin or Finance roles.`);
+          await finance.handleConversationalChangeOrder(CONFIG, triage, dispatchTarget, oracleFileURIs, dM, dB, callerIdentity);
+          return;
+        }
+        if (triage.intent === 'LOGISTICS_DISPATCH') {
+            const requestedItem = triage.structured_payload?.item || triage.transcript_en || 'Logistics Items';
+            const siteId = boundSite ? boundSite.id : null;
+            const targetSiteName = boundSite ? boundSite.fields['Site Name'] : 'Unknown Field Site';
+
+            const assignment = await airtableWriteWithAutoDrop('Daily Assignments', {
+              'Assignment Type': 'Service',
+              'Status': 'Open',
+              'Priority': 'High',
+              'Site': siteId ? [siteId] : [],
+              'Notes': `[LOGISTICS REQUEST] ${callerIdentity.name} needs: ${requestedItem}`
+            });
+
+            if (!assignment.success) return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
+
+            const allWorkers = await getCachedWorkers();
+            const dispatchTargets = [];
+            allWorkers.forEach(w => {
+              if (w.fields['Active'] === false) return;
+              let r = w.fields['Role'] || [];
+              if (!Array.isArray(r)) r = [r];
+              const rLower = r.map(role => String(role).toLowerCase());
+
+              if (rLower.includes('delivery') || rLower.includes('admin') || rLower.includes('supervisor') || rLower.includes('logistics and freight')) {
+                const phoneNum = String(w.fields['WhatsApp Number'] || w.fields['Phone'] || '').replace(/\D/g, '');
+                let e164 = phoneNum;
+                if (e164.length === 10) e164 = '1' + e164;
+                if (e164 && e164 !== speakerPhone && e164 !== displayBotPhone) dispatchTargets.push(e164);
+              }
+            });
+
+            const uniqueTargets = [...new Set(dispatchTargets)];
+            const alertCard = `🚨 *TITAN OS | FIELD LOGISTICS REQUEST*\n` +
+                              `━━━━━━━━━━━━━━━━━━━━\n` +
+                              `📍 *Site:* ${targetSiteName}\n` +
+                              `👷 *Requested By:* ${callerIdentity.name}\n` +
+                              `📦 *Needed:* "${requestedItem}"\n` +
+                              `━━━━━━━━━━━━━━━━━━━━\n` +
+                              `Tap below to claim this dispatch.`;
+
+            const buttons = [{ id: `CLAIM_DISPATCH_${assignment.record.id}_${speakerPhone}`, title: "Accept Dispatch" }];
+            for (const target of uniqueTargets) {
+              await whatsapp.sendWhatsAppButtons(CONFIG, target, alertCard, buttons);
+            }
+            return await dM(dispatchTarget, `✅ Logistics request logged as Service Ticket and broadcasted to the fleet.`);
+        }
+        if (triage.intent === 'AR_LOOKUP') {
+          if (!hasFinanceAccess) {
+            return await dM(dispatchTarget, `⚠️ Access Denied. Financial ledger queries are restricted to Admin or Finance roles.`);
+          }
+          if (finance?.handleARLookup) {
+            await finance.handleARLookup(CONFIG, dispatchTarget, dM, callerIdentity);
+            return;
+          }
+        }
+        if (triage.intent === 'ORACLE_QUERY' && oracle?.handleOracleQuery) {
+          await oracle.handleOracleQuery(CONFIG, triage, dispatchTarget, oracleFileURIs, dM);
+          return;
+        }
+        if (triage.intent === 'INVENTORY_QUERY' && inventory?.handleSpokenInventorySnapshot) {
+          if (!hasInventoryAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Inventory queries require Fabrication, Warehouse, or Admin roles.`);
+          await inventory.handleSpokenInventorySnapshot(CONFIG, txt, dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
+          return;
+        }
+        if (triage.intent === 'INVENTORY_UPDATE' && inventory?.handleSpokenInventoryUpdate) {
+          if (!hasInventoryAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Inventory mutations require Fabrication, Warehouse, or Admin roles.`);
+          await inventory.handleSpokenInventoryUpdate(CONFIG, txt, dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
+          return;
+        }
+        if (triage.intent === 'EQUIPMENT_QUERY' && inventory?.handleSpokenEquipmentQuery) {
+          if (!hasInventoryAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Equipment queries require Fabrication, Warehouse, or Admin roles.`);
+          await inventory.handleSpokenEquipmentQuery(CONFIG, txt, dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
+          return;
+        }
+        if (triage.intent === 'EQUIPMENT_UPDATE' && inventory?.handleSpokenEquipmentUpdate) {
+          if (!hasInventoryAccess) return await dM(dispatchTarget, `⚠️ Access Denied. Equipment mutations require Fabrication, Warehouse, or Admin roles.`);
+          await inventory.handleSpokenEquipmentUpdate(CONFIG, txt, dispatchTarget, dM, callerIdentity, airtableWriteWithAutoDrop);
+          return;
+        }
+        if (triage.intent === 'READINESS_QUERY') {
+          const targetSiteName = triage.qbo_customer_name || triage.referenced_site_name || (boundSite ? boundSite.fields['Site Name'] : null);
+          if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
+          return await evaluateVirtualSiteReadiness(CONFIG, targetSiteName, dispatchTarget);
+        }
+        if (triage.intent === 'NAVIGATION_QUERY') {
+          let targetSiteName = triage?.referenced_site_name;
+          if (!targetSiteName) {
+            targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+          }
+
+          let activeTargetSite = null;
+          if (targetSiteName) {
+            activeTargetSite = allSites.find(s => {
+              const sName = (s.fields['Site Name'] || '').toLowerCase();
+              if (sName.includes(targetSiteName.toLowerCase())) return true;
+              const words = sName.split(' ').filter(w => w.length > 3);
+              return words.some(w => targetSiteName.toLowerCase().includes(w));
+            });
+          } else {
+            activeTargetSite = boundSite;
+          }
+
+          if (activeTargetSite) {
+            const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, activeTargetSite, airtableWriteWithAutoDrop);
+            if (coords) {
+              const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
+              const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
+
+              const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
+                              `──────────────────────────────\n` +
+                              `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
+                              `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\`\n` +
+                              `──────────────────────────────\n` +
+                              `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
+                              `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
+
+              return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
+            }
+          }
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
+        }
+      }
+
+      const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
+      const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || triage?.intent === 'DYNAMIC_SITE_UPDATE';
+
+      if ((isQuestion || isUpdate) && (boundSite || triage?.referenced_site_name)) {
+        let activeTargetSite = null;
+        if (triage?.referenced_site_name) {
+          const ref = triage.referenced_site_name.toLowerCase();
+          activeTargetSite = allSites.find(s => {
+            const sName = (s.fields['Site Name'] || '').toLowerCase();
+            return sName.includes(ref) || ref.includes(sName);
+          });
+        }
+        if (!activeTargetSite) {
+          activeTargetSite = allSites.find(s => {
+            const sName = (s.fields['Site Name'] || '').toLowerCase();
+            if (lTxt.includes(sName)) return true;
+            const words = sName.split(' ').filter(w => w.length > 4);
+            return words.some(w => lTxt.includes(w));
+          });
+        }
+        if (!activeTargetSite) activeTargetSite = boundSite;
+
+        if (!activeTargetSite) return;
+
+        if (isQuestion && !isUpdate) {
+          const queryPrompt = `Answer the question from this record:\nQuery: "${txt}"\nRecord: ${JSON.stringify(activeTargetSite.fields, null, 2)}`;
+          const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: queryPrompt }] }] })
+          }, 2);
+          if (geminiRes && geminiRes.ok) {
+            const data = await geminiRes.json();
+            const ans = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (ans) return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${ans.trim()}`);
+          }
+        }
+        if (isUpdate) {
+          const protectedColumns = ['Current Gate', 'Workflow Mode', 'Site Status', 'Deposit Status', 'WhatsApp Group ID', 'Subscribed Phones', 'Last Note', 'Last Intent', 'Worker', 'Assignment ID', 'Latitude', 'Longitude', 'Site location', 'Action Items', 'Media Links'];
+          const knownColumns = new Set();
+          allSites.forEach(s => {
+            if (s.fields) {
+              Object.keys(s.fields).forEach(k => {
+                if (!protectedColumns.includes(k)) knownColumns.add(k);
+              });
+            }
+          });
+
+          const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns.`;
+          const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
+              generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+            })
+          }, 2);
+          if (geminiRes && geminiRes.ok) {
+            const data = await geminiRes.json();
+            const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (rawJson) {
+              const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+              const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
+
+              const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
+              for (const [key, value] of Object.entries(normalized)) {
+                if (!protectedColumns.includes(key)) {
+                  payload[key] = value;
+                }
+              }
+
+              const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
+              await getCachedSites(true);
+
+              if (writeResult && writeResult.success) {
+                const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
+                if (writtenKeys.length > 0) {
+                  const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                } else {
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                }
+              } else {
+                await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+              }
+              return;
+            }
+          }
+        }
+      }
+      return;
+    }
+
   } catch (err) {
     console.error('[Runtime Exception in /webhook]:', err.message);
     try {
@@ -1721,7 +2190,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', version: '6.0.32' });
+  res.status(200).json({ status: 'healthy', version: '6.0.33' });
 });
 
 async function resolveIdentity(speakerPhone) {
@@ -1761,7 +2230,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.32 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.33 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`====================================================================`);
 
   const server = app.listen(PORT, '0.0.0.0', async () => {
