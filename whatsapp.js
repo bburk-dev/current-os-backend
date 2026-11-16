@@ -1,8 +1,9 @@
 /**
- * TITAN OS V6.0.29 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+ * TITAN OS V6.0.33 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
  * Purpose: Webhooks, Debouncing, NLP Intent Routing, 9-Gate Forensic Vision,
- *          Supabase Private Vault Storage, BOM Triggers, and Semantic Email Triage
+ *          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
+ *          and Executive UI Formatting
  */
 
 const crypto = require('crypto');
@@ -175,7 +176,6 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
 async function fanOutToSubscribers(config, phoneNumbersData, messageBody, buttons = []) {
   if (!phoneNumbersData) return;
   
-  // Handle both string and array formats from Airtable
   let rawNumbers = [];
   if (Array.isArray(phoneNumbersData)) {
       rawNumbers = phoneNumbersData;
@@ -187,7 +187,6 @@ async function fanOutToSubscribers(config, phoneNumbersData, messageBody, button
 
   const cleanNumbers = rawNumbers.map(n => {
     let num = String(n).replace(/\D/g, '').trim();
-    // Auto-append US/Canada country code if missing
     if (num.length === 10) num = '1' + num;
     return num;
   }).filter(n => n.length >= 10);
@@ -363,6 +362,7 @@ function parseCoordinatePair(rawVal) {
   }
 
   const cleaned = String(rawVal)
+    .replace(/Location:\s*/i, '')
     .replace(/[\u2212\u2013\u2014]/g, '-')
     .trim();
 
@@ -499,7 +499,7 @@ Input: "${typeof rawInput === 'string' ? rawInput : 'Spoken Voice Memo'}"
 
 Respond STRICTLY with JSON:
 {
-  "intent": "CREATE_ESTIMATE|CONVERT_ESTIMATE|CREATE_INVOICE|CHANGE_ORDER|AR_LOOKUP|ORACLE_QUERY|INVENTORY_QUERY|INVENTORY_UPDATE|EQUIPMENT_QUERY|EQUIPMENT_UPDATE|READINESS_QUERY|NAVIGATION_QUERY|DYNAMIC_SITE_UPDATE|LOGISTICS_DISPATCH|UNKNOWN",
+  "intent": "CREATE_ESTIMATE|CONVERT_ESTIMATE|CREATE_INVOICE|CHANGE_ORDER|AR_LOOKUP|ORACLE_QUERY|INVENTORY_QUERY|INVENTORY_UPDATE|EQUIPMENT_QUERY|EQUIPMENT_UPDATE|READINESS_QUERY|NAVIGATION_QUERY|DYNAMIC_SITE_UPDATE|LOGISTICS_DISPATCH|LEDGER_QUERY|UNKNOWN",
   "referenced_site_name": "string (extract the site name if mentioned)",
   "qbo_customer_name": "string (extract the client name if mentioned for finance)",
   "transcript_en": "string (the english translation of the text or audio)",
@@ -507,6 +507,7 @@ Respond STRICTLY with JSON:
 }
 
 Rules:
+- If the user asks analytical questions about the database (e.g. "How many courts are scheduled?", "What is our capacity?"), classify as LEDGER_QUERY.
 - If the user states they are missing parts, need a delivery, or require materials brought to the site (e.g., "We need sand", "Missing entrance plates"), MUST classify as LOGISTICS_DISPATCH.
 - If the user asks a conversational or clarification question about a previous sweep (e.g., "anything else you see?", "this isn't maintenance"), classify as UNKNOWN to trigger conversational Q&A.
 - Only classify as READINESS_QUERY if they explicitly ask if a site is ready to mobilize or build.`;
@@ -709,11 +710,11 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
         }, (targetedSiteOverride || site).id);
       }
 
-      const fallbackCard = `📸 *TITAN OS | PARTIAL MEDIA ARCHIVED*\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `⚠️ *Camera Detected:* ${visualTruth.detected_scene || 'Macro shot / Non-court structure'}\n` +
-        `✅ *Action:* Media has been securely logged to the site ledger.\n\n` +
-        `_Note: To verify a full physical gate milestone, ensure the primary court structure is visible in the frame._`;
+      const fallbackCard = `📸 *TITAN OS | COMPONENT DETAIL ARCHIVED*\n` +
+        `──────────────────────────────\n` +
+        `🔍 *Captured:* ${visualTruth.detected_scene || 'Macro hardware'}\n` +
+        `✅ *Action:* Logged to the court ledger.\n\n` +
+        `_Tip: Whenever you want to clear a structural milestone, pan back to show the court frame in context._`;
 
       await sendWhatsAppMessage(config, dispatchTarget, fallbackCard);
     }
@@ -722,6 +723,14 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   } catch (err) {
     return { is_padel_court: true, detected_scene: 'Bypassed on parse error' };
   }
+}
+
+// UI HELPER: Generates a 10-block progress bar based on percentage
+function generateProgressBar(percentage) {
+  const totalBlocks = 10;
+  const filledBlocks = Math.round((percentage / 100) * totalBlocks);
+  const emptyBlocks = totalBlocks - filledBlocks;
+  return `[${'█'.repeat(filledBlocks)}${'░'.repeat(emptyBlocks)}] ${Math.round(percentage)}%`;
 }
 
 async function evaluateCourtMediaBatch(config, items, cumulativeContext, maintenanceTriagePrompt = MAINTENANCE_TRIAGE_PROMPT, industrialSystemPrompt = INDUSTRIAL_9_GATE_PROMPT) {
@@ -836,14 +845,16 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
     
     // Core Structural Gates Required for a complete court
-    // Check if the only missing gate is Gate 9
     const coreGates = [1, 2, 3, 4, 6, 7, 8];
     const hasAllCore = coreGates.every(g => verifiedGates.includes(g));
     const isInstallationComplete = workflowMode === 'INSTALLATION' && hasAllCore && audit.cleanliness_passed !== false;
     
+    const progressPercentage = (verifiedGates.length / 9) * 100;
+    const progressBar = generateProgressBar(progressPercentage);
+
     const gateLabel = workflowMode === 'MAINTENANCE'
       ? 'Maintenance Sweep'
-      : (isInstallationComplete ? 'Gate 9 (9/9 Verified — Build Complete)' : `Gate ${highestGate} (${verifiedGates.length}/9 Verified)`);
+      : (isInstallationComplete ? 'Gate 9 (9/9 Verified)' : `Gate ${highestGate} (${verifiedGates.length}/9 Verified)`);
 
     // Stage 3: Ledger Mutation (Sites & Reports 2) + Auto-Transition to Maintenance Mode
     const auditNote = `[FORENSIC SWEEP] ${workerName}: ${gateLabel}. ${audit.summary || ''}${validLinks.length > 0 ? `\nVault: ${validLinks[0]}` : ''}`;
@@ -895,8 +906,10 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     }
 
     // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + Joy Cannon)
+    
+    // FORMAT 1: INTERNAL FIELD PUNCH CARD
     const blockersBlock = (audit.blockers_detected && audit.blockers_detected.length > 0)
-      ? `\n⚠️ *Adjustments / Holds:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
+      ? `\n⚠️ *Pending Adjustments:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
       : '';
     const cleanWarning = (audit.cleanliness_passed === false)
       ? `\n🧹 *Gate 9 Held:* Debris/tools visible on apron. Clear site to seal Gate 9.\n`
@@ -905,28 +918,28 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       ? `\n🔄 *Lifecycle Transition:* Court automatically flipped to *Maintenance Mode*.\n`
       : '';
 
-    const punchCard = `🏗️ *TITAN OS | FORENSIC AUDIT RECEIPT*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
+    const punchCard = `🎾 *TITAN OS | PROGRESS CONFIRMED*\n` +
+      `──────────────────────────────\n` +
       `🏟️ *Court:* ${siteName}\n` +
-      `👷 *Operative:* ${workerName}\n` +
-      `📊 *Milestone:* ${gateLabel}\n` +
-      `📸 *Evidence:* ${items.length} file(s) sealed in vault\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `👤 *Tech:* ${workerName}\n` +
+      `📊 *Build Progress:* ${progressBar}\n` +
+      `──────────────────────────────\n` +
       `${audit.summary || 'Progress logged to digital twin.'}` +
       `${blockersBlock}${cleanWarning}${completionNotice}`;
 
     await sendWhatsAppMessage(config, dispatchTarget, punchCard);
 
-    // Joy Cannon: Broadcast milestone progress to external subscribers in 'Subscribed Phones'
+    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST
     const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
     if (subscriberPhones && workflowMode === 'INSTALLATION' && highestGate > 0) {
       const joyHeader = isInstallationComplete
         ? `🏆 *BOUNCE PADEL | COURT BUILD COMPLETE*`
         : `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`;
+      
       const joyMsg = `${joyHeader}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `🏟️ *Project:* ${siteName}\n` +
-        `✅ *Status:* ${gateLabel}\n` +
+        `📊 *Progress:* ${progressBar}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `${audit.summary || 'Construction progressing on schedule.'}` +
         (validLinks.length > 0 ? `\n\n📸 *Latest Site Capture:*\n${validLinks[0]}` : '');
@@ -1062,16 +1075,17 @@ Return STRICTLY JSON:
     const participants = knownNames.length > 0 ? knownNames.join(' and ') : 'colleagues';
     console.log(`[Email Gatekeeper] ✅ Routing ${triage.category} to ${participants} (${targetPhones.join(', ')})`);
 
-    const formattedDispatch = `📧 *TITAN OS | ${badge}*\n` +
+    const formattedDispatch = `📬 *TITAN OS | INBOUND EMAIL*\n` +
                               `━━━━━━━━━━━━━━━━━━━━\n` +
-                              `*From:* ${emailPayload.from}\n` +
-                              `*Subject:* ${emailPayload.subject}\n` +
-                              `*Signal:* ${triage.reason}\n` +
+                              `👤 *From:* ${emailPayload.from}\n` +
+                              `📌 *Subject:* ${emailPayload.subject}\n` +
+                              `⚡ *Signal:* ${triage.reason}\n` +
                               `━━━━━━━━━━━━━━━━━━━━\n` +
                               `*Suggested Draft:*\n\n` +
                               `${(triage.draft_reply || '').trim()}`;
 
-    const buttons = [{ id: 'DRAFT_REPLY', title: 'Draft Reply' }];
+    // Pass the sender's email inside the button payload for the Gmail dispatcher
+    const buttons = [{ id: `DRAFT_REPLY_${emailPayload.from}`, title: 'Draft Reply' }];
 
     for (const phone of targetPhones) {
       await sendWhatsAppButtons(config, phone, formattedDispatch, buttons);
