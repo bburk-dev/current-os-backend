@@ -26,7 +26,7 @@ const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
-// const gmail = require('./gmail'); // COMMENTED OUT UNTIL GMAIL.JS IS COMMITTED
+// const gmail = require('./gmail'); // STILL COMMENTED OUT UNTIL GMAIL.JS IS COMMITTED
 
 let metrics;
 try { metrics = require('./metrics'); } catch (e) {}
@@ -148,7 +148,6 @@ async function getCachedSites(forceRefresh = false) {
     try {
       memoryCache.sites = await fetchAllAirtableRecords('Sites');
       memoryCache.sitesLastFetched = Date.now();
-      console.log(`[Cache Engine] Hard refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
     } catch (err) {
       memoryCache.sites = memoryCache.sites || [];
     }
@@ -450,7 +449,6 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, card);
 }
 
-// OMNI-QUERY: Ledger Analytics execution
 async function executeLedgerQuery(config, queryText, dispatchTarget) {
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⏳ Querying ledger analytics...`);
   try {
@@ -552,7 +550,6 @@ ${rawText ? `Raw Text:\n"${rawText}"` : 'Process attached audio dictation.'}`;
 
     const finalMsg = `✅ *Drafted Response:*\n──────────────────────────────\n${draftedText.trim()}\n──────────────────────────────\n_Ready to review or forward._`;
     
-    // TEMPORARY FAILSAFE: Provide the button but alert if Gmail module is missing
     if (session.targetEmail) {
       const buttons = [{ id: `SEND_DRAFTED_EMAIL`, title: 'Dispatch via Email' }];
       await whatsapp.sendWhatsAppButtons(config, dispatchTarget, finalMsg, buttons);
@@ -794,7 +791,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // NEW: Intercept the dispatch button to send via Gmail
       if (interactiveButtonId === 'SEND_DRAFTED_EMAIL') {
         const session = draftingSessions.get(speakerPhone);
         if (session && session.draftedBody && session.targetEmail) {
@@ -1366,6 +1362,10 @@ app.post('/webhook', async (req, res) => {
               return await dM(dispatchTarget, `⚠️ Access Denied. Financial ledger queries are restricted to Admin or Finance roles.`);
             }
             if (finance?.handleARLookup) {
+              // VERIFY TOKEN BEFORE FIRING
+              if (!CONFIG.qbo.accessToken) {
+                return await dM(dispatchTarget, `⚠️ QuickBooks API is disconnected. Please re-authenticate your QBO token in the Render dashboard.`);
+              }
               await finance.handleARLookup(CONFIG, dispatchTarget, dM, callerIdentity);
               return;
             }
@@ -1786,6 +1786,10 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             return await dM(dispatchTarget, `⚠️ Access Denied. Financial ledger queries are restricted to Admin or Finance roles.`);
           }
           if (finance?.handleARLookup) {
+            // VERIFY TOKEN BEFORE FIRING
+            if (!CONFIG.qbo.accessToken) {
+              return await dM(dispatchTarget, `⚠️ QuickBooks API is disconnected. Please re-authenticate your QBO token in the Render dashboard.`);
+            }
             await finance.handleARLookup(CONFIG, dispatchTarget, dM, callerIdentity);
             return;
           }
@@ -1851,10 +1855,10 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                               `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
                               `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
 
-              return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
+              return await dM(dispatchTarget, navCard);
             }
           }
-          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
+          return await dM(dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
         }
       }
 
