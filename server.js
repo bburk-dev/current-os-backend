@@ -1,18 +1,8 @@
 /**
  * TITAN OS V6.0.33 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Multilingual Hive
- *          Group Identity Resolution, QBO Finance Copilot, Role-Based Intent Routing,
- *          Atomic Message Deduplication, Conversational Voice Estimates,
- *          Progress Draws, Direct Invoicing, Headless IoT Sensor Telemetry,
- *          Conversational Clarification Engine, Ambient Multi-Turn Memory,
- *          RBAC Bouncer, Zero-UI Site Provisioning, Virtual Readiness,
- *          Executive Drafting Mode, Dynamic Schema Normalization, and Field Intelligence.
  */
 
-// ====================================================================
-// 0. GLOBAL POLYFILLS & ENVIRONMENT
-// ====================================================================
 if (typeof fetch === 'undefined') {
   try {
     const nodeFetch = require('node-fetch');
@@ -21,7 +11,7 @@ if (typeof fetch === 'undefined') {
     global.Request = nodeFetch.Request;
     global.Response = nodeFetch.Response;
   } catch (err) {
-    console.error('[CRITICAL] node-fetch is missing. Native fetch is not available in this Node version. Run "npm install node-fetch" or set NODE_VERSION to 18+ in Render.');
+    console.error('[CRITICAL] node-fetch is missing.');
   }
 }
 
@@ -32,18 +22,15 @@ const { createClient } = require('@supabase/supabase-js');
 const cluster = require('cluster');
 const os = require('os');
 
-// Import Decoupled Titan OS Modules
 const finance = require('./finance');
 const oracle = require('./oracle');
 const inventory = require('./inventory');
 const whatsapp = require('./whatsapp');
-const gmail = require('./gmail'); // NEW GMAIL MODULE
+// const gmail = require('./gmail'); // COMMENTED OUT UNTIL GMAIL.JS IS COMMITTED
+
 let metrics;
 try { metrics = require('./metrics'); } catch (e) {}
 
-// ====================================================================
-// 1. GLOBAL CONFIGURATION & SECRETS
-// ====================================================================
 const PORT = process.env.PORT || 3000;
 
 const CONFIG = {
@@ -85,23 +72,17 @@ const CONFIG = {
   google: {
     apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
   },
-  gmail: { // NEW GMAIL CONFIG
+  gmail: { 
     clientId: process.env.GMAIL_CLIENT_ID,
     clientSecret: process.env.GMAIL_CLIENT_SECRET,
     refreshToken: process.env.GMAIL_REFRESH_TOKEN
   }
 };
 
-// ====================================================================
-// 2. STATE MACHINES & CACHE-ASIDE ENGINE
-// ====================================================================
-
 let oracleFileURIs = [];
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
-
-// In-Memory Message Deduplication Store
 const processedMessageIds = new Map();
 const DEDUP_TTL_MS = 300 * 1000;
 const draftingSessions = new Map();
@@ -116,26 +97,16 @@ const memoryCache = {
   assignments: null,
   assignmentsLastFetched: 0,
   coordinates: new Map(),
-  qbo: {
-    accessToken: null,
-    refreshToken: null,
-    expiresAt: null
-  }
+  qbo: { accessToken: null, refreshToken: null, expiresAt: null }
 };
 
-// GLOBAL UTILITIES (EXPONENTIAL BACKOFF)
 async function fetchWithExponentialBackoff(url, options, retries = 2) {
   const safeUrl = String(url).split('?')[0];
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, options);
       if (res.ok) return res;
-
-      // Do not retry on client-side 4xx errors (except 429 rate limits)
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-        return res;
-      }
-
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) return res;
       if (attempt === retries) return res;
       throw new Error(`HTTP ${res.status}`);
     } catch (err) {
@@ -173,36 +144,28 @@ async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig
 async function getCachedSites(forceRefresh = false) {
   const now = Date.now();
   const isExpired = now - memoryCache.sitesLastFetched > CACHE_TTL_MS;
-
   if (forceRefresh || (!memoryCache.sites && isExpired)) {
     try {
       memoryCache.sites = await fetchAllAirtableRecords('Sites');
       memoryCache.sitesLastFetched = Date.now();
       console.log(`[Cache Engine] Hard refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
     } catch (err) {
-      console.warn('[Cache Engine] Hard Sites refresh failed:', err.message);
       memoryCache.sites = memoryCache.sites || [];
     }
     return memoryCache.sites;
   }
-
   if (isExpired && memoryCache.sites) {
     fetchAllAirtableRecords('Sites').then(freshData => {
       memoryCache.sites = freshData;
       memoryCache.sitesLastFetched = Date.now();
-      console.log(`[Cache Engine] Background rehydrated ${freshData.length} Sites into RAM`);
-    }).catch(err => {
-      console.warn('[Cache Engine] Background Sites rehydration failed:', err.message);
-    });
+    }).catch(() => {});
   }
-
   return memoryCache.sites;
 }
 
 async function getCachedWorkers(forceRefresh = false) {
   const now = Date.now();
   const isExpired = now - memoryCache.workersLastFetched > CACHE_TTL_MS;
-
   if (forceRefresh || (!memoryCache.workers && isExpired)) {
     try {
       memoryCache.workers = await fetchAllAirtableRecords('Workers');
@@ -212,7 +175,6 @@ async function getCachedWorkers(forceRefresh = false) {
     }
     return memoryCache.workers;
   }
-
   if (isExpired && memoryCache.workers) {
     fetchAllAirtableRecords('Workers').then(freshData => {
       memoryCache.workers = freshData;
@@ -227,40 +189,27 @@ async function getCachedContacts(forceRefresh = false) {
   if (!forceRefresh && memoryCache.contacts && (now - memoryCache.contactsLastFetched < CACHE_TTL_MS)) {
     return memoryCache.contacts;
   }
-
   try {
     let targetTable = 'Contacts';
     try {
       const schemaUrl = `${CONFIG.airtable.endpoint}/meta/bases/${CONFIG.airtable.baseId}/tables`;
-      const schemaRes = await fetch(schemaUrl, {
-        headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
-      });
-
+      const schemaRes = await fetch(schemaUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
       if (schemaRes.ok) {
         const schemaData = await schemaRes.json();
         const tables = schemaData.tables || [];
-        const matchedTable =
-          tables.find(t => t.name.trim().toLowerCase() === 'contacts') ||
-          tables.find(t => /contact|client|lead|partner/i.test(t.name));
-
+        const matchedTable = tables.find(t => t.name.trim().toLowerCase() === 'contacts') || tables.find(t => /contact|client|lead|partner/i.test(t.name));
         if (!matchedTable) {
-          console.log('[Cache Engine] No Contacts/Partner table present in this base. Skipping hydration.');
           memoryCache.contacts = [];
           memoryCache.contactsLastFetched = now;
           return memoryCache.contacts;
         }
         targetTable = matchedTable.name;
       }
-    } catch (schemaErr) {
-      console.warn('[Cache Engine] Schema lookup bypassed:', schemaErr.message);
-    }
-
+    } catch (e) {}
     memoryCache.contacts = await fetchAllAirtableRecords(targetTable);
     memoryCache.contactsLastFetched = now;
-    console.log(`[Cache Engine] Refreshed ${memoryCache.contacts.length} records from "${targetTable}" into RAM`);
     return memoryCache.contacts;
   } catch (err) {
-    console.warn('[Cache Engine] Contacts hydration skipped:', err.message);
     memoryCache.contacts = memoryCache.contacts || [];
     memoryCache.contactsLastFetched = now;
     return memoryCache.contacts;
@@ -282,7 +231,6 @@ async function getCachedOpenAssignments(forceRefresh = false) {
     }
     return memoryCache.assignments;
   }
-
   if (isExpired && memoryCache.assignments) {
     fetchAllAirtableRecords('Daily Assignments', formula, sort).then(freshData => {
       memoryCache.assignments = freshData;
@@ -296,41 +244,27 @@ async function hydrateQBOCache() {
   if (!CONFIG.supabase.url || !CONFIG.supabase.serviceRoleKey) return;
   try {
     const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.serviceRoleKey);
-    const { data, error } = await supabase
-      .from('qbo_credentials')
-      .select('access_token, refresh_token, expires_at')
-      .eq('id', 'primary_tenant')
-      .single();
-
+    const { data, error } = await supabase.from('qbo_credentials').select('access_token, refresh_token, expires_at').eq('id', 'primary_tenant').single();
     if (error) throw error;
     if (data && data.access_token && !data.access_token.includes('pending_auth')) {
       const expiresAt = new Date(data.expires_at).getTime();
       const now = Date.now();
-
       if (now >= expiresAt - 300000 && data.refresh_token && CONFIG.qbo.clientId && CONFIG.qbo.clientSecret) {
-        console.log('[Cache Engine] QBO Token refreshing...');
         const basicAuth = Buffer.from(`${CONFIG.qbo.clientId}:${CONFIG.qbo.clientSecret}`).toString('base64');
         const refreshRes = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
           method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Authorization': `Basic ${basicAuth}`
-          },
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${basicAuth}` },
           body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: data.refresh_token })
         });
-
         if (refreshRes.ok) {
           const refreshed = await refreshRes.json();
           const newExpiresAt = new Date(Date.now() + (refreshed.expires_in * 1000)).toISOString();
-
           await supabase.from('qbo_credentials').update({
             access_token: refreshed.access_token,
             refresh_token: refreshed.refresh_token || data.refresh_token,
             expires_at: newExpiresAt,
             updated_at: new Date().toISOString()
           }).eq('id', 'primary_tenant');
-
           data.access_token = refreshed.access_token;
           data.refresh_token = refreshed.refresh_token || data.refresh_token;
         }
@@ -351,35 +285,26 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
   const url = recordId
     ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}/${recordId}`
     : `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}`;
-
   const method = recordId ? 'PATCH' : 'POST';
   let currentPayload = { fields: { ...payload } };
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       if (Object.keys(currentPayload.fields).length === 0) return { success: false, writtenFields: {}, record: null };
-
       const res = await fetch(url, {
         method,
-        headers: {
-          'Authorization': `Bearer ${CONFIG.airtable.apiKey}`,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(currentPayload)
       });
-
       if (res.ok) {
         const data = await res.json();
         if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
         return { success: true, writtenFields: currentPayload.fields, record: data };
       }
-
       const errorData = await res.json().catch(() => ({}));
       const errorMsg = errorData?.error?.message || '';
-
       if (res.status === 422) {
-        const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) ||
-                      errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
+        const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) || errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
         if (match && match[1]) {
           const badField = match[1];
           console.warn(`[Airtable Auto-Healer] Dropping invalid schema field: "${badField}" from ${tableName}`);
@@ -388,29 +313,18 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
         }
       }
       throw new Error(`HTTP ${res.status}: ${errorMsg}`);
-
     } catch (err) {
-      if (attempt === retries) {
-        console.error(`[Airtable Write Error] Table: ${tableName} |`, err.message);
-        return { success: false, writtenFields: {}, record: null };
-      }
+      if (attempt === retries) return { success: false, writtenFields: {}, record: null };
     }
   }
   return { success: false, writtenFields: {}, record: null };
 }
 
-// ====================================================================
-// 3. EXECUTIVE OPERATIONS, METEOROLOGY, & DRAFTING MODE
-// ====================================================================
-
 async function fetchDadJoke() {
   try {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch('https://icanhazdadjoke.com/', {
-      headers: { 'Accept': 'application/json' },
-      signal: controller.signal
-    });
+    const res = await fetch('https://icanhazdadjoke.com/', { headers: { 'Accept': 'application/json' }, signal: controller.signal });
     clearTimeout(id);
     if (res.ok) {
       const data = await res.json();
@@ -423,31 +337,19 @@ async function fetchDadJoke() {
 async function evaluateWeatherTripwires(lat, lon) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 4000);
-
   try {
     const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,weather_code,wind_gusts_10m&wind_speed_unit=mph`;
     const response = await fetch(meteoUrl, { signal: controller.signal });
     clearTimeout(timeoutId);
-
     if (!response.ok) throw new Error('Open-Meteo Offline');
     const data = await response.json();
     const current = data.current;
     const issues = [];
-
-    if (current.wind_gusts_10m > 25) {
-      issues.push(`🔴 HIGH WIND HOLD: Gusts at ${current.wind_gusts_10m} mph. Suction cup glass installation suspended.`);
-    }
-    if (current.temperature_2m < 10) {
-      issues.push(`🔴 LOW TEMP HOLD: Ambient temperature is ${current.temperature_2m}°C. Polyurethane turf glue curing suspended.`);
-    }
+    if (current.wind_gusts_10m > 25) issues.push(`🔴 HIGH WIND HOLD: Gusts at ${current.wind_gusts_10m} mph. Suction cup glass installation suspended.`);
+    if (current.temperature_2m < 10) issues.push(`🔴 LOW TEMP HOLD: Ambient temperature is ${current.temperature_2m}°C. Polyurethane turf glue curing suspended.`);
     const dewPointDelta = current.temperature_2m - current.dew_point_2m;
-    if (dewPointDelta < 3.0 && current.relative_humidity_2m > 85) {
-      issues.push(`🔴 CONDENSATION HOLD: Dew point delta is ${dewPointDelta.toFixed(1)}°C (Humidity: ${current.relative_humidity_2m}%). Substrate moisture will ruin turf adhesive bond.`);
-    }
-    if (current.precipitation > 0 || (current.weather_code >= 51 && current.weather_code <= 99)) {
-      issues.push(`🌧️ RAIN HOLD: Active precipitation detected. Silica sand infill and adhesive operations suspended.`);
-    }
-
+    if (dewPointDelta < 3.0 && current.relative_humidity_2m > 85) issues.push(`🔴 CONDENSATION HOLD: Dew point delta is ${dewPointDelta.toFixed(1)}°C (Humidity: ${current.relative_humidity_2m}%). Substrate moisture will ruin turf adhesive bond.`);
+    if (current.precipitation > 0 || (current.weather_code >= 51 && current.weather_code <= 99)) issues.push(`🌧️ RAIN HOLD: Active precipitation detected. Silica sand infill and adhesive operations suspended.`);
     return { safe: issues.length === 0, telemetry: current, warnings: issues };
   } catch (error) {
     clearTimeout(timeoutId);
@@ -460,14 +362,9 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   if (metrics && metrics.incrementMetric) metrics.incrementMetric('readiness_checks');
 
   const allSites = await getCachedSites();
-  const site = allSites.find(s =>
-    s.fields['Site Name'] &&
-    s.fields['Site Name'].toLowerCase().includes(siteNameStr.toLowerCase())
-  );
+  const site = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(siteNameStr.toLowerCase()));
 
-  if (!site) {
-    return await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⚠️ Could not locate site matching "${siteNameStr}".`);
-  }
+  if (!site) return await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⚠️ Could not locate site matching "${siteNameStr}".`);
 
   const siteId = site.id;
   const siteName = site.fields['Site Name'];
@@ -513,16 +410,13 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
         financeStatus = `✅ Deposit/Account Cleared`;
       }
     }
-  } catch (e) {
-    confidenceScore -= 10;
-  }
+  } catch (e) { confidenceScore -= 10; }
 
   let inventoryStatus = `✅ Core Materials Ready`;
   if (inventory && inventory.refreshInventoryCache) {
     const stock = await inventory.refreshInventoryCache(config);
     const criticalItems = ['Glass', 'Steel', 'Turf', 'Neoprene', 'Entrance'];
     const missing = [];
-
     for (const crit of criticalItems) {
       const match = stock.find(i => (i.fields['Item Name'] || '').toLowerCase().includes(crit.toLowerCase()));
       if (match) {
@@ -532,7 +426,6 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
         missing.push(crit);
       }
     }
-
     if (missing.length > 0) {
       inventoryStatus = `❌ Missing: ${missing.join(', ')}`;
       confidenceScore -= 30;
@@ -564,7 +457,6 @@ async function executeLedgerQuery(config, queryText, dispatchTarget) {
     const sites = await getCachedSites();
     const assignments = await getCachedOpenAssignments();
     
-    // Strip verbose fields to save context window space
     const leanSites = sites.map(s => ({
       name: s.fields['Site Name'],
       status: s.fields['Site Status'],
@@ -654,14 +546,13 @@ ${rawText ? `Raw Text:\n"${rawText}"` : 'Process attached audio dictation.'}`;
     const data = await res.json();
     const draftedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-    // Save the finalized draft into the active session for the outbound dispatch
     const session = draftingSessions.get(dispatchTarget) || { active: true };
     session.draftedBody = draftedText.trim();
     draftingSessions.set(dispatchTarget, session);
 
     const finalMsg = `✅ *Drafted Response:*\n──────────────────────────────\n${draftedText.trim()}\n──────────────────────────────\n_Ready to review or forward._`;
     
-    // Add the Dispatch button if a target email is registered
+    // TEMPORARY FAILSAFE: Provide the button but alert if Gmail module is missing
     if (session.targetEmail) {
       const buttons = [{ id: `SEND_DRAFTED_EMAIL`, title: 'Dispatch via Email' }];
       await whatsapp.sendWhatsAppButtons(config, dispatchTarget, finalMsg, buttons);
@@ -909,12 +800,16 @@ app.post('/webhook', async (req, res) => {
         if (session && session.draftedBody && session.targetEmail) {
           await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, "⏳ Discarding to Outbox...");
           
-          const success = await gmail.sendOutboundEmail(CONFIG, session.targetEmail, session.subject || "Re: Commercial Inquiry", session.draftedBody);
-          if (success) {
-            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Email Dispatched Successfully* to ${session.targetEmail}.`);
-            draftingSessions.delete(speakerPhone); // Clear the session
+          if (typeof gmail !== 'undefined' && gmail.sendOutboundEmail) {
+            const success = await gmail.sendOutboundEmail(CONFIG, session.targetEmail, session.subject || "Re: Commercial Inquiry", session.draftedBody);
+            if (success) {
+              await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Email Dispatched Successfully* to ${session.targetEmail}.`);
+              draftingSessions.delete(speakerPhone); 
+            } else {
+              await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to send email via Gmail API. Check Render logs.`);
+            }
           } else {
-            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to send email via Gmail API. Check Render logs.`);
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Gmail dispatch module is currently offline. Please send manually.`);
           }
         } else {
           await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Drafting session expired or target email missing.`);
