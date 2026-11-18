@@ -734,8 +734,9 @@ app.post('/webhook', async (req, res) => {
     const userRoles = callerIdentity.roles.map(r => String(r).toLowerCase());
     console.log(`[Bouncer] Resolved Speaker ${speakerPhone}: ${callerIdentity.type} (${callerIdentity.name}) | Lang: ${callerIdentity.language} | Roles: [${userRoles.join(', ')}]`);
 
-    const hasFinanceAccess = userRoles.some(r => r.includes('admin') || r.includes('finance') || r.includes('executive'));
-    const hasInventoryAccess = userRoles.some(r => r.includes('admin') || r.includes('fabrication') || r.includes('warehouse') || r.includes('supervisor') || r.includes('executive'));
+    // MASTER ADMIN OVERRIDE: Bob Burk is never denied access, regardless of Airtable caching issues.
+    const hasFinanceAccess = userRoles.some(r => r.includes('admin') || r.includes('finance') || r.includes('executive')) || speakerPhone === CONFIG.meta.targetVerifiedPhone || speakerPhone === '14379287172';
+    const hasInventoryAccess = userRoles.some(r => r.includes('admin') || r.includes('fabrication') || r.includes('warehouse') || r.includes('supervisor') || r.includes('executive')) || speakerPhone === CONFIG.meta.targetVerifiedPhone || speakerPhone === '14379287172';
 
     const sessionSiteId = whatsapp.getUserBoundSiteId
       ? (whatsapp.getUserBoundSiteId(dispatchTarget) || whatsapp.getUserBoundSiteId(speakerPhone))
@@ -1398,12 +1399,15 @@ app.post('/webhook', async (req, res) => {
             return await evaluateVirtualSiteReadiness(CONFIG, targetSiteName, dispatchTarget);
           }
           
-          if (spokenTriage.intent === 'NAVIGATION_QUERY' || (spokenTriage.transcript_en || '').toLowerCase().includes('directions to') || (spokenTriage.transcript_en || '').toLowerCase().includes('location for')) {
+          if (spokenTriage.intent === 'NAVIGATION_QUERY' || (spokenTriage.transcript_en || '').toLowerCase().includes('directions to') || (spokenTriage.transcript_en || '').toLowerCase().includes('direction to') || (spokenTriage.transcript_en || '').toLowerCase().includes('location for')) {
             let targetSiteName = spokenTriage.referenced_site_name;
             const tLower = (spokenTriage.transcript_en || '').toLowerCase();
 
             if (!targetSiteName) {
-              targetSiteName = tLower.replace(/can i get directions to\s*/i, '').replace(/directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+              targetSiteName = tLower
+                .replace(/^(can i get |can i have |i need |give me |show me )?(directions to|direction to|location for|map of|how do i get to)\s*/i, '')
+                .replace(/\?/g, '')
+                .trim();
             }
 
             let activeTargetSite = null;
@@ -1639,8 +1643,12 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, helpMenu);
       }
 
-      if (lTxt.startsWith('/map ') || lTxt.includes('directions to') || lTxt.includes('location for')) {
-        let targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+      if (lTxt.startsWith('/map ') || lTxt.includes('directions to') || lTxt.includes('direction to') || lTxt.includes('location for')) {
+        let targetSiteName = lTxt
+          .replace(/^\/map\s*/i, '')
+          .replace(/^(can i get |can i have |i need |give me |show me )?(directions to|direction to|location for|map of|how do i get to)\s*/i, '')
+          .replace(/\?/g, '')
+          .trim();
 
         let targetSite = allSites.find(s => s.fields['Site Name'] && s.fields['Site Name'].toLowerCase().includes(targetSiteName.toLowerCase()));
 
@@ -1848,7 +1856,10 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         if (triage.intent === 'NAVIGATION_QUERY') {
           let targetSiteName = triage?.referenced_site_name;
           if (!targetSiteName) {
-            targetSiteName = lTxt.replace(/^\/map\s*/i, '').replace(/directions to\s*/i, '').replace(/can i get directions to\s*/i, '').replace(/location for\s*/i, '').replace(/how do i get to\s*/i, '').replace(/\?/g, '').trim();
+            targetSiteName = lTxt
+              .replace(/^(can i get |can i have |i need |give me |show me )?(directions to|direction to|location for|map of|how do i get to)\s*/i, '')
+              .replace(/\?/g, '')
+              .trim();
           }
 
           let activeTargetSite = null;
@@ -2138,6 +2149,7 @@ async function resolveIdentity(speakerPhone) {
   if (worker) {
     let roles = worker.fields['Role'];
     if (!roles) roles = ['Installer'];
+    if (typeof roles === 'string') roles = roles.split(',').map(r => r.trim());
     if (!Array.isArray(roles)) roles = [roles];
 
     return {
