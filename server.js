@@ -1616,6 +1616,24 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
 
       console.log(`[Text Engine] Parsing payload: "${txt}" from ${dispatchTarget} (Caller: ${callerIdentity.name}, Role: ${callerIdentity.role})`);
 
+      // ADDED /refresh CACHE BUSTER
+      if (lTxt === '/refresh') {
+        const userRole = String(callerIdentity.role || '').trim().toLowerCase();
+        if (!userRoles.some(r => r.includes('admin')) && speakerPhone !== CONFIG.meta.targetVerifiedPhone) {
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Restricted to Admin.`);
+        }
+        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⏳ Manual cache bust initiated...`);
+        try {
+          await getCachedSites(true);
+          await getCachedWorkers(true);
+          await getCachedContacts(true);
+          await getCachedOpenAssignments(true);
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Titan OS RAM Hydrated.*\nLedger and schema caches successfully rebuilt.`);
+        } catch (e) {
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to rebuild cache: ${e.message}`);
+        }
+      }
+
       if (draftingSessions.has(speakerPhone) && draftingSessions.get(speakerPhone).active && !interactiveButtonId) {
         const draftCtx = draftingSessions.get(speakerPhone).context;
         draftingSessions.delete(speakerPhone);
@@ -1857,6 +1875,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           let targetSiteName = triage?.referenced_site_name;
           if (!targetSiteName) {
             targetSiteName = lTxt
+              .replace(/^\/map\s*/i, '')
               .replace(/^(can i get |can i have |i need |give me |show me )?(directions to|direction to|location for|map of|how do i get to)\s*/i, '')
               .replace(/\?/g, '')
               .trim();
