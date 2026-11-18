@@ -386,10 +386,11 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
     const fields = rawLocationOrSite.fields || rawLocationOrSite;
     siteId = rawLocationOrSite.id || autoPersistSiteId;
 
-    const siteLocationKey = Object.keys(fields).find(
-      k => k.trim().toLowerCase() === 'site location'
-    );
-    rawValue = siteLocationKey ? fields[siteLocationKey] : undefined;
+    // DYNAMIC COLUMN SWEEP: Check multiple potential Airtable columns for location data
+    const locationKeys = ['site location', 'location', 'address', 'street address', 'coordinates'];
+    const foundKey = Object.keys(fields).find(k => locationKeys.includes(k.trim().toLowerCase()) && fields[k]);
+    
+    rawValue = foundKey ? fields[foundKey] : undefined;
 
     const directCoords = parseCoordinatePair(rawValue);
     if (directCoords) return directCoords;
@@ -418,6 +419,7 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
       memoryCache?.coordinates?.set(addressStr, coords);
       if (siteId && airtableWriteWithAutoDrop) {
         const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
+        // Additive Ingestion: Only patch the 'Site location' if we successfully geocoded it, preserving the text address
         airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
       }
       return coords;
