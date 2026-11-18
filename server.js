@@ -1982,6 +1982,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                 generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
               })
             }, 2);
+            
             if (geminiRes && geminiRes.ok) {
               const data = await geminiRes.json();
               const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
