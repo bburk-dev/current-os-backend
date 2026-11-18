@@ -325,10 +325,54 @@ async function getAgingReport(config, minDaysPastDue = 0) {
          invoiceLines.join('\n');
 }
 
-async function handleARLookup(config, dispatchTarget, sendWhatsAppMessage, callerIdentity = null) {
-  await sendWhatsAppMessage(dispatchTarget, "⏳ Pulling live AR ledger from QuickBooks...");
-  const report = await getAgingReport(config, 0);
-  await sendWhatsAppMessage(dispatchTarget, report);
+async function handleARLookup(config, dispatchTarget, dM, callerIdentity = null) {
+  await dM(dispatchTarget, "⏳ Pulling live AR ledger from QuickBooks...");
+
+  try {
+    // Enforce the strict Production Intuit Base URL
+    const baseUrl = 'https://quickbooks.api.intuit.com/v3/company';
+    const realmId = config.qbo.companyId;
+
+    // Intuit SQL: Fetch ONLY invoices where the balance is strictly greater than 0
+    const qboQuery = `SELECT * FROM Invoice WHERE Balance > '0'`;
+    const endpoint = `${baseUrl}/${realmId}/query?query=${encodeURIComponent(qboQuery)}&minorversion=70`;
+
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${config.qbo.accessToken}`,
+        'Accept': 'application/json'
+      }
+    });
+
+    if (response.status === 401) {
+      return await dM(dispatchTarget, `⚠️ QBO Link Expired. Auto-rotation engine is acquiring new tokens... please retry your request in 5 seconds.`);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`QBO API Failure ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    const invoices = data.QueryResponse?.Invoice || [];
+    
+    let totalOutstanding = 0.00;
+    
+    invoices.forEach(inv => {
+      totalOutstanding += parseFloat(inv.Balance || 0);
+    });
+
+    if (totalOutstanding === 0) {
+      return await dM(dispatchTarget, `TITAN OS | AR LOOKUP: FLEET AGING REPORT\n\n💰 *Total Outstanding:* $0.00\n──────────────────────────────\nAll accounts are fully paid. Zero open invoices in QuickBooks.`);
+    }
+
+    return await dM(dispatchTarget, `TITAN OS | AR LOOKUP: FLEET AGING REPORT\n\n💰 *Total Outstanding:* $${totalOutstanding.toFixed(2)}\n──────────────────────────────\nFound ${invoices.length} open invoice(s) in the ledger.`);
+
+  } catch (error) {
+    console.error('[CRITICAL] Headless Finance AR Exception:', error.message);
+    return await dM(dispatchTarget, `⚠️ AR Ledger offline: ${error.message}`);
+  }
 }
 
 // ====================================================================
