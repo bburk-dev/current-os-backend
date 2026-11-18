@@ -966,48 +966,31 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
     };
 
     const senderEmails = extractEmails(emailPayload.from);
-    const ccEmails = extractEmails(emailPayload.cc);
-    const targetEmails = [...new Set([...senderEmails, ...ccEmails])];
-
-    if (targetEmails.length === 0) {
-      console.warn('[Email Handler] No valid sender/CC emails extracted.');
+    
+    if (senderEmails.length === 0) {
+      console.warn('[Email Handler] No valid sender emails extracted.');
       return;
     }
 
-    // 1. Resolve WhatsApp targets from Airtable Contacts ('Full Name', 'Email', 'Phone number')
+    // 1. Resolve Sender Identity from Airtable Contacts to personalize the alert
     const contacts = await getCachedContacts();
-    const targetPhones = [];
     const knownNames = [];
 
-    targetEmails.forEach(targetEmail => {
+    senderEmails.forEach(senderEmail => {
       const contact = contacts.find(c => {
         const contactEmail = String(c.fields['Email'] || '').toLowerCase().trim();
-        return contactEmail === targetEmail;
+        return contactEmail === senderEmail;
       });
 
       if (contact) {
-        const rawPhone =
-          contact.fields['Phone number'] ||
-          contact.fields['Phone E164'] ||
-          contact.fields['WhatsApp Number'] ||
-          contact.fields['Phone'] ||
-          '';
-        let cleanPhone = String(rawPhone).replace(/\D/g, '');
-        if (cleanPhone.length === 10) cleanPhone = '1' + cleanPhone;
-
-        if (cleanPhone.length >= 10) {
-          targetPhones.push(cleanPhone);
-          knownNames.push(contact.fields['Full Name'] || contact.fields['First Name'] || targetEmail);
-        }
+        knownNames.push(contact.fields['Full Name'] || contact.fields['First Name'] || senderEmail);
       }
     });
 
-    if (targetPhones.length === 0) {
-      console.log(`[Email Handler] No WhatsApp-routable phone numbers found in Contacts for: ${targetEmails.join(', ')}`);
-      return;
-    }
+    // 2. Headless Routing: We route inbound commercial inquiries strictly to the internal executive orchestrator (Bob Burk)
+    const targetPhones = [config.meta.targetVerifiedPhone]; 
 
-    // 2. Semantic AI Gatekeeper (Temperature 0.0) — Filter out noise before buzzing WhatsApp
+    // 3. Semantic AI Gatekeeper (Temperature 0.0) — Filter out noise before buzzing WhatsApp
     const bodyText = String(emailPayload.text || emailPayload.html || '').substring(0, 4000);
     const triagePrompt = `You are the Commercial Triage Gatekeeper for Bounce Padel.
 Classify this inbound email and determine if it requires immediate executive attention on WhatsApp.
@@ -1074,12 +1057,13 @@ Return STRICTLY JSON:
     };
     const badge = badgeMap[triage.category] || '📧 PRIORITY EMAIL';
 
-    const participants = knownNames.length > 0 ? knownNames.join(' and ') : 'colleagues';
-    console.log(`[Email Gatekeeper] ✅ Routing ${triage.category} to ${participants} (${targetPhones.join(', ')})`);
+    const senderDisplay = knownNames.length > 0 ? `${knownNames[0]} (${senderEmails[0]})` : senderEmails[0];
+    console.log(`[Email Gatekeeper] ✅ Routing ${triage.category} to HQ (${targetPhones.join(', ')})`);
 
     const formattedDispatch = `📬 *TITAN OS | INBOUND EMAIL*\n` +
                               `━━━━━━━━━━━━━━━━━━━━\n` +
-                              `👤 *From:* ${emailPayload.from}\n` +
+                              `*${badge}*\n` +
+                              `👤 *From:* ${senderDisplay}\n` +
                               `📌 *Subject:* ${emailPayload.subject}\n` +
                               `⚡ *Signal:* ${triage.reason}\n` +
                               `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1087,13 +1071,13 @@ Return STRICTLY JSON:
                               `${(triage.draft_reply || '').trim()}`;
 
     // Pass the sender's email inside the button payload for the Gmail dispatcher
-    const buttons = [{ id: `DRAFT_REPLY_${emailPayload.from}`, title: 'Draft Reply' }];
+    const buttons = [{ id: `DRAFT_REPLY_${senderEmails[0]}`, title: 'Draft Reply' }];
 
     for (const phone of targetPhones) {
       await sendWhatsAppButtons(config, phone, formattedDispatch, buttons);
     }
 
-    console.log(`[Email Handler] Dispatched priority relay card to ${targetPhones.length} recipient(s).`);
+    console.log(`[Email Handler] Dispatched priority relay card to HQ.`);
   } catch (err) {
     console.error('[Email Handler Exception]:', err.message);
   }
