@@ -734,7 +734,6 @@ app.post('/webhook', async (req, res) => {
     const userRoles = callerIdentity.roles.map(r => String(r).toLowerCase());
     console.log(`[Bouncer] Resolved Speaker ${speakerPhone}: ${callerIdentity.type} (${callerIdentity.name}) | Lang: ${callerIdentity.language} | Roles: [${userRoles.join(', ')}]`);
 
-    // UPDATED RBAC Checks to ensure resilience against spelling variations
     const hasFinanceAccess = userRoles.some(r => r.includes('admin') || r.includes('finance') || r.includes('executive'));
     const hasInventoryAccess = userRoles.some(r => r.includes('admin') || r.includes('fabrication') || r.includes('warehouse') || r.includes('supervisor') || r.includes('executive'));
 
@@ -1362,7 +1361,6 @@ app.post('/webhook', async (req, res) => {
               return await dM(dispatchTarget, `⚠️ Access Denied. Financial ledger queries are restricted to Admin or Finance roles.`);
             }
             if (finance?.handleARLookup) {
-              // VERIFY TOKEN BEFORE FIRING
               if (!CONFIG.qbo.accessToken) {
                 return await dM(dispatchTarget, `⚠️ QuickBooks API is disconnected. Please re-authenticate your QBO token in the Render dashboard.`);
               }
@@ -1399,6 +1397,7 @@ app.post('/webhook', async (req, res) => {
             if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
             return await evaluateVirtualSiteReadiness(CONFIG, targetSiteName, dispatchTarget);
           }
+          
           if (spokenTriage.intent === 'NAVIGATION_QUERY' || (spokenTriage.transcript_en || '').toLowerCase().includes('directions to') || (spokenTriage.transcript_en || '').toLowerCase().includes('location for')) {
             let targetSiteName = spokenTriage.referenced_site_name;
             const tLower = (spokenTriage.transcript_en || '').toLowerCase();
@@ -1418,7 +1417,7 @@ app.post('/webhook', async (req, res) => {
               if (!activeTargetSite && whatsapp.lastDroppedCoordinates?.has(speakerPhone)) {
                 const userGeo = whatsapp.lastDroppedCoordinates.get(speakerPhone);
                 for (const s of allSites) {
-                  const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop);
+                  const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop).catch(() => null);
                   if (coords) {
                     const dist = whatsapp.haversineDistanceKm(userGeo.lat, userGeo.lon, coords.lat, coords.lon) * 1000;
                     if (dist <= 800) { activeTargetSite = s; break; }
@@ -1439,23 +1438,35 @@ app.post('/webhook', async (req, res) => {
             }
 
             if (activeTargetSite) {
-              const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, activeTargetSite, airtableWriteWithAutoDrop);
-              if (coords) {
-                const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
-                const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
+              let coords = null;
+              try { coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, activeTargetSite, airtableWriteWithAutoDrop); } catch(e){}
+              
+              let mapsUrl, satUrl, locDisp;
+              if (coords && coords.lat && coords.lon) {
+                mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
+                satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
+                locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
+              } else {
+                const rawLoc = activeTargetSite.fields['Site location'] || activeTargetSite.fields['Address'];
+                if (rawLoc) {
+                  mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
+                  satUrl = `_Satellite view unavailable for text addresses._`;
+                  locDisp = `📍 *Address:* ${rawLoc}`;
+                }
+              }
 
+              if (mapsUrl) {
                 const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
                                 `──────────────────────────────\n` +
                                 `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
-                                `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\`\n` +
+                                `${locDisp}\n` +
                                 `──────────────────────────────\n` +
                                 `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
-                                `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
-
+                                `🛰️ *Logistics View:*\n${satUrl}`;
                 return await dM(dispatchTarget, navCard);
               }
             }
-            return await dM(dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
+            return await dM(dispatchTarget, `⚠️ Could not locate coordinates or address for "${targetSiteName || 'that site'}".`);
           }
 
           // DYNAMIC AIRTABLE READ / WRITE INTENT FOR SPOKEN MEMOS
@@ -1642,23 +1653,35 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         }
 
         if (targetSite) {
-          const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, targetSite, airtableWriteWithAutoDrop);
-          if (coords) {
-            const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
-            const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
+          let coords = null;
+          try { coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, targetSite, airtableWriteWithAutoDrop); } catch(e){}
+          
+          let mapsUrl, satUrl, locDisp;
+          if (coords && coords.lat && coords.lon) {
+            mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
+            satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
+            locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
+          } else {
+            const rawLoc = targetSite.fields['Site location'] || targetSite.fields['Address'];
+            if (rawLoc) {
+              mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
+              satUrl = `_Satellite view unavailable for text addresses._`;
+              locDisp = `📍 *Address:* ${rawLoc}`;
+            }
+          }
 
+          if (mapsUrl) {
             const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
                             `──────────────────────────────\n` +
                             `🏟️ *Destination:* ${targetSite.fields['Site Name']}\n` +
-                            `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\`\n` +
+                            `${locDisp}\n` +
                             `──────────────────────────────\n` +
                             `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
-                            `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
-
+                            `🛰️ *Logistics View:*\n${satUrl}`;
             return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, navCard);
           }
         }
-        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName}".`);
+        return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not locate coordinates or address for "${targetSiteName}".`);
       }
 
       if (lTxt === '/metrics' || lTxt === '/telemetry') {
@@ -1786,7 +1809,6 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             return await dM(dispatchTarget, `⚠️ Access Denied. Financial ledger queries are restricted to Admin or Finance roles.`);
           }
           if (finance?.handleARLookup) {
-            // VERIFY TOKEN BEFORE FIRING
             if (!CONFIG.qbo.accessToken) {
               return await dM(dispatchTarget, `⚠️ QuickBooks API is disconnected. Please re-authenticate your QBO token in the Render dashboard.`);
             }
@@ -1842,112 +1864,124 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           }
 
           if (activeTargetSite) {
-            const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, activeTargetSite, airtableWriteWithAutoDrop);
-            if (coords) {
-              const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
-              const satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
+            let coords = null;
+            try { coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, activeTargetSite, airtableWriteWithAutoDrop); } catch(e){}
+            
+            let mapsUrl, satUrl, locDisp;
+            if (coords && coords.lat && coords.lon) {
+              mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
+              satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
+              locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
+            } else {
+              const rawLoc = activeTargetSite.fields['Site location'] || activeTargetSite.fields['Address'];
+              if (rawLoc) {
+                mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
+                satUrl = `_Satellite view unavailable for text addresses._`;
+                locDisp = `📍 *Address:* ${rawLoc}`;
+              }
+            }
 
+            if (mapsUrl) {
               const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
                               `──────────────────────────────\n` +
                               `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
-                              `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\`\n` +
+                              `${locDisp}\n` +
                               `──────────────────────────────\n` +
                               `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
-                              `🛰️ *Satellite View (For Logistics):*\n${satUrl}`;
-
+                              `🛰️ *Logistics View:*\n${satUrl}`;
               return await dM(dispatchTarget, navCard);
             }
           }
-          return await dM(dispatchTarget, `⚠️ Could not locate coordinates for "${targetSiteName || 'that site'}".`);
+          return await dM(dispatchTarget, `⚠️ Could not locate coordinates or address for "${targetSiteName || 'that site'}".`);
         }
-      }
 
-      const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
-      const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || triage?.intent === 'DYNAMIC_SITE_UPDATE';
+        const isQuestion = lTxt.includes('what') || lTxt.includes('who') || lTxt.includes('when') || lTxt.includes('how') || lTxt.includes('tell me') || txt.endsWith('?');
+        const isUpdate = lTxt.includes('update site') || lTxt.includes('change site') || lTxt.includes('set site') || triage?.intent === 'DYNAMIC_SITE_UPDATE';
 
-      if ((isQuestion || isUpdate) && (boundSite || triage?.referenced_site_name)) {
-        let activeTargetSite = null;
-        if (triage?.referenced_site_name) {
-          const ref = triage.referenced_site_name.toLowerCase();
-          activeTargetSite = allSites.find(s => {
-            const sName = (s.fields['Site Name'] || '').toLowerCase();
-            return sName.includes(ref) || ref.includes(sName);
-          });
-        }
-        if (!activeTargetSite) {
-          activeTargetSite = allSites.find(s => {
-            const sName = (s.fields['Site Name'] || '').toLowerCase();
-            if (lTxt.includes(sName)) return true;
-            const words = sName.split(' ').filter(w => w.length > 4);
-            return words.some(w => lTxt.includes(w));
-          });
-        }
-        if (!activeTargetSite) activeTargetSite = boundSite;
-
-        if (!activeTargetSite) return;
-
-        if (isQuestion && !isUpdate) {
-          const queryPrompt = `Answer the question from this record:\nQuery: "${txt}"\nRecord: ${JSON.stringify(activeTargetSite.fields, null, 2)}`;
-          const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: queryPrompt }] }] })
-          }, 2);
-          if (geminiRes && geminiRes.ok) {
-            const data = await geminiRes.json();
-            const ans = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (ans) return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${ans.trim()}`);
+        if ((isQuestion || isUpdate) && (boundSite || triage?.referenced_site_name)) {
+          let activeTargetSite = null;
+          if (triage?.referenced_site_name) {
+            const ref = triage.referenced_site_name.toLowerCase();
+            activeTargetSite = allSites.find(s => {
+              const sName = (s.fields['Site Name'] || '').toLowerCase();
+              return sName.includes(ref) || ref.includes(sName);
+            });
           }
-        }
-        if (isUpdate) {
-          const protectedColumns = ['Current Gate', 'Workflow Mode', 'Site Status', 'Deposit Status', 'WhatsApp Group ID', 'Subscribed Phones', 'Last Note', 'Last Intent', 'Worker', 'Assignment ID', 'Latitude', 'Longitude', 'Site location', 'Action Items', 'Media Links'];
-          const knownColumns = new Set();
-          allSites.forEach(s => {
-            if (s.fields) {
-              Object.keys(s.fields).forEach(k => {
-                if (!protectedColumns.includes(k)) knownColumns.add(k);
-              });
+          if (!activeTargetSite) {
+            activeTargetSite = allSites.find(s => {
+              const sName = (s.fields['Site Name'] || '').toLowerCase();
+              if (lTxt.includes(sName)) return true;
+              const words = sName.split(' ').filter(w => w.length > 4);
+              return words.some(w => lTxt.includes(w));
+            });
+          }
+          if (!activeTargetSite) activeTargetSite = boundSite;
+
+          if (!activeTargetSite) return;
+
+          if (isQuestion && !isUpdate) {
+            const queryPrompt = `Answer the question from this record:\nQuery: "${txt}"\nRecord: ${JSON.stringify(activeTargetSite.fields, null, 2)}`;
+            const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: queryPrompt }] }] })
+            }, 2);
+            if (geminiRes && geminiRes.ok) {
+              const data = await geminiRes.json();
+              const ans = data.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (ans) return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🏟️ *${activeTargetSite.fields['Site Name']} Ledger:*\n${ans.trim()}`);
             }
-          });
-
-          const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns.`;
-          const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
-              generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
-            })
-          }, 2);
-          if (geminiRes && geminiRes.ok) {
-            const data = await geminiRes.json();
-            const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (rawJson) {
-              const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-              const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
-
-              const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
-              for (const [key, value] of Object.entries(normalized)) {
-                if (!protectedColumns.includes(key)) {
-                  payload[key] = value;
-                }
+          }
+          if (isUpdate) {
+            const protectedColumns = ['Current Gate', 'Workflow Mode', 'Site Status', 'Deposit Status', 'WhatsApp Group ID', 'Subscribed Phones', 'Last Note', 'Last Intent', 'Worker', 'Assignment ID', 'Latitude', 'Longitude', 'Site location', 'Action Items', 'Media Links'];
+            const knownColumns = new Set();
+            allSites.forEach(s => {
+              if (s.fields) {
+                Object.keys(s.fields).forEach(k => {
+                  if (!protectedColumns.includes(k)) knownColumns.add(k);
+                });
               }
+            });
 
-              const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
-              await getCachedSites(true);
+            const extractPrompt = `Extract key-value pairs for Airtable Sites table update:\n"${txt}"\nKnown Columns: ${JSON.stringify(Array.from(knownColumns))}\nReturn JSON strictly matching Known Columns.`;
+            const geminiRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
+                generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
+              })
+            }, 2);
+            if (geminiRes && geminiRes.ok) {
+              const data = await geminiRes.json();
+              const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (rawJson) {
+                const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+                const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
 
-              if (writeResult && writeResult.success) {
-                const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
-                if (writtenKeys.length > 0) {
-                  const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
+                for (const [key, value] of Object.entries(normalized)) {
+                  if (!protectedColumns.includes(key)) {
+                    payload[key] = value;
+                  }
+                }
+
+                const writeResult = await airtableWriteWithAutoDrop('Sites', payload, activeTargetSite.id);
+                await getCachedSites(true);
+
+                if (writeResult && writeResult.success) {
+                  const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
+                  if (writtenKeys.length > 0) {
+                    const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
+                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                  } else {
+                    await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                  }
                 } else {
-                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                  await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
                 }
-              } else {
-                await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+                return;
               }
-              return;
             }
           }
         }
