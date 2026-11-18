@@ -1,5 +1,5 @@
 /**
- * TITAN OS V6.0.36 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.37 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Rate-Limited
  *          Airtable Pacer & Linked-Record Resolver, QBO Finance Copilot,
@@ -533,7 +533,15 @@ function buildRecordLookupMaps(sites = [], workers = [], contacts = []) {
 
 function enrichRecordFields(record, lookupMaps) {
   const f = record?.fields || {};
-  const excludedKeys = new Set(['WhatsApp Group ID', 'Client WhatsApp Group ID', 'Subscribed Phones', 'Map Cache']);
+  const excludedKeys = new Set([
+    'WhatsApp Group ID',
+    'Client Whatsapp Group ID',
+    'Client WhatsApp Group ID',
+    'Subscribed Phones',
+    'Summary (Subscribed Phones)',
+    'Headline (Subscribed Phones)',
+    'Map Cache'
+  ]);
   const enriched = { record_id: record.id };
 
   for (const [key, val] of Object.entries(f)) {
@@ -735,11 +743,11 @@ ${JSON.stringify(enrichedRecord, null, 2)}
 Instructions:
 1. Answer the user's question directly and accurately using ONLY the record above.
 2. If the user asks for general court configuration or court details, present a crisp WhatsApp summary covering:
-   - Site Name, Client/Contact, & Address / Location
-   - Model Type & Manufacturer
+   - Site Name, Client Name / Partner, & Site Location
+   - Model Type, Manufacturer, & Court Classification
    - Steel Color, Turf Color, & Turf Supplier
-   - Glass Thickness & Lights (check any field referencing Light / Lights / Lighting)
-   - Current Gate, Site Status, Workflow Mode, & Deposit Status (if tracked)
+   - Foundation Type & Lights (from the "Lights" field)
+   - Current Gate, Completion %, Site Status, Workflow Mode, Year Installed, & Deposit Status (if populated)
 3. If a specific field requested (such as Lights, Turf Supplier, or Steel Color) is not populated in the record, clearly state that it is not documented in the Airtable ledger yet.
 4. Keep formatting concise, scannable, and WhatsApp-friendly (use *bold* bullets, no tables).`;
 
@@ -772,13 +780,14 @@ Instructions:
   const fallbackCard =
     `🏟️ *TITAN OS | ${siteName.toUpperCase()}*\n` +
     `──────────────────────────────\n` +
-    `• *Address / Location:* ${f['Address'] || f['Site location'] || f['Site Location'] || 'Not specified'}\n` +
+    `• *Client / Venue:* ${f['Client Name'] || f['Parent Venue / Complex'] || 'Not specified'}\n` +
+    `• *Site Location:* ${f['Site Location'] || 'Not specified'}\n` +
     `• *Status / Gate:* ${f['Site Status'] || 'Active'} (${f['Current Gate'] || 'Unset'})\n` +
     `• *Manufacturer / Model:* ${f['Manufacturer'] || 'Unspecified'} — ${f['Model Type'] || 'Standard'}\n` +
     `• *Steel Color:* ${f['Steel Color'] || 'Unspecified'}\n` +
     `• *Turf:* ${f['Turf Color'] || 'Unspecified'} (${f['Turf Supplier'] || 'Unspecified'})\n` +
-    `• *Glass / Lights:* ${f['Glass Thickness'] || '12mm'} | Lights: ${f['Lights'] || f['Light'] || 'Unspecified'}\n` +
-    `• *Deposit Status:* ${f['Deposit Status'] || 'Unspecified'}`;
+    `• *Lights / Foundation:* Lights: ${f['Lights'] || 'Unspecified'} | Foundation: ${f['Foundation Type'] || 'Unspecified'}\n` +
+    `• *Deposit / Year:* ${f['Deposit Status'] || 'Unspecified'} | Year: ${f['Year Installed'] || 'Unspecified'}`;
 
   return await whatsapp.sendWhatsAppMessage(config, dispatchTarget, fallbackCard);
 }
@@ -817,7 +826,7 @@ The user asked: "${queryText}"
 
 Calculate the exact answer strictly from the live Airtable JSON tables provided below.
 Rules:
-1. Count and list matching records accurately (inspect all fields on every record, including 'Deposit Status', 'Year Installed', 'Total Courts', 'Site Status', 'Workflow Mode', 'Slab Pour Date', 'Target Date', 'Install Year', 'Current Gate', 'Manufacturer', 'Turf Supplier', 'Lights'/'Light', 'Address', 'Site location', and any date/year strings).
+1. Count and list matching records accurately (inspect all fields on every record, including 'Deposit Status', 'Year Installed', 'Total Courts', 'Site Status', 'Workflow Mode', 'Slab Pour Date', 'Install Started', 'Install Completed', 'Current Gate', 'Manufacturer', 'Model Type', 'Steel Color', 'Turf Color', 'Turf Supplier', 'Lights', 'Site Location', 'Client Name', 'Partner', 'Parent Venue / Complex', and any date/year strings).
 2. If 'Total Courts' is specified on a site record, report both the site record count and the sum of courts.
 3. Never hallucinate numbers or records. If a specific year (like 2027 or 2024) does not appear on any record, list what deposit statuses or installation years ARE currently documented in the ledger so the user has full clarity.
 4. Format concisely for WhatsApp with *bold* highlights and bullet points.
@@ -924,7 +933,9 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
     const sIds = a.fields['Sites'] || a.fields['Site'] || [];
     return Array.isArray(sIds) && sIds.includes(siteId);
   });
-  const hasCrew = siteAssignments.some(a => a.fields['Worker'] && a.fields['Worker'].length > 0) || Boolean(site.fields['Assigned Crew']);
+  const hasCrew = siteAssignments.some(a => a.fields['Worker'] && a.fields['Worker'].length > 0) ||
+                  Boolean(site.fields['Assigned Crew']) ||
+                  Boolean(site.fields['Assigned Workers']?.length);
   const crewStatus = hasCrew ? `✅ Crew Assigned` : `❌ No Crew Assigned`;
   let confidenceScore = 100;
 
@@ -1338,7 +1349,7 @@ app.post('/webhook', async (req, res) => {
 
     if (!site && allSites.length > 0) {
       site = allSites.find(s => {
-        const gid = String(s.fields['WhatsApp Group ID'] || '').trim();
+        const gid = String(s.fields['WhatsApp Group ID'] || s.fields['Client Whatsapp Group ID'] || '').trim();
         return gid && (gid === dispatchTarget || dispatchTarget.includes(gid));
       }) || null;
     }
@@ -2026,7 +2037,7 @@ app.post('/webhook', async (req, res) => {
                 satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
                 locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
               } else {
-                const rawLoc = activeTargetSite.fields['Site location'] || activeTargetSite.fields['Site Location'] || activeTargetSite.fields['Address'];
+                const rawLoc = activeTargetSite.fields['Site Location'] || activeTargetSite.fields['Site location'] || activeTargetSite.fields['Address'];
                 if (rawLoc) {
                   mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
                   satUrl = `_Satellite view unavailable for text addresses._`;
@@ -2065,12 +2076,24 @@ app.post('/webhook', async (req, res) => {
             }
 
             try {
-              const protectedColumns = ['Current Gate', 'Workflow Mode', 'Site Status', 'Deposit Status', 'WhatsApp Group ID', 'Subscribed Phones', 'Last Note', 'Last Intent', 'Worker', 'Assignment ID', 'Latitude', 'Longitude', 'Site location', 'Action Items', 'Media Links'];
+              const protectedColumns = [
+                'Current Gate', 'Gate Number', 'Current Gate Rank', 'Completion %',
+                'Workflow Mode', 'Site Mode', 'Site Status', 'Deposit Status',
+                'WhatsApp Group ID', 'Client Whatsapp Group ID', 'Subscribed Phones',
+                'Last Note', 'Last Intent', 'Last Report Time', 'Worker', 'Assigned Workers',
+                'Assignment ID', 'Daily Assignments', 'Open Tickets', 'Site Record ID',
+                'Current Task ID', 'Current Pulse Report ID', 'Site Location', 'Map Cache',
+                'Cleared Milestones', 'Verified Milestones', 'Milestone Timestamps',
+                'Milestone Timestamps JSON', 'Reports 2', 'Reports 2 (2)', 'Inbound Messages 2',
+                'Technical Docs', 'Latest Video Link', 'ToolKit URL', 'Finance & AR'
+              ];
               const knownColumns = new Set();
               allSites.forEach(s => {
                 if (s.fields) {
                   Object.keys(s.fields).forEach(k => {
-                    if (!protectedColumns.includes(k)) knownColumns.add(k);
+                    if (!protectedColumns.includes(k) && !/^(Summary|Headline|Title)\s*\(/i.test(k)) {
+                      knownColumns.add(k);
+                    }
                   });
                 }
               });
@@ -2105,7 +2128,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
 
                   const payload = { 'Last Note': `[VOICE UPDATE] ${callerIdentity.name}: "${transcript}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
                   for (const [key, value] of Object.entries(normalized)) {
-                    if (!protectedColumns.includes(key)) {
+                    if (!protectedColumns.includes(key) && !/^(Summary|Headline|Title)\s*\(/i.test(key)) {
                       payload[key] = value;
                     }
                   }
@@ -2226,7 +2249,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
             locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
           } else {
-            const rawLoc = targetSite.fields['Site location'] || targetSite.fields['Site Location'] || targetSite.fields['Address'];
+            const rawLoc = targetSite.fields['Site Location'] || targetSite.fields['Site location'] || targetSite.fields['Address'];
             if (rawLoc) {
               mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
               satUrl = `_Satellite view unavailable for text addresses._`;
@@ -2282,7 +2305,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           [primaryField]: siteName,
           'Workflow Mode': 'INSTALLATION',
           'Site Status': 'ACTIVE',
-          'Site location': `${pendingGeo.lat.toFixed(6)}, ${pendingGeo.lon.toFixed(6)}`
+          'Site Location': `${pendingGeo.lat.toFixed(6)}, ${pendingGeo.lon.toFixed(6)}`
         });
 
         if (newRecord?.success) {
@@ -2442,7 +2465,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
               satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
               locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
             } else {
-              const rawLoc = activeTargetSite.fields['Site location'] || activeTargetSite.fields['Site Location'] || activeTargetSite.fields['Address'];
+              const rawLoc = activeTargetSite.fields['Site Location'] || activeTargetSite.fields['Site location'] || activeTargetSite.fields['Address'];
               if (rawLoc) {
                 mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
                 satUrl = `_Satellite view unavailable for text addresses._`;
@@ -2479,12 +2502,24 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             return await dM(dispatchTarget, `Got it. Which site does this update apply to?`);
           }
 
-          const protectedColumns = ['Current Gate', 'Workflow Mode', 'Site Status', 'Deposit Status', 'WhatsApp Group ID', 'Subscribed Phones', 'Last Note', 'Last Intent', 'Worker', 'Assignment ID', 'Latitude', 'Longitude', 'Site location', 'Action Items', 'Media Links'];
+          const protectedColumns = [
+            'Current Gate', 'Gate Number', 'Current Gate Rank', 'Completion %',
+            'Workflow Mode', 'Site Mode', 'Site Status', 'Deposit Status',
+            'WhatsApp Group ID', 'Client Whatsapp Group ID', 'Subscribed Phones',
+            'Last Note', 'Last Intent', 'Last Report Time', 'Worker', 'Assigned Workers',
+            'Assignment ID', 'Daily Assignments', 'Open Tickets', 'Site Record ID',
+            'Current Task ID', 'Current Pulse Report ID', 'Site Location', 'Map Cache',
+            'Cleared Milestones', 'Verified Milestones', 'Milestone Timestamps',
+            'Milestone Timestamps JSON', 'Reports 2', 'Reports 2 (2)', 'Inbound Messages 2',
+            'Technical Docs', 'Latest Video Link', 'ToolKit URL', 'Finance & AR'
+          ];
           const knownColumns = new Set();
           allSites.forEach(s => {
             if (s.fields) {
               Object.keys(s.fields).forEach(k => {
-                if (!protectedColumns.includes(k)) knownColumns.add(k);
+                if (!protectedColumns.includes(k) && !/^(Summary|Headline|Title)\s*\(/i.test(k)) {
+                  knownColumns.add(k);
+                }
               });
             }
           });
@@ -2508,7 +2543,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
 
               const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
               for (const [key, value] of Object.entries(normalized)) {
-                if (!protectedColumns.includes(key)) {
+                if (!protectedColumns.includes(key) && !/^(Summary|Headline|Title)\s*\(/i.test(key)) {
                   payload[key] = value;
                 }
               }
@@ -2604,7 +2639,7 @@ app.post('/api/telemetry/iot', async (req, res) => {
                         holds.join('\n') + `\n\n` +
                         `_Physical turf gluing & glass seating automatically suspended on this asset._`;
 
-      const groupTarget = site.fields['WhatsApp Group ID'] || CONFIG.meta.targetVerifiedPhone;
+      const groupTarget = site.fields['WhatsApp Group ID'] || site.fields['Client Whatsapp Group ID'] || CONFIG.meta.targetVerifiedPhone;
       await whatsapp.sendWhatsAppMessage(CONFIG, groupTarget, alertCard);
     }
   } catch (err) {
@@ -2689,7 +2724,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.36',
+    version: '6.0.37',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
@@ -2735,7 +2770,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.36 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.37 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`====================================================================`);
 
   const server = app.listen(PORT, '0.0.0.0', async () => {
