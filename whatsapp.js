@@ -972,7 +972,7 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
       return;
     }
 
-    // 1. Resolve Sender Identity from Airtable Contacts to personalize the alert
+    // 1. Resolve Sender Identity from Airtable Contacts to personalize the alert (if they exist)
     const contacts = await getCachedContacts();
     const knownNames = [];
 
@@ -987,7 +987,8 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
       }
     });
 
-    // 2. Headless Routing: We route inbound commercial inquiries strictly to the internal executive orchestrator (Bob Burk)
+    // 2. Headless Routing: We route ALL inbound commercial inquiries strictly to the internal executive orchestrator (Bob Burk)
+    // This bypasses the old bug where new leads were dropped because they weren't in the Contacts table yet.
     const targetPhones = [config.meta.targetVerifiedPhone]; 
 
     // 3. Semantic AI Gatekeeper (Temperature 0.0) — Filter out noise before buzzing WhatsApp
