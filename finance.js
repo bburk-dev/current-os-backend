@@ -1,20 +1,83 @@
 /**
- * TITAN OS V6.0.22 — FINANCE & QBO ORCHESTRATOR
+ * TITAN OS V6.0.34 — FINANCE & QBO ORCHESTRATOR
  * Module: finance.js
- * Purpose: Intuit OAuth2, Dunning, Progressive Draws, Receipt OCR, 
- *          Macro Ghost-Ledger Extraction, Traffic-Light AR Aging,
- *          Conversational Multi-Line Estimate & Invoice Compiler,
- *          Canadian GST/HST Tax Engine, and Headless One-Tap Dispatch.
+ * Purpose: Intuit OAuth2 & Supabase Vault Sync, Dunning, Progressive Draws,
+ *          Receipt OCR, Traffic-Light AR Aging, Conversational Multi-Line
+ *          Estimate & Invoice Compiler, Canadian GST/HST Tax Engine,
+ *          and Headless One-Tap Dispatch.
  */
 
 const fetch = globalThis.fetch || require('node-fetch');
 
+let metrics;
+try {
+  metrics = require('./metrics');
+} catch (e) {
+  metrics = null;
+}
+
 // ====================================================================
-// 1. QBO TRANSPORT & AUTHENTICATION
+// 1. QBO TRANSPORT, SUPABASE VAULT SYNC & OAUTH2 ROTATION
 // ====================================================================
 
+async function syncQboCredentialsFromSupabase(config) {
+  if (!config?.supabase?.url || !config?.supabase?.serviceRoleKey) return false;
+
+  try {
+    const url = `${config.supabase.url}/rest/v1/qbo_credentials?id=eq.primary_tenant&select=access_token,refresh_token,expires_at`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': config.supabase.serviceRoleKey,
+        'Authorization': `Bearer ${config.supabase.serviceRoleKey}`,
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!res.ok) {
+      console.warn(`[QBO Vault] Supabase read returned HTTP ${res.status}`);
+      return false;
+    }
+
+    const rows = await res.json();
+    const record = Array.isArray(rows) ? rows[0] : null;
+    if (!record || !record.access_token || record.access_token.includes('pending_auth')) {
+      return false;
+    }
+
+    config.qbo.accessToken = String(record.access_token).trim();
+    if (record.refresh_token) {
+      config.qbo.refreshToken = String(record.refresh_token).trim();
+    }
+
+    const expiresAtMs = record.expires_at ? new Date(record.expires_at).getTime() : 0;
+    if (expiresAtMs && Date.now() >= expiresAtMs - 300000 && config.qbo.refreshToken) {
+      return await refreshQboToken(config);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('[QBO Vault] Failed to sync credentials from Supabase:', err.message);
+    return false;
+  }
+}
+
 async function refreshQboToken(config) {
-  const auth = Buffer.from(`${config.qbo.clientId}:${config.qbo.clientSecret}`).toString('base64');
+  if (!config?.qbo?.refreshToken) {
+    await syncQboCredentialsFromSupabase(config);
+  }
+
+  const clientId = String(config?.qbo?.clientId || process.env.QBO_CLIENT_ID || '').trim();
+  const clientSecret = String(config?.qbo?.clientSecret || process.env.QBO_CLIENT_SECRET || '').trim();
+  const refreshToken = String(config?.qbo?.refreshToken || process.env.QBO_REFRESH_TOKEN || '').trim();
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    console.error('[QBO Auth] Missing clientId, clientSecret, or refreshToken for rotation.');
+    return false;
+  }
+
+  const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
   try {
     const res = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
       method: 'POST',
@@ -23,24 +86,30 @@ async function refreshQboToken(config) {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Authorization': `Basic ${auth}`
       },
-      body: `grant_type=refresh_token&refresh_token=${config.qbo.refreshToken}`
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken
+      })
     });
-    
-    if (!res.ok) throw new Error(`Token refresh rejected: ${res.status}`);
-    const data = await res.json();
-    
-    if (data.access_token) {
-      // 1. Hydrate the active RAM cache
-      config.qbo.accessToken = data.access_token;
-      if (data.refresh_token) {
-        config.qbo.refreshToken = data.refresh_token;
-      }
-      
-      const newExpiresAt = new Date(Date.now() + (data.expires_in * 1000)).toISOString();
 
-      // 2. Headless Vault Persistence (The Fix)
-      // Ensures the new refresh token survives Render container restarts
-      if (config.supabase.url && config.supabase.serviceRoleKey) {
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      console.error(`[QBO Auth] Token refresh rejected (${res.status}): ${errBody}`);
+      return false;
+    }
+
+    const data = await res.json();
+
+    if (data.access_token) {
+      config.qbo.accessToken = String(data.access_token).trim();
+      if (data.refresh_token) {
+        config.qbo.refreshToken = String(data.refresh_token).trim();
+      }
+
+      const expiresInSec = Number(data.expires_in) || 3600;
+      const newExpiresAt = new Date(Date.now() + expiresInSec * 1000).toISOString();
+
+      if (config.supabase?.url && config.supabase?.serviceRoleKey) {
         await fetch(`${config.supabase.url}/rest/v1/qbo_credentials?id=eq.primary_tenant`, {
           method: 'PATCH',
           headers: {
@@ -58,31 +127,41 @@ async function refreshQboToken(config) {
         }).catch(err => console.warn('[QBO Auth] Supabase vault persistence warning:', err.message));
       }
 
+      console.log('[QBO Auth] Access token rotated and persisted to Supabase vault.');
       return true;
     }
-  } catch (e) { 
-    console.error('[QBO Auth] Token rotation failed:', e.message); 
+  } catch (e) {
+    console.error('[QBO Auth] Token rotation exception:', e.message);
   }
   return false;
 }
 
 async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, isRetry = false) {
-  if (!config.qbo.companyId) return null;
-  
+  const companyId = String(config?.qbo?.companyId || process.env.QBO_COMPANY_ID || '').trim();
+  if (!companyId) {
+    console.error('[QBO API Error] Missing QBO_COMPANY_ID.');
+    return null;
+  }
+
+  if (!config.qbo.accessToken || !config.qbo.refreshToken) {
+    await syncQboCredentialsFromSupabase(config);
+  }
+
+  const baseUrl = String(config?.qbo?.baseUrl || 'https://quickbooks.api.intuit.com/v3/company').trim();
   const isQuery = pathOrQuery.trim().toLowerCase().startsWith('select');
-  const url = isQuery 
-    ? `${config.qbo.baseUrl}/${config.qbo.companyId}/query?query=${encodeURIComponent(pathOrQuery)}`
-    : `${config.qbo.baseUrl}/${config.qbo.companyId}${pathOrQuery.startsWith('/') ? '' : '/'}${pathOrQuery}`;
+  const url = isQuery
+    ? `${baseUrl}/${companyId}/query?query=${encodeURIComponent(pathOrQuery)}`
+    : `${baseUrl}/${companyId}${pathOrQuery.startsWith('/') ? '' : '/'}${pathOrQuery}`;
 
   const options = {
     method,
     headers: {
-      'Authorization': `Bearer ${config.qbo.accessToken}`,
+      'Authorization': `Bearer ${String(config.qbo.accessToken || '').trim()}`,
       'Accept': 'application/json',
       'Content-Type': 'application/json'
     }
   };
-  
+
   if (body) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
@@ -93,10 +172,15 @@ async function qboApiRequest(config, pathOrQuery, method = 'GET', body = null, i
   try {
     const res = await fetch(url, options);
     if (res.status === 401 && !isRetry) {
+      console.warn('[QBO API] HTTP 401 received. Syncing vault & rotating token...');
+      await syncQboCredentialsFromSupabase(config);
       const refreshed = await refreshQboToken(config);
-      if (refreshed) return await qboApiRequest(config, pathOrQuery, method, body, true);
+      if (refreshed) {
+        return await qboApiRequest(config, pathOrQuery, method, body, true);
+      }
+      return { __authError: true, status: 401 };
     }
-    
+
     if (!res.ok) {
       const errText = await res.text();
       console.error(`[QBO API Error]: QBO HTTP ${res.status}: ${errText}`);
@@ -122,12 +206,12 @@ async function getCachedCatalogItems(config) {
   try {
     const qboData = await qboApiRequest(config, `select * from Item where Active=true MAXRESULTS 500`);
     const rawItems = qboData?.QueryResponse?.Item || [];
-    
+
     cachedItems = rawItems.filter(i => {
       const type = (i.Type || '').toLowerCase();
       return type !== 'category' && type !== 'bundle' && type !== 'group';
     });
-    
+
     console.log(`[QBO Catalog] Filtered ${cachedItems.length} sellable items (excluded ${rawItems.length - cachedItems.length} categories/bundles/groups)`);
     return cachedItems;
   } catch (err) {
@@ -189,7 +273,6 @@ async function resolveCategoryItemRef(config, categoryName, descriptionContext =
   const desc = String(descriptionContext || '').toLowerCase();
   let matched = null;
 
-  // Filter out merchandise, retail products, shoes, apparel, and rackets
   const structuralItems = items.filter(i => {
     const n = (i.Name || '').toLowerCase();
     return !/shoe|sneaker|racket|racquet|ball|shirt|pant|short|apparel|hat|cap|bag|overgrip|clothing/i.test(n);
@@ -254,7 +337,7 @@ async function getNextEstimateNumber(config) {
   try {
     const res = await qboApiRequest(config, `select DocNumber, Id from Estimate MAXRESULTS 100`);
     const estimates = res?.QueryResponse?.Estimate || [];
-    
+
     if (estimates.length > 0) {
       const numbers = estimates
         .map(e => parseInt(e.DocNumber || e.Id, 10))
@@ -273,22 +356,21 @@ async function getNextEstimateNumber(config) {
 // 2. ACCOUNTS RECEIVABLE & AGING
 // ====================================================================
 
-async function getAgingReport(config, minDaysPastDue = 0) {
+async function getAgingReport(config, minDaysPastDue = 0, clientFilter = null) {
   const query = `select * from Invoice where Balance > '0' MAXRESULTS 1000`;
   const qboData = await qboApiRequest(config, query);
-  
+
+  if (qboData?.__authError) {
+    return `⚠️ *TITAN OS | QBO AUTHENTICATION ERROR*\nQuickBooks rejected the OAuth token and auto-rotation failed. Verify your Intuit Refresh Token in Supabase \`qbo_credentials\`.`;
+  }
+
   if (!qboData?.QueryResponse?.Invoice?.length) {
     return `🗄️ *TITAN OS | AR LOOKUP: FLEET AGING REPORT*\n\n💰 *Total Outstanding:* $0.00\n──────────────────────────────\nAll accounts are fully paid. Zero open invoices in QuickBooks.`;
   }
 
-  const invoices = qboData.QueryResponse.Invoice;
   const now = new Date();
-  
-  let totalOutstanding = 0;
-  const invoiceLines = [];
-
-  const parsedInvoices = invoices.map(inv => {
-    const dueDate = new Date(inv.DueDate);
+  let parsedInvoices = qboData.QueryResponse.Invoice.map(inv => {
+    const dueDate = inv.DueDate ? new Date(inv.DueDate) : now;
     const balance = parseFloat(inv.Balance) || 0;
     const diffTime = now.getTime() - dueDate.getTime();
     const daysLate = Math.floor(diffTime / (1000 * 60 * 60 * 24));
@@ -298,77 +380,80 @@ async function getAgingReport(config, minDaysPastDue = 0) {
     return { customerName, invoiceNum, balance, daysLate };
   });
 
+  if (clientFilter) {
+    const needle = clientFilter.toLowerCase().trim();
+    parsedInvoices = parsedInvoices.filter(inv =>
+      inv.customerName.toLowerCase().includes(needle) ||
+      String(inv.invoiceNum).toLowerCase().includes(needle)
+    );
+  }
+
+  if (minDaysPastDue > 0) {
+    parsedInvoices = parsedInvoices.filter(inv => inv.daysLate >= minDaysPastDue);
+  }
+
+  if (parsedInvoices.length === 0) {
+    const scopeLabel = minDaysPastDue > 0 ? ` (${minDaysPastDue}+ days overdue)` : (clientFilter ? ` for "${clientFilter}"` : '');
+    return `🗄️ *TITAN OS | AR LOOKUP*\n\n💰 *Total Matching Balance:* $0.00\n──────────────────────────────\nNo open invoices found${scopeLabel}.`;
+  }
+
+  let totalOutstanding = 0;
   parsedInvoices.forEach(inv => { totalOutstanding += inv.balance; });
   parsedInvoices.sort((a, b) => b.daysLate - a.daysLate);
 
-  for (const inv of parsedInvoices) {
-    let statusText = '';
-    let emoji = '';
+  const invoiceLines = parsedInvoices.map(inv => {
+    let statusText = 'Current';
+    let emoji = '🟢';
 
-    if (inv.daysLate <= 0) {
-      statusText = 'Current';
-      emoji = '🟢';
-    } else if (inv.daysLate <= 30) {
-      statusText = `${inv.daysLate} Days Late`;
-      emoji = '🟡';
-    } else {
+    if (inv.daysLate > 30) {
       statusText = `${inv.daysLate} Days Late`;
       emoji = '🔴';
+    } else if (inv.daysLate > 0) {
+      statusText = `${inv.daysLate} Days Late`;
+      emoji = '🟡';
     }
 
-    invoiceLines.push(`• *${inv.customerName}* (Inv #${inv.invoiceNum}): $${inv.balance.toFixed(2)} — *${statusText}* ${emoji}`);
-  }
+    return `• *${inv.customerName}* (Inv #${inv.invoiceNum}): $${inv.balance.toFixed(2)} — *${statusText}* ${emoji}`;
+  });
 
-  return `🗄️ *TITAN OS | AR LOOKUP: FLEET AGING REPORT*\n\n` +
+  const headerTag = minDaysPastDue > 0
+    ? `${minDaysPastDue}+ DAYS OVERDUE`
+    : (clientFilter ? clientFilter.toUpperCase() : 'FLEET AGING REPORT');
+
+  return `🗄️ *TITAN OS | AR LOOKUP: ${headerTag}*\n\n` +
          `💰 *Total Outstanding:* $${totalOutstanding.toFixed(2)}\n` +
          `──────────────────────────────\n` +
          invoiceLines.join('\n');
 }
 
-async function handleARLookup(config, dispatchTarget, dM, callerIdentity = null) {
+async function handleARLookup(config, dispatchTarget, dM, callerIdentity = null, queryContext = null) {
   await dM(dispatchTarget, "⏳ Pulling live AR ledger from QuickBooks...");
 
   try {
-    // Enforce the strict Production Intuit Base URL
-    const baseUrl = 'https://quickbooks.api.intuit.com/v3/company';
-    const realmId = config.qbo.companyId;
+    let minDaysPastDue = 0;
+    let clientFilter = null;
 
-    // Intuit SQL: Fetch ONLY invoices where the balance is strictly greater than 0
-    const qboQuery = `SELECT * FROM Invoice WHERE Balance > '0'`;
-    const endpoint = `${baseUrl}/${realmId}/query?query=${encodeURIComponent(qboQuery)}&minorversion=70`;
+    const rawQuery = typeof queryContext === 'string'
+      ? queryContext
+      : (queryContext?.transcript_en || queryContext?.raw_text || '');
 
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${config.qbo.accessToken}`,
-        'Accept': 'application/json'
+    if (/30\+|over\s*30|past\s*30|30\s*days/i.test(rawQuery)) {
+      minDaysPastDue = 30;
+    } else if (/60\+|over\s*60|past\s*60|60\s*days/i.test(rawQuery)) {
+      minDaysPastDue = 60;
+    } else if (/90\+|over\s*90|past\s*90|90\s*days/i.test(rawQuery)) {
+      minDaysPastDue = 90;
+    }
+
+    if (typeof queryContext === 'object' && queryContext !== null) {
+      const candidate = queryContext.qbo_customer_name || queryContext.referenced_site_name || null;
+      if (candidate && !/all|aging|30|60|90|total|ar|receivable|balance/i.test(candidate)) {
+        clientFilter = candidate;
       }
-    });
-
-    if (response.status === 401) {
-      return await dM(dispatchTarget, `⚠️ QBO Link Expired. Auto-rotation engine is acquiring new tokens... please retry your request in 5 seconds.`);
     }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`QBO API Failure ${response.status}: ${errorText}`);
-    }
-
-    const data = await response.json();
-    const invoices = data.QueryResponse?.Invoice || [];
-    
-    let totalOutstanding = 0.00;
-    
-    invoices.forEach(inv => {
-      totalOutstanding += parseFloat(inv.Balance || 0);
-    });
-
-    if (totalOutstanding === 0) {
-      return await dM(dispatchTarget, `TITAN OS | AR LOOKUP: FLEET AGING REPORT\n\n💰 *Total Outstanding:* $0.00\n──────────────────────────────\nAll accounts are fully paid. Zero open invoices in QuickBooks.`);
-    }
-
-    return await dM(dispatchTarget, `TITAN OS | AR LOOKUP: FLEET AGING REPORT\n\n💰 *Total Outstanding:* $${totalOutstanding.toFixed(2)}\n──────────────────────────────\nFound ${invoices.length} open invoice(s) in the ledger.`);
-
+    const report = await getAgingReport(config, minDaysPastDue, clientFilter);
+    return await dM(dispatchTarget, report);
   } catch (error) {
     console.error('[CRITICAL] Headless Finance AR Exception:', error.message);
     return await dM(dispatchTarget, `⚠️ AR Ledger offline: ${error.message}`);
@@ -381,7 +466,7 @@ async function handleARLookup(config, dispatchTarget, dM, callerIdentity = null)
 
 async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMessage, callerIdentity = null, airtableWriteWithAutoDrop = null) {
   if (!batch || batch.items.length === 0) return;
-  
+
   await sendWhatsAppMessage(dispatchTarget, "⏳ Analyzing receipt data...");
   const submitterName = callerIdentity?.name || 'Field Tech';
   const workerRecord = callerIdentity?.workerRecord;
@@ -397,8 +482,8 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
 
   const payload = {
     contents: [{ role: 'user', parts }],
-    generationConfig: { 
-      temperature: 0.0, 
+    generationConfig: {
+      temperature: 0.0,
       responseMimeType: 'application/json',
       responseSchema: {
         type: "object",
@@ -425,7 +510,7 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
     const data = await res.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     const extracted = JSON.parse(rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-    
+
     const vendorName = extracted.vendor || 'Unknown Vendor';
     const totalAmount = parseFloat(extracted.total_amount) || 0.00;
     const categoryName = extracted.category || 'Supplies';
@@ -440,11 +525,12 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
 
       if (workerRecord?.id) airtablePayload['Worker'] = [workerRecord.id];
       const reportRec = await airtableWriteWithAutoDrop('Reports 2', airtablePayload);
-      if (reportRec?.id) expenseRef = reportRec.id.slice(-4).toUpperCase();
+      if (reportRec?.record?.id) expenseRef = reportRec.record.id.slice(-4).toUpperCase();
+      else if (reportRec?.id) expenseRef = reportRec.id.slice(-4).toUpperCase();
     }
 
     let qboStatusText = "Dispatched to QuickBooks";
-    if (config.qbo.companyId && config.qbo.accessToken) {
+    if (config.qbo.companyId && (config.qbo.accessToken || config.qbo.refreshToken)) {
       try {
         const paymentAccount = await resolveQboPaymentAccount(config);
         const expenseAccount = await resolveQboExpenseAccount(config);
@@ -463,7 +549,10 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
             }
           }]
         };
-        await qboApiRequest(config, '/purchase', 'POST', purchasePayload);
+        const purchaseRes = await qboApiRequest(config, '/purchase', 'POST', purchasePayload);
+        if (!purchaseRes || purchaseRes.__authError) {
+          qboStatusText = "Dispatched to Ghost Ledger (QBO Pending)";
+        }
       } catch (qboErr) {
         console.warn('[QBO Expense Sync] Push warning:', qboErr.message);
         qboStatusText = "Dispatched to Ghost Ledger (QBO Pending)";
@@ -473,14 +562,14 @@ async function handleReceiptUpload(config, batch, dispatchTarget, sendWhatsAppMe
     const card = `🧾 *TITAN OS | EXPENSE RECEIPT LOGGED*\n` +
                  `──────────────────────────────\n` +
                  `👤 *Submitted By:* ${submitterName}\n` +
-                 `💰 *Total Amount:* $${totalAmount.toFixed(2)} USD\n` +
+                 `💰 *Total Amount:* $${totalAmount.toFixed(2)} CAD\n` +
                  `📸 *Receipt Count:* ${batch.items.length} photo(s)\n` +
                  `──────────────────────────────\n` +
                  `📋 *Merchant Breakdown:*\n` +
                  `• *${vendorName}:* $${totalAmount.toFixed(2)} (${categoryName})\n` +
                  `──────────────────────────────\n` +
                  `🧾 *Expense Ref:* #${expenseRef} (${qboStatusText})`;
-                 
+
     await sendWhatsAppMessage(dispatchTarget, card);
   } catch (e) {
     console.error("[Receipt Engine Error]", e);
@@ -597,6 +686,8 @@ JSON SCHEMA:
     };
 
     const qboRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
+    if (metrics && metrics.incrementMetric) metrics.incrementMetric('estimates_generated');
+
     const estimateDocNumber = qboRes?.Estimate?.DocNumber || estDocNum;
     const totalFormatted = changeOrder.total_amount.toFixed(2);
     const finalTotal = qboRes?.Estimate?.TotalAmt || totalFormatted;
@@ -638,10 +729,10 @@ JSON SCHEMA:
 async function findOrCreateQboCustomer(config, clientName, email = null, phone = null, address = null) {
   if (!clientName) return null;
   const cleanName = clientName.trim().replace(/'/g, "\\'");
-  
+
   const query = `select * from Customer where DisplayName LIKE '%${cleanName}%' and Active in (true, false) MAXRESULTS 1`;
   const qboData = await qboApiRequest(config, query);
-  
+
   const billAddrPayload = address ? {
     Line1: typeof address === 'string' ? address : (address.line1 || address.street || ''),
     City: typeof address === 'object' ? (address.city || 'Aurora') : 'Aurora',
@@ -674,26 +765,26 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
       await qboApiRequest(config, '/customer', 'POST', patchPayload);
     }
 
-    return { 
-      value: existing.Id, 
+    return {
+      value: existing.Id,
       name: existing.DisplayName,
       email: existing.PrimaryEmailAddr?.Address || email
     };
   }
-  
-  const payload = { 
+
+  const payload = {
     DisplayName: clientName.trim(),
     PrintOnCheckName: clientName.trim()
   };
-  
+
   if (email) payload.PrimaryEmailAddr = { Address: email.trim().toLowerCase() };
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone.replace(/[^\d+]/g, '') };
   if (billAddrPayload) payload.BillAddr = billAddrPayload;
-  
+
   const createRes = await qboApiRequest(config, '/customer', 'POST', payload);
   if (createRes?.Customer) {
-    return { 
-      value: createRes.Customer.Id, 
+    return {
+      value: createRes.Customer.Id,
       name: createRes.Customer.DisplayName,
       email: createRes.Customer.PrimaryEmailAddr?.Address || email
     };
@@ -703,8 +794,8 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
   payload.DisplayName = fallbackName;
   const fallbackRes = await qboApiRequest(config, '/customer', 'POST', payload);
   if (fallbackRes?.Customer) {
-    return { 
-      value: fallbackRes.Customer.Id, 
+    return {
+      value: fallbackRes.Customer.Id,
       name: fallbackRes.Customer.DisplayName,
       email: fallbackRes.Customer.PrimaryEmailAddr?.Address || email
     };
@@ -719,7 +810,7 @@ async function findOrCreateQboCustomer(config, clientName, email = null, phone =
 
 async function expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs) {
   const parts = [];
-  
+
   if (oracleFileURIs && oracleFileURIs.length > 0) {
     oracleFileURIs.forEach(item => {
       parts.push({ file_data: { mime_type: 'application/pdf', file_uri: item.uri } });
@@ -782,7 +873,7 @@ OUTPUT STRICTLY JSON:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    
+
     if (!res.ok) throw new Error(`Gemini RAG failed: ${res.status}`);
     const data = await res.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -804,12 +895,12 @@ OUTPUT STRICTLY JSON:
 
 async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage, sendWhatsAppButtons) {
   await sendWhatsAppMessage(dispatchTarget, "⏳ Deconstructing multi-line scope against architectural blueprints & tax engine...");
-  
+
   const rawInput = nlp.transcript_en || nlp.qbo_line_items || '';
   const fallbackAmount = nlp.qbo_amount || 70000;
 
   const compiled = await expandLineItemsWithOracle(config, rawInput, fallbackAmount, oracleFileURIs);
-  
+
   if (!compiled) {
     return await sendWhatsAppMessage(dispatchTarget, `⚠️ Failed to parse structural scope from audio. Please try dictating the estimate details again.`);
   }
@@ -837,9 +928,9 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
       Amount: item.amount,
       DetailType: "SalesItemLineDetail",
       Description: item.description,
-      SalesItemLineDetail: { 
-        Qty: item.quantity || 1, 
-        UnitPrice: item.unit_price !== undefined ? item.unit_price : item.amount, 
+      SalesItemLineDetail: {
+        Qty: item.quantity || 1,
+        UnitPrice: item.unit_price !== undefined ? item.unit_price : item.amount,
         ItemRef: { value: String(itemRef.value) },
         TaxCodeRef: { value: String(item.taxable ? hstTaxRef.value : exemptTaxRef.value) }
       }
@@ -884,14 +975,16 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
   }
 
   const createRes = await qboApiRequest(config, '/estimate', 'POST', estPayload);
-  
+
   if (createRes && createRes.Estimate) {
+    if (metrics && metrics.incrementMetric) metrics.incrementMetric('estimates_generated');
+
     const est = createRes.Estimate;
     const estDocNumber = est.DocNumber || est.Id || nextEstimateNum;
     const finalTotal = est.TotalAmt ? parseFloat(est.TotalAmt).toFixed(2) : (computedSubtotal * 1.13).toFixed(2);
     const taxAmt = (parseFloat(finalTotal) - computedSubtotal).toFixed(2);
 
-    const lineBreakdown = compiled.line_items.map(li => 
+    const lineBreakdown = compiled.line_items.map(li =>
       `• *${li.category}:* $${li.amount.toFixed(2)} ${li.taxable ? '(+HST)' : '(Exempt)'}\n${li.description}`
     ).join('\n\n');
 
@@ -928,7 +1021,7 @@ async function handleEstimateCreation(config, nlp, dispatchTarget, oracleFileURI
 
 async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs, sendWhatsAppMessage, sendWhatsAppButtons) {
   await sendWhatsAppMessage(dispatchTarget, "⏳ Generating formal multi-line invoice...");
-  
+
   const rawInput = nlp.transcript_en || nlp.qbo_line_items || '';
   const fallbackAmount = nlp.qbo_amount || 70000;
 
@@ -961,9 +1054,9 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
       Amount: item.amount,
       DetailType: "SalesItemLineDetail",
       Description: item.description,
-      SalesItemLineDetail: { 
-        Qty: item.quantity || 1, 
-        UnitPrice: item.unit_price !== undefined ? item.unit_price : item.amount, 
+      SalesItemLineDetail: {
+        Qty: item.quantity || 1,
+        UnitPrice: item.unit_price !== undefined ? item.unit_price : item.amount,
         ItemRef: { value: String(itemRef.value) },
         TaxCodeRef: { value: String(item.taxable ? hstTaxRef.value : exemptTaxRef.value) }
       }
@@ -982,7 +1075,7 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   if (hstTaxRef && hstTaxRef.value) {
     invoicePayload.TxnTaxDetail = {
       TxnTaxCodeRef: { value: String(hstTaxRef.value) }
-    }
+    };
   }
 
   if (customerRef.email) {
@@ -1005,8 +1098,10 @@ async function handleInvoiceCreation(config, nlp, dispatchTarget, oracleFileURIs
   }
 
   const createRes = await qboApiRequest(config, '/invoice', 'POST', invoicePayload);
-  
+
   if (createRes && createRes.Invoice) {
+    if (metrics && metrics.incrementMetric) metrics.incrementMetric('invoices_generated');
+
     const inv = createRes.Invoice;
     const invDocNumber = inv.DocNumber || inv.Id || 'Issued';
     const finalTotal = inv.TotalAmt ? parseFloat(inv.TotalAmt).toFixed(2) : computedSubtotal.toFixed(2);
@@ -1044,8 +1139,8 @@ async function handleInvoiceApproval(config, nlp, dispatchTarget, sendWhatsAppMe
     return await sendWhatsAppMessage(dispatchTarget, `⚠️ Please specify the estimate number or client name (e.g., "Convert Burke to 50% invoice").`);
   }
 
-  let estQuery = estimateNum 
-    ? `select * from Estimate where DocNumber = '${estimateNum}'` 
+  let estQuery = estimateNum
+    ? `select * from Estimate where DocNumber = '${estimateNum}'`
     : `select * from Estimate where CustomerRef.name LIKE '%${customerNameTarget.replace(/'/g, "\\'")}%' and TxnStatus='Pending' MAXRESULTS 1`;
 
   const qboData = await qboApiRequest(config, estQuery);
@@ -1073,13 +1168,14 @@ async function handleInvoiceApproval(config, nlp, dispatchTarget, sendWhatsAppMe
 }
 
 async function sendQboTransactionEmail(config, txnType, txnId, targetEmail = null) {
-  const endpoint = targetEmail 
+  const endpoint = targetEmail
     ? `/${txnType}/${txnId}/send?sendTo=${encodeURIComponent(targetEmail)}`
     : `/${txnType}/${txnId}/send`;
   return await qboApiRequest(config, endpoint, 'POST');
 }
 
 module.exports = {
+  syncQboCredentialsFromSupabase,
   refreshQboToken,
   qboApiRequest,
   findOrCreateQboCustomer,
