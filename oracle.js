@@ -1,16 +1,47 @@
 /**
- * TITAN OS V6.0.22 — TECHNICAL ORACLE RAG ENGINE
+ * TITAN OS V6.0.34 — TECHNICAL ORACLE RAG ENGINE
  * Module: oracle.js
- * Purpose: Gemini File API Ingestion, Caching, Clickable Blueprint Delivery,
- *          Defensive 48-Hour TTL Auto-Resync, and Engineering Forensics
+ * Purpose: Gemini File API Ingestion, Single-Flight RAM Caching, Clickable
+ *          Blueprint Delivery, Defensive 48-Hour TTL Auto-Resync, and
+ *          Grounded Engineering Forensics
  */
 
 const fetch = globalThis.fetch || require('node-fetch');
 
-// Module-level RAM Cache
+let metrics;
+try {
+  metrics = require('./metrics');
+} catch (e) {
+  metrics = null;
+}
+
+// Module-level RAM Cache & Single-Flight Lock
 let activeOracleURIs = [];
 let lastSyncTimestamp = 0;
+let syncInFlight = null;
 const RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24-hour proactive rotation
+
+// ====================================================================
+// 0. RESILIENT NETWORK TRANSPORT
+// ====================================================================
+
+async function fetchWithExponentialBackoff(url, options = {}, retries = 2) {
+  const safeUrl = String(url).split('?')[0];
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) return res;
+      if (attempt === retries) return res;
+      throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      if (attempt === retries) throw err;
+      const delay = 1000 * Math.pow(2, attempt);
+      console.warn(`[Oracle Network Retry] Attempt ${attempt + 1} failed for ${safeUrl}. Retrying in ${delay}ms...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
 
 // ====================================================================
 // 1. KNOWLEDGE BASE SYNCHRONIZATION (AIRTABLE -> GEMINI FILE API)
@@ -19,113 +50,149 @@ const RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24-hour proactive rotation
 /**
  * Synchronizes technical blueprints, hurricane stamps, and court specs
  * from Airtable "Oracle Docs" table into the Google Gemini File API.
- * 
+ * Uses a single-flight lock to prevent overlapping sync collisions.
+ *
  * @param {object} config - Master Titan OS CONFIG object
  * @param {function} [setOracleFileURIs] - Optional external state callback
  * @returns {Promise<Array>} - Active array of ingested Oracle file descriptors
  */
 async function syncOracleDocs(config, setOracleFileURIs = null) {
-  const apiKey = config?.airtable?.apiKey || process.env.AIRTABLE_API_KEY;
-  const baseId = config?.airtable?.baseId || process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP';
-  const endpoint = config?.airtable?.endpoint || 'https://api.airtable.com/v0';
-  const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    console.warn('[Oracle Engine] Missing Airtable API key. Sync aborted.');
-    return activeOracleURIs;
-  }
-  
-  if (!geminiApiKey) {
-    console.warn('[Oracle Engine] Missing Gemini API key. Sync aborted.');
-    return activeOracleURIs;
+  if (syncInFlight) {
+    console.log('[Oracle Engine] Sync already in progress. Awaiting active ingestion pass...');
+    const existingResult = await syncInFlight;
+    if (typeof setOracleFileURIs === 'function' && existingResult.length > 0) {
+      setOracleFileURIs(existingResult);
+    }
+    return existingResult;
   }
 
-  try {
-    console.log('[Oracle Engine] Commencing synchronization with Airtable Knowledge Base...');
-    const url = `${endpoint}/${baseId}/Oracle%20Docs?maxRecords=100`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${apiKey}` } });
-    
-    if (!res.ok) {
-      console.warn(`[Oracle Engine] Table "Oracle Docs" returned HTTP ${res.status}. Skipping.`);
+  syncInFlight = (async () => {
+    const apiKey = config?.airtable?.apiKey || process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN;
+    const baseId = config?.airtable?.baseId || process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP';
+    const endpoint = config?.airtable?.endpoint || 'https://api.airtable.com/v0';
+    const geminiApiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      console.warn('[Oracle Engine] Missing Airtable API key. Sync aborted.');
       return activeOracleURIs;
     }
-    
-    const data = await res.json();
-    const records = data.records || [];
-    const newUris = [];
-    
-    for (const rec of records) {
-      const attachments = rec.fields['Attachments'] || rec.fields['Attachment'] || rec.fields['Document'] || [];
-      const docTitle = rec.fields['Name'] || rec.fields['Title'] || 'Technical Document';
-      
-      if (!Array.isArray(attachments) || attachments.length === 0) continue;
 
-      for (const att of attachments) {
-        const downloadUrl = att.url;
-        const fileName = att.filename || 'manual.pdf';
+    if (!geminiApiKey) {
+      console.warn('[Oracle Engine] Missing Gemini API key. Sync aborted.');
+      return activeOracleURIs;
+    }
 
-        if (downloadUrl && (downloadUrl.toLowerCase().includes('.pdf') || fileName.toLowerCase().endsWith('.pdf'))) {
-          // Exponential backoff retry loop for external file ingestion
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-              const pdfRes = await fetch(downloadUrl);
-              if (!pdfRes.ok) {
-                console.warn(`[Oracle Engine] Failed to fetch PDF (${pdfRes.status}) for ${docTitle}`);
-                break;
-              }
-              const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
-              
-              // Raw streaming to Google Gemini File API
-              const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${geminiApiKey}`, {
-                method: 'POST',
-                headers: {
-                  'X-Goog-Upload-Protocol': 'raw',
-                  'X-Goog-Upload-Command': 'start, upload, finalize',
-                  'X-Goog-Upload-Header-Content-Length': String(pdfBuffer.length),
-                  'X-Goog-Upload-Header-Content-Type': 'application/pdf',
-                  'Content-Type': 'application/pdf'
-                },
-                body: pdfBuffer
-              });
-              
-              if (!uploadRes.ok) {
-                const errTxt = await uploadRes.text();
-                if (attempt === 3) console.error(`[Oracle Engine] Gemini File API upload error for ${docTitle}:`, errTxt);
-                continue;
-              }
+    try {
+      console.log('[Oracle Engine] Commencing synchronization with Airtable Knowledge Base...');
+      let records = [];
+      let offset = null;
 
-              const uploadData = await uploadRes.json();
-              if (uploadData.file && uploadData.file.uri) {
-                newUris.push({
-                  uri: uploadData.file.uri,
-                  title: docTitle,
-                  filename: fileName,
-                  downloadUrl: downloadUrl
+      do {
+        const offsetParam = offset ? `&offset=${encodeURIComponent(offset)}` : '';
+        const url = `${endpoint}/${baseId}/Oracle%20Docs?pageSize=100${offsetParam}`;
+        const res = await fetchWithExponentialBackoff(url, {
+          headers: { 'Authorization': `Bearer ${apiKey}` }
+        }, 2);
+
+        if (!res || !res.ok) {
+          console.warn(`[Oracle Engine] Table "Oracle Docs" returned HTTP ${res ? res.status : 'Network Error'}. Preserving existing cache.`);
+          return activeOracleURIs;
+        }
+
+        const data = await res.json();
+        if (Array.isArray(data.records)) {
+          records = records.concat(data.records);
+        }
+        offset = data.offset || null;
+      } while (offset);
+
+      const newUris = [];
+
+      for (const rec of records) {
+        const attachments = rec.fields['Attachments'] || rec.fields['Attachment'] || rec.fields['Document'] || [];
+        const docTitle = rec.fields['Name'] || rec.fields['Title'] || 'Technical Document';
+
+        if (!Array.isArray(attachments) || attachments.length === 0) continue;
+
+        for (const att of attachments) {
+          const downloadUrl = att.url;
+          const fileName = att.filename || 'manual.pdf';
+          const mimeType = String(att.type || '').toLowerCase();
+          const isPdf = mimeType === 'application/pdf' ||
+                        (downloadUrl && downloadUrl.toLowerCase().includes('.pdf')) ||
+                        fileName.toLowerCase().endsWith('.pdf');
+
+          if (downloadUrl && isPdf) {
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                const pdfRes = await fetch(downloadUrl);
+                if (!pdfRes.ok) {
+                  console.warn(`[Oracle Engine] Failed to fetch PDF (${pdfRes.status}) for ${docTitle}`);
+                  break;
+                }
+                const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
+
+                const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${geminiApiKey}`, {
+                  method: 'POST',
+                  headers: {
+                    'X-Goog-Upload-Protocol': 'raw',
+                    'X-Goog-Upload-Command': 'start, upload, finalize',
+                    'X-Goog-Upload-Header-Content-Length': String(pdfBuffer.length),
+                    'X-Goog-Upload-Header-Content-Type': 'application/pdf',
+                    'Content-Type': 'application/pdf'
+                  },
+                  body: pdfBuffer
                 });
-                console.log(`[Oracle Engine] Successfully ingested: "${docTitle}" (${fileName})`);
-                break; // Success, break the retry loop
+
+                if (!uploadRes.ok) {
+                  const errTxt = await uploadRes.text();
+                  if (attempt === 3) console.error(`[Oracle Engine] Gemini File API upload error for ${docTitle}:`, errTxt);
+                  await new Promise(r => setTimeout(r, 1000 * attempt));
+                  continue;
+                }
+
+                const uploadData = await uploadRes.json();
+                if (uploadData.file && uploadData.file.uri) {
+                  newUris.push({
+                    uri: uploadData.file.uri,
+                    title: docTitle,
+                    filename: fileName,
+                    downloadUrl: downloadUrl
+                  });
+                  console.log(`[Oracle Engine] Successfully ingested: "${docTitle}" (${fileName})`);
+                  break;
+                }
+              } catch (fetchErr) {
+                if (attempt === 3) console.error(`[Oracle Engine] Exception streaming ${docTitle}:`, fetchErr.message);
+                await new Promise(r => setTimeout(r, 1000 * attempt));
               }
-            } catch (fetchErr) {
-              if (attempt === 3) console.error(`[Oracle Engine] Exception streaming ${docTitle}:`, fetchErr.message);
-              await new Promise(r => setTimeout(r, 1000 * attempt));
             }
           }
         }
       }
+
+      if (newUris.length > 0) {
+        activeOracleURIs = newUris;
+        lastSyncTimestamp = Date.now();
+        if (typeof setOracleFileURIs === 'function') {
+          setOracleFileURIs(newUris);
+        }
+      } else {
+        console.warn('[Oracle Engine] Sync returned 0 ingested files; retaining previous active RAM cache.');
+      }
+
+      console.log(`[Oracle Engine] Sync complete. ${activeOracleURIs.length} technical documents active in AI memory.`);
+      return activeOracleURIs;
+    } catch (e) {
+      console.error('[Oracle Engine] Sync failed:', e.message);
+      return activeOracleURIs;
     }
+  })();
 
-    activeOracleURIs = newUris;
-    lastSyncTimestamp = Date.now();
-
-    if (typeof setOracleFileURIs === 'function') {
-      setOracleFileURIs(newUris);
-    }
-
-    console.log(`[Oracle Engine] Sync complete. ${activeOracleURIs.length} technical documents active in AI memory.`);
-    return activeOracleURIs;
-  } catch (e) {
-    console.error('[Oracle Engine] Sync failed:', e.message);
-    return activeOracleURIs;
+  try {
+    return await syncInFlight;
+  } finally {
+    syncInFlight = null;
   }
 }
 
@@ -143,7 +210,7 @@ function getOracleFileURIs() {
 /**
  * Grounded Engineering RAG Lookup for Field Technicians & PMs
  * Supports direct PDF link dispatching, generative answers, and auto-resync on TTL expiry.
- * 
+ *
  * @param {object} config - Master CONFIG object
  * @param {object|string} nlp - Triage NLP object or raw string query
  * @param {string} dispatchTarget - E.164 phone number
@@ -152,18 +219,21 @@ function getOracleFileURIs() {
  * @param {boolean} [isRetry=false] - Retry guard for 48h TTL expiration
  */
 async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = null, sendWhatsAppMessage, isRetry = false) {
-  let fileList = (oracleFileURIs && oracleFileURIs.length > 0) ? oracleFileURIs : activeOracleURIs;
+  let fileList = (Array.isArray(oracleFileURIs) && oracleFileURIs.length > 0)
+    ? oracleFileURIs
+    : activeOracleURIs;
 
-  // Autonomous Defensive Catch - If memory is empty, force a synchronous refresh before answering.
-  if (!fileList || fileList.length === 0) {
-    console.log('[Oracle Engine] Memory empty on inbound query. Triggering emergency knowledge sync...');
+  const isStale = lastSyncTimestamp > 0 && (Date.now() - lastSyncTimestamp > RESYNC_INTERVAL_MS);
+
+  if (!fileList || fileList.length === 0 || isStale) {
+    console.log('[Oracle Engine] Memory empty or stale on inbound query. Synchronizing knowledge base...');
     await sendWhatsAppMessage(dispatchTarget, "⏳ Initializing Technical Oracle blueprints. One moment...");
     fileList = await syncOracleDocs(config);
   }
 
   if (!fileList || fileList.length === 0) {
     return await sendWhatsAppMessage(
-      dispatchTarget, 
+      dispatchTarget,
       `⚠️ *TITAN OS | TECHNICAL ORACLE*\n──────────────────────────────\nThe Oracle is currently offline or synchronizing.\n\nPlease upload engineering PDFs into the *Attachments* column of the "Oracle Docs" Airtable table.`
     );
   }
@@ -181,16 +251,17 @@ async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = n
   const lQuery = userQuery.toLowerCase();
 
   const isDirectDocRequest = /send|get|download|pdf|blueprint|drawing|plan|brochure|specs/i.test(lQuery) &&
-                             !/how|why|what|calculate|torque|psi|concrete|cure/i.test(lQuery);
+                             !/how|why|what|calculate|torque|psi|concrete|cure|dimension|wind|glass|bolt/i.test(lQuery);
 
   if (isDirectDocRequest) {
-    const matchedDoc = fileList.find(d => 
-      lQuery.includes(d.title.toLowerCase()) || 
+    const matchedDoc = fileList.find(d =>
+      lQuery.includes(d.title.toLowerCase()) ||
       d.title.toLowerCase().includes(lQuery) ||
       (d.filename && lQuery.includes(d.filename.toLowerCase()))
     );
 
     if (matchedDoc && matchedDoc.downloadUrl) {
+      if (metrics && metrics.incrementMetric) metrics.incrementMetric('oracle_queries');
       const docCard = `📐 *TITAN OS | TECHNICAL BLUEPRINT*\n` +
                       `──────────────────────────────\n` +
                       `📄 *Document:* ${matchedDoc.title}\n` +
@@ -203,11 +274,11 @@ async function handleOracleQuery(config, nlp, dispatchTarget, oracleFileURIs = n
     }
   }
 
-  const parts = fileList.map(item => ({ 
-    file_data: { 
-      mime_type: 'application/pdf', 
-      file_uri: item.uri 
-    } 
+  const parts = fileList.map(item => ({
+    file_data: {
+      mime_type: 'application/pdf',
+      file_uri: item.uri
+    }
   }));
 
   const prompt = `You are the Lead Structural Engineer and Master Oracle for Bounce Padel courts worldwide.
@@ -226,8 +297,8 @@ Question: "${userQuery}"`;
 
   const payload = {
     contents: [{ role: 'user', parts }],
-    generationConfig: { 
-      temperature: 0.0 
+    generationConfig: {
+      temperature: 0.0
     }
   };
 
@@ -235,33 +306,35 @@ Question: "${userQuery}"`;
   const apiKey = config?.gemini?.apiKey || process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
-      console.warn('[Oracle Engine] Missing Gemini API key for querying.');
-      return await sendWhatsAppMessage(dispatchTarget, `⚠️ Technical Oracle query failed: API configuration missing.`);
+    console.warn('[Oracle Engine] Missing Gemini API key for querying.');
+    return await sendWhatsAppMessage(dispatchTarget, `⚠️ Technical Oracle query failed: API configuration missing.`);
   }
 
   try {
-    const res = await fetch(`${endpoint}?key=${apiKey}`, {
+    const res = await fetchWithExponentialBackoff(`${endpoint}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    });
+    }, 2);
 
-    if (!res.ok) {
-      const errTxt = await res.text();
+    if (!res || !res.ok) {
+      const errTxt = res ? await res.text() : 'Network timeout';
 
       // Autonomous 48-Hour TTL Self-Healing Guard
-      const isExpiredFile = res.status === 400 && (errTxt.includes('File') || errTxt.includes('expired') || errTxt.includes('not found'));
+      const isExpiredFile = res && res.status === 400 && (errTxt.includes('File') || errTxt.includes('expired') || errTxt.includes('not found'));
       if (isExpiredFile && !isRetry) {
         console.warn('[Oracle Engine] ⚠️ Detected expired Gemini File API URIs (48h TTL limit). Resyncing automatically...');
         const refreshedList = await syncOracleDocs(config);
         return await handleOracleQuery(config, nlp, dispatchTarget, refreshedList, sendWhatsAppMessage, true);
       }
 
-      throw new Error(`Gemini API HTTP ${res.status}: ${errTxt}`);
+      throw new Error(`Gemini API HTTP ${res ? res.status : 'Timeout'}: ${errTxt}`);
     }
 
     const data = await res.json();
     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'The Oracle could not parse a valid technical answer.';
+
+    if (metrics && metrics.incrementMetric) metrics.incrementMetric('oracle_queries');
 
     const docCitations = fileList.map(d => {
       const linkStr = d.downloadUrl ? `\n  👉 Download: ${d.downloadUrl}` : '';
