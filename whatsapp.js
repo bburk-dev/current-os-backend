@@ -1,12 +1,19 @@
 /**
- * TITAN OS V6.0.33 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+ * TITAN OS V6.0.34 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
  * Purpose: Webhooks, Debouncing, NLP Intent Routing, 9-Gate Forensic Vision,
- *          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
- *          and Executive UI Formatting
+ *          Supabase Private Vault Storage, Dual-Engine Geocoding, BOM Triggers,
+ *          Semantic Email Triage, and Executive UI Formatting
  */
 
 const crypto = require('crypto');
+
+let metrics;
+try {
+  metrics = require('./metrics');
+} catch (e) {
+  metrics = null;
+}
 
 // ====================================================================
 // 0. GLOBAL UTILITIES (EXPONENTIAL BACKOFF)
@@ -175,14 +182,14 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
 
 async function fanOutToSubscribers(config, phoneNumbersData, messageBody, buttons = []) {
   if (!phoneNumbersData) return;
-  
+
   let rawNumbers = [];
   if (Array.isArray(phoneNumbersData)) {
-      rawNumbers = phoneNumbersData;
+    rawNumbers = phoneNumbersData;
   } else if (typeof phoneNumbersData === 'string') {
-      rawNumbers = phoneNumbersData.split(',');
+    rawNumbers = phoneNumbersData.split(',');
   } else {
-      return;
+    return;
   }
 
   const cleanNumbers = rawNumbers.map(n => {
@@ -192,10 +199,10 @@ async function fanOutToSubscribers(config, phoneNumbersData, messageBody, button
   }).filter(n => n.length >= 10);
 
   const uniqueTargets = [...new Set(cleanNumbers)];
-  
-  if(uniqueTargets.length === 0) {
-      console.log(`[Joy Cannon] No valid E164 subscriber numbers found.`);
-      return;
+
+  if (uniqueTargets.length === 0) {
+    console.log(`[Joy Cannon] No valid E164 subscriber numbers found.`);
+    return;
   }
 
   console.log(`[Joy Cannon] Broadcasting to ${uniqueTargets.length} subscribers...`);
@@ -228,7 +235,7 @@ async function geocodeAddressWithGoogle(config, addressString) {
   try {
     const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
     const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${apiKey}`;
-    const res = await fetchWithExponentialBackoff(url, {}, 2);
+    const res = await fetchWithExponentialBackoff(url, {}, 1);
     if (!res || !res.ok) return null;
     const data = await res.json();
 
@@ -236,10 +243,53 @@ async function geocodeAddressWithGoogle(config, addressString) {
       const loc = data.results[0].geometry.location;
       return { lat: loc.lat, lon: loc.lng, formattedAddress: data.results[0].formatted_address };
     }
+    if (data.status && data.status !== 'ZERO_RESULTS') {
+      console.warn(`[Google Geocoder] Returned status "${data.status}": ${data.error_message || ''}`);
+    }
     return null;
   } catch (err) {
     return null;
   }
+}
+
+async function geocodeAddressWithNominatim(addressString) {
+  if (!addressString) return null;
+  const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
+  if (cleanAddress.length < 4) return null;
+
+  const candidates = [cleanAddress];
+  if (!/\b(canada|usa|united states|ontario|on|quebec|qc|bc|ab|ny|fl|tx|ca)\b/i.test(cleanAddress)) {
+    candidates.push(`${cleanAddress}, Ontario, Canada`);
+  }
+
+  for (const query of candidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'TitanOS-BouncePadel-ERP/6.0.34',
+          'Accept': 'application/json'
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      if (!res.ok) continue;
+      const results = await res.json();
+      if (Array.isArray(results) && results.length > 0) {
+        const lat = parseFloat(results[0].lat);
+        const lon = parseFloat(results[0].lon);
+        if (!isNaN(lat) && !isNaN(lon)) {
+          return { lat, lon, formattedAddress: results[0].display_name };
+        }
+      }
+    } catch (err) {
+      clearTimeout(timer);
+    }
+  }
+  return null;
 }
 
 function getGoogleMapsLinks(lat, lon) {
@@ -366,7 +416,17 @@ function parseCoordinatePair(rawVal) {
     .replace(/[\u2212\u2013\u2014]/g, '-')
     .trim();
 
-  const match = cleaned.match(/(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)/);
+  // Extract coordinates from Google Maps URLs (@44.0024,-79.4630 or ?q=44.0024,-79.4630 or destination=...)
+  const urlMatch = cleaned.match(/(?:@|[?&](?:q|query|ll|center|destination)=)(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/i);
+  if (urlMatch) {
+    const lat = parseFloat(urlMatch[1]);
+    const lon = parseFloat(urlMatch[2]);
+    if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      return { lat, lon };
+    }
+  }
+
+  const match = cleaned.match(/(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/);
   if (match) {
     const lat = parseFloat(match[1]);
     const lon = parseFloat(match[2]);
@@ -381,26 +441,60 @@ function parseCoordinatePair(rawVal) {
 async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtableWriteWithAutoDrop, autoPersistSiteId = null) {
   let rawValue = rawLocationOrSite;
   let siteId = autoPersistSiteId;
+  let hasExistingSiteLocationCoords = false;
 
   if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
     const fields = rawLocationOrSite.fields || rawLocationOrSite;
     siteId = rawLocationOrSite.id || autoPersistSiteId;
 
-    // DYNAMIC COLUMN SWEEP: Check multiple potential Airtable columns for location data
-    const locationKeys = ['site location', 'location', 'address', 'street address', 'coordinates'];
-    const foundKey = Object.keys(fields).find(k => locationKeys.includes(k.trim().toLowerCase()) && fields[k]);
-    
-    rawValue = foundKey ? fields[foundKey] : undefined;
-
-    const directCoords = parseCoordinatePair(rawValue);
-    if (directCoords) return directCoords;
+    if (siteId && memoryCache?.coordinates?.has(siteId)) {
+      return memoryCache.coordinates.get(siteId);
+    }
 
     const explicitLat = fields['Latitude'] ?? fields['Lat'];
     const explicitLon = fields['Longitude'] ?? fields['Lon'] ?? fields['Lng'];
     if (explicitLat !== undefined && explicitLon !== undefined && explicitLat !== '' && explicitLon !== '') {
       const lat = parseFloat(explicitLat);
       const lon = parseFloat(explicitLon);
-      if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
+      if (!isNaN(lat) && !isNaN(lon)) {
+        const coords = { lat, lon };
+        if (siteId) memoryCache?.coordinates?.set(siteId, coords);
+        return coords;
+      }
+    }
+
+    // Check every candidate field for direct coordinate pairs first
+    const candidateKeys = ['site location', 'coordinates', 'location', 'map link', 'google maps', 'address', 'street address'];
+    for (const key of Object.keys(fields)) {
+      if (candidateKeys.includes(key.trim().toLowerCase()) && fields[key]) {
+        const directCoords = parseCoordinatePair(fields[key]);
+        if (directCoords) {
+          if (key.trim().toLowerCase() === 'site location') hasExistingSiteLocationCoords = true;
+          if (siteId) memoryCache?.coordinates?.set(siteId, directCoords);
+          return directCoords;
+        }
+      }
+    }
+
+    // Build best full-text address from available Airtable fields
+    const primaryAddrKey = Object.keys(fields).find(k =>
+      ['site location', 'address', 'street address', 'location'].includes(k.trim().toLowerCase()) && fields[k]
+    );
+    const baseAddr = primaryAddrKey
+      ? (Array.isArray(fields[primaryAddrKey]) ? String(fields[primaryAddrKey][0] || '') : String(fields[primaryAddrKey]))
+      : '';
+
+    const city = fields['City'] || '';
+    const province = fields['Province'] || fields['State'] || '';
+    const postal = fields['Postal Code'] || fields['Zip'] || '';
+    const extraParts = [city, province, postal].map(v => String(v || '').trim()).filter(Boolean);
+
+    if (baseAddr.trim()) {
+      rawValue = extraParts.length > 0 && !baseAddr.toLowerCase().includes(String(city).toLowerCase())
+        ? `${baseAddr.trim()}, ${extraParts.join(', ')}`
+        : baseAddr.trim();
+    } else if (extraParts.length > 0) {
+      rawValue = extraParts.join(', ');
     }
   } else {
     const directCoords = parseCoordinatePair(rawValue);
@@ -408,18 +502,25 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
   }
 
   const addressStr = Array.isArray(rawValue) ? String(rawValue[0] || '').trim() : String(rawValue || '').trim();
-  if (addressStr.length > 5 && addressStr !== '[object Object]') {
+  if (addressStr.length > 4 && addressStr !== '[object Object]') {
     if (memoryCache?.coordinates?.has(addressStr)) {
-      return memoryCache.coordinates.get(addressStr);
+      const cached = memoryCache.coordinates.get(addressStr);
+      if (siteId) memoryCache?.coordinates?.set(siteId, cached);
+      return cached;
     }
 
-    const googleResult = await geocodeAddressWithGoogle(config, addressStr);
-    if (googleResult) {
-      const coords = { lat: googleResult.lat, lon: googleResult.lon };
+    let geoResult = await geocodeAddressWithGoogle(config, addressStr);
+    if (!geoResult) {
+      geoResult = await geocodeAddressWithNominatim(addressStr);
+    }
+
+    if (geoResult) {
+      const coords = { lat: geoResult.lat, lon: geoResult.lon };
       memoryCache?.coordinates?.set(addressStr, coords);
-      if (siteId && airtableWriteWithAutoDrop) {
-        const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
-        // Additive Ingestion: Only patch the 'Site location' if we successfully geocoded it, preserving the text address
+      if (siteId) memoryCache?.coordinates?.set(siteId, coords);
+
+      if (siteId && airtableWriteWithAutoDrop && !hasExistingSiteLocationCoords) {
+        const coordString = `${geoResult.lat.toFixed(6)}, ${geoResult.lon.toFixed(6)}`;
         airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
       }
       return coords;
@@ -501,17 +602,18 @@ Input: "${typeof rawInput === 'string' ? rawInput : 'Spoken Voice Memo'}"
 
 Respond STRICTLY with JSON:
 {
-  "intent": "CREATE_ESTIMATE|CONVERT_ESTIMATE|CREATE_INVOICE|CHANGE_ORDER|AR_LOOKUP|ORACLE_QUERY|INVENTORY_QUERY|INVENTORY_UPDATE|EQUIPMENT_QUERY|EQUIPMENT_UPDATE|READINESS_QUERY|NAVIGATION_QUERY|DYNAMIC_SITE_UPDATE|LOGISTICS_DISPATCH|LEDGER_QUERY|UNKNOWN",
-  "referenced_site_name": "string (extract the site name if mentioned)",
+  "intent": "CREATE_ESTIMATE|CONVERT_ESTIMATE|CREATE_INVOICE|CHANGE_ORDER|AR_LOOKUP|ORACLE_QUERY|INVENTORY_QUERY|INVENTORY_UPDATE|EQUIPMENT_QUERY|EQUIPMENT_UPDATE|READINESS_QUERY|NAVIGATION_QUERY|COURT_SPECS_QUERY|DYNAMIC_SITE_UPDATE|LOGISTICS_DISPATCH|LEDGER_QUERY|UNKNOWN",
+  "referenced_site_name": "string (extract the site name or street address if mentioned)",
   "qbo_customer_name": "string (extract the client name if mentioned for finance)",
   "transcript_en": "string (the english translation of the text or audio)",
   "structured_payload": {"item": "string (for LOGISTICS_DISPATCH only: what is explicitly missing or needed in the field)"}
 }
 
 Rules:
-- If the user asks analytical questions about the database (e.g. "How many courts are scheduled?", "What is our capacity?"), classify as LEDGER_QUERY.
+- If the user asks about a specific site's court details, configuration, specifications, lights, turf color, steel color, glass, manufacturer, gate, status, or address (e.g., "Can I have the court details for 10 Highland Road", "Does Wise have lights?", "What turf does RCOR have?"), classify as COURT_SPECS_QUERY and extract the site name or street address into referenced_site_name.
+- If the user asks for directions, a map, pin, or address to drive to a site (e.g., "Can I have directions to Padel Park"), classify as NAVIGATION_QUERY.
+- If the user asks analytical questions across the fleet or database (e.g., "How many courts are scheduled?", "What is our capacity?"), classify as LEDGER_QUERY.
 - If the user states they are missing parts, need a delivery, or require materials brought to the site (e.g., "We need sand", "Missing entrance plates"), MUST classify as LOGISTICS_DISPATCH.
-- If the user asks a conversational or clarification question about a previous sweep (e.g., "anything else you see?", "this isn't maintenance"), classify as UNKNOWN to trigger conversational Q&A.
 - Only classify as READINESS_QUERY if they explicitly ask if a site is ready to mobilize or build.`;
 
   const contentParts = [{ text: intentPrompt }];
@@ -727,7 +829,6 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   }
 }
 
-// UI HELPER: Generates a 10-block progress bar based on percentage
 function generateProgressBar(percentage) {
   const totalBlocks = 10;
   const filledBlocks = Math.round((percentage / 100) * totalBlocks);
@@ -811,7 +912,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     const siteName = site.fields['Site Name'] || 'Active Court';
     const workflowMode = site.fields['Workflow Mode'] || 'INSTALLATION';
     const siteStatus = site.fields['Site Status'] || 'ACTIVE';
-    const hasLights = site.fields['Lights'] || 'Unknown';
+    const hasLights = site.fields['Lights'] || site.fields['Light'] || 'Unknown';
     const manufacturer = site.fields['Manufacturer'] || 'Bounce Padel';
 
     // Stage 1: Blind Visual Ground-Truth Verification (Cold Inspection)
@@ -839,18 +940,22 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
     const validLinks = signedUrls.filter(Boolean);
 
+    if (metrics && metrics.incrementMetric) {
+      metrics.incrementMetric('remote_audits_completed');
+    }
+
     // Enforce Gate 9 Non-Monotonic Cleanliness Guardrail and clamp to 1-9
     let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates].filter(g => g >= 1 && g <= 9) : [];
     if (audit.cleanliness_passed === false) {
       verifiedGates = verifiedGates.filter(g => g !== 9);
     }
     const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
-    
+
     // Core Structural Gates Required for a complete court
     const coreGates = [1, 2, 3, 4, 6, 7, 8];
     const hasAllCore = coreGates.every(g => verifiedGates.includes(g));
     const isInstallationComplete = workflowMode === 'INSTALLATION' && hasAllCore && audit.cleanliness_passed !== false;
-    
+
     const progressPercentage = (verifiedGates.length / 9) * 100;
     const progressBar = generateProgressBar(progressPercentage);
 
@@ -908,8 +1013,6 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     }
 
     // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + Joy Cannon)
-    
-    // FORMAT 1: INTERNAL FIELD PUNCH CARD
     const blockersBlock = (audit.blockers_detected && audit.blockers_detected.length > 0)
       ? `\n⚠️ *Pending Adjustments:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
       : '';
@@ -931,13 +1034,12 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 
     await sendWhatsAppMessage(config, dispatchTarget, punchCard);
 
-    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST
     const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
     if (subscriberPhones && workflowMode === 'INSTALLATION' && highestGate > 0) {
       const joyHeader = isInstallationComplete
         ? `🏆 *BOUNCE PADEL | COURT BUILD COMPLETE*`
         : `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`;
-      
+
       const joyMsg = `${joyHeader}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `🏟️ *Project:* ${siteName}\n` +
@@ -966,13 +1068,12 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
     };
 
     const senderEmails = extractEmails(emailPayload.from);
-    
+
     if (senderEmails.length === 0) {
       console.warn('[Email Handler] No valid sender emails extracted.');
       return;
     }
 
-    // 1. Resolve Sender Identity from Airtable Contacts to personalize the alert (if they exist)
     const contacts = await getCachedContacts();
     const knownNames = [];
 
@@ -987,11 +1088,8 @@ async function handleInboundEmail(config, emailPayload, getCachedContacts) {
       }
     });
 
-    // 2. Headless Routing: We route ALL inbound commercial inquiries strictly to the internal executive orchestrator (Bob Burk)
-    // This bypasses the old bug where new leads were dropped because they weren't in the Contacts table yet.
-    const targetPhones = [config.meta.targetVerifiedPhone]; 
+    const targetPhones = [config.meta.targetVerifiedPhone];
 
-    // 3. Semantic AI Gatekeeper (Temperature 0.0) — Filter out noise before buzzing WhatsApp
     const bodyText = String(emailPayload.text || emailPayload.html || '').substring(0, 4000);
     const triagePrompt = `You are the Commercial Triage Gatekeeper for Bounce Padel.
 Classify this inbound email and determine if it requires immediate executive attention on WhatsApp.
@@ -1071,7 +1169,6 @@ Return STRICTLY JSON:
                               `*Suggested Draft:*\n\n` +
                               `${(triage.draft_reply || '').trim()}`;
 
-    // Pass the sender's email inside the button payload for the Gmail dispatcher
     const buttons = [{ id: `DRAFT_REPLY_${senderEmails[0]}`, title: 'Draft Reply' }];
 
     for (const phone of targetPhones) {
