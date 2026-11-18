@@ -1,17 +1,17 @@
 /**
- * TITAN OS V6.0.37 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.38 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Rate-Limited
- *          Airtable Pacer & Linked-Record Resolver, QBO Finance Copilot,
- *          Atomic Message Deduplication, Conversational Voice Estimates,
- *          Full-Ledger Airtable Analytics, Court Configuration Inspector,
- *          Headless IoT Telemetry, RBAC Bouncer, Zero-UI Site Provisioning,
- *          Virtual Readiness, Executive Drafting Mode + Native Gmail Dispatch,
- *          and Field Intelligence.
+ * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
+ *          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
+ *          QBO Finance Copilot, Atomic Message Deduplication, Conversational
+ *          Voice Estimates, Full-Ledger Airtable Analytics, Court Configuration
+ *          Inspector, Headless IoT Telemetry, RBAC Bouncer, Zero-UI Site
+ *          Provisioning, Virtual Readiness, Executive Drafting Mode + Native
+ *          Gmail Dispatch, and Field Intelligence.
  */
 
 // ====================================================================
-// 0. GLOBAL POLYFILLS & ENVIRONMENT
+// 0. GLOBAL POLYFILLS & ENVIRONMENT SANITIZATION
 // ====================================================================
 if (typeof fetch === 'undefined') {
   try {
@@ -26,6 +26,21 @@ if (typeof fetch === 'undefined') {
 }
 
 try { require('dotenv').config(); } catch (e) {}
+
+function cleanEnv(val, fallback = '') {
+  if (val === undefined || val === null) return fallback;
+  return String(val).replace(/[\r\n\t]/g, '').trim() || fallback;
+}
+
+const SANITIZED_AIRTABLE_KEY = cleanEnv(process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN);
+const SANITIZED_AIRTABLE_BASE = cleanEnv(process.env.AIRTABLE_BASE_ID, 'apppNFEBAt2iQLVEP');
+if (SANITIZED_AIRTABLE_KEY) {
+  process.env.AIRTABLE_API_KEY = SANITIZED_AIRTABLE_KEY;
+  process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN = SANITIZED_AIRTABLE_KEY;
+}
+if (SANITIZED_AIRTABLE_BASE) {
+  process.env.AIRTABLE_BASE_ID = SANITIZED_AIRTABLE_BASE;
+}
 
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
@@ -49,46 +64,46 @@ const PORT = process.env.PORT || 3000;
 const CONFIG = {
   port: PORT,
   meta: {
-    verifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
-    accessToken: process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
-    appSecret: process.env.META_APP_SECRET,
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
-    wabaId: process.env.META_WABA_ID || process.env.WHATSAPP_WABA_ID || process.env.WABA_ID,
+    verifyToken: cleanEnv(process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN),
+    accessToken: cleanEnv(process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN),
+    appSecret: cleanEnv(process.env.META_APP_SECRET),
+    phoneNumberId: cleanEnv(process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID),
+    wabaId: cleanEnv(process.env.META_WABA_ID || process.env.WHATSAPP_WABA_ID || process.env.WABA_ID),
     targetVerifiedPhone: '14379287172',
     botPhoneNumber: '12892217329',
     graphApiUrl: 'https://graph.facebook.com/v21.0'
   },
   supabase: {
-    url: process.env.SUPABASE_URL,
-    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY,
-    bucket: process.env.STORAGE_BUCKET || process.env.SUPABASE_MEDIA_BUCKET || 'titan-private-media',
+    url: cleanEnv(process.env.SUPABASE_URL),
+    serviceRoleKey: cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY),
+    bucket: cleanEnv(process.env.STORAGE_BUCKET || process.env.SUPABASE_MEDIA_BUCKET, 'titan-private-media'),
     tableDarkMatter: 'dark_matter_vault'
   },
   gemini: {
-    apiKey: process.env.GEMINI_API_KEY,
+    apiKey: cleanEnv(process.env.GEMINI_API_KEY),
     model: 'gemini-2.5-pro',
     endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent'
   },
   airtable: {
-    apiKey: process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN,
-    baseId: process.env.AIRTABLE_BASE_ID || 'apppNFEBAt2iQLVEP',
+    apiKey: SANITIZED_AIRTABLE_KEY,
+    baseId: SANITIZED_AIRTABLE_BASE,
     endpoint: 'https://api.airtable.com/v0'
   },
   qbo: {
-    companyId: process.env.QBO_COMPANY_ID,
-    clientId: process.env.QBO_CLIENT_ID,
-    clientSecret: process.env.QBO_CLIENT_SECRET,
-    accessToken: process.env.QBO_ACCESS_TOKEN,
-    refreshToken: process.env.QBO_REFRESH_TOKEN || null,
+    companyId: cleanEnv(process.env.QBO_COMPANY_ID),
+    clientId: cleanEnv(process.env.QBO_CLIENT_ID),
+    clientSecret: cleanEnv(process.env.QBO_CLIENT_SECRET),
+    accessToken: cleanEnv(process.env.QBO_ACCESS_TOKEN),
+    refreshToken: cleanEnv(process.env.QBO_REFRESH_TOKEN) || null,
     baseUrl: 'https://quickbooks.api.intuit.com/v3/company'
   },
   google: {
-    apiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY
+    apiKey: cleanEnv(process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEO_KEY)
   },
   gmail: {
-    clientId: process.env.GMAIL_CLIENT_ID,
-    clientSecret: process.env.GMAIL_CLIENT_SECRET,
-    refreshToken: process.env.GMAIL_REFRESH_TOKEN
+    clientId: cleanEnv(process.env.GMAIL_CLIENT_ID),
+    clientSecret: cleanEnv(process.env.GMAIL_CLIENT_SECRET),
+    refreshToken: cleanEnv(process.env.GMAIL_REFRESH_TOKEN)
   }
 };
 
@@ -720,6 +735,14 @@ async function handleCourtSpecsQuery(config, rawQuestion, siteHint, boundSite, d
     allSites = await getCachedSites(true);
   }
 
+  if (!allSites || allSites.length === 0) {
+    return await whatsapp.sendWhatsAppMessage(
+      config,
+      dispatchTarget,
+      `⚠️ Airtable connection returned 0 sites (check \`AIRTABLE_API_KEY\` authorization in Render).`
+    );
+  }
+
   const lookupMaps = buildRecordLookupMaps(allSites, workers, contacts);
   const targetSite = findMatchingSite(allSites, siteHint || rawQuestion, boundSite, lookupMaps);
 
@@ -804,6 +827,14 @@ async function executeLedgerQuery(config, queryText, dispatchTarget) {
 
     if (!sites || sites.length === 0) {
       sites = await getCachedSites(true);
+    }
+
+    if (!sites || sites.length === 0) {
+      return await whatsapp.sendWhatsAppMessage(
+        config,
+        dispatchTarget,
+        `⚠️ Airtable connection returned 0 sites (check \`AIRTABLE_API_KEY\` authorization in Render).`
+      );
     }
 
     console.log(`[Ledger Query] Analyzing ${sites.length} Sites, ${openAssignments.length} Open Assignments, ${workers.length} Workers, ${contacts.length} Contacts`);
@@ -2724,7 +2755,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.37',
+    version: '6.0.38',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
@@ -2769,8 +2800,13 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   process.on('uncaughtException', (err) => console.error('[CRITICAL] Uncaught Exception:', err.message));
   process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
+  const keyFingerprint = CONFIG.airtable.apiKey
+    ? `${CONFIG.airtable.apiKey.slice(0, 6)}...${CONFIG.airtable.apiKey.slice(-4)} (len: ${CONFIG.airtable.apiKey.length})`
+    : 'MISSING';
+
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.37 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.38 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🔑 Airtable Auth: ${keyFingerprint} | Base: ${CONFIG.airtable.baseId}`);
   console.log(`====================================================================`);
 
   const server = app.listen(PORT, '0.0.0.0', async () => {
