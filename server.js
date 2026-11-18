@@ -1,12 +1,13 @@
 /**
- * TITAN OS V6.0.35 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.36 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Dynamic Airtable
- *          Schema & Linked-Record Resolver, QBO Finance Copilot, Atomic Message
- *          Deduplication, Conversational Voice Estimates, Full-Ledger Airtable
- *          Analytics, Court Configuration Inspector, Headless IoT Telemetry,
- *          RBAC Bouncer, Zero-UI Site Provisioning, Virtual Readiness,
- *          Executive Drafting Mode + Native Gmail Dispatch, and Field Intelligence.
+ * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Rate-Limited
+ *          Airtable Pacer & Linked-Record Resolver, QBO Finance Copilot,
+ *          Atomic Message Deduplication, Conversational Voice Estimates,
+ *          Full-Ledger Airtable Analytics, Court Configuration Inspector,
+ *          Headless IoT Telemetry, RBAC Bouncer, Zero-UI Site Provisioning,
+ *          Virtual Readiness, Executive Drafting Mode + Native Gmail Dispatch,
+ *          and Field Intelligence.
  */
 
 // ====================================================================
@@ -92,7 +93,7 @@ const CONFIG = {
 };
 
 // ====================================================================
-// 2. STATE MACHINES & CACHE-ASIDE ENGINE
+// 2. STATE MACHINES, AIRTABLE PACER & CACHE-ASIDE ENGINE
 // ====================================================================
 let oracleFileURIs = [];
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -157,18 +158,58 @@ async function fetchWithExponentialBackoff(url, options = {}, retries = 2) {
   }
 }
 
+// Strict Airtable Rate-Limit Pacer (Max 4 requests/sec to stay safely below Airtable's 5 req/sec limit)
+let airtableQueueTail = Promise.resolve();
+let lastAirtableRequestTime = 0;
+const AIRTABLE_MIN_SPACING_MS = 260;
+
+function scheduleAirtableRequest(fn) {
+  const run = async () => {
+    const elapsed = Date.now() - lastAirtableRequestTime;
+    if (elapsed < AIRTABLE_MIN_SPACING_MS) {
+      await new Promise(r => setTimeout(r, AIRTABLE_MIN_SPACING_MS - elapsed));
+    }
+    lastAirtableRequestTime = Date.now();
+    return await fn();
+  };
+  const next = airtableQueueTail.then(run, run);
+  airtableQueueTail = next.catch(() => {});
+  return next;
+}
+
+async function airtablePacedFetch(url, options = {}, retries = 3) {
+  return scheduleAirtableRequest(async () => {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+      if (res.status === 429 || res.status >= 500) {
+        if (attempt === retries) return res;
+        const retryAfterHeader = Number(res.headers?.get?.('retry-after') || 0);
+        const backoffMs = retryAfterHeader > 0
+          ? retryAfterHeader * 1000
+          : 1500 * Math.pow(2, attempt);
+        console.warn(`[Airtable Pacer] HTTP ${res.status} received. Backing off ${backoffMs}ms (attempt ${attempt + 1}/${retries})...`);
+        await new Promise(r => setTimeout(r, backoffMs));
+        lastAirtableRequestTime = Date.now();
+        continue;
+      }
+      return res;
+    }
+  });
+}
+
 async function discoverAirtableBaseSchema(force = false) {
   if (airtableSchemaCache.discovered && !force) return airtableSchemaCache;
   if (!CONFIG.airtable.apiKey || !CONFIG.airtable.baseId) return airtableSchemaCache;
 
   try {
     const schemaUrl = `${CONFIG.airtable.endpoint}/meta/bases/${CONFIG.airtable.baseId}/tables`;
-    const res = await fetchWithExponentialBackoff(schemaUrl, {
+    const res = await airtablePacedFetch(schemaUrl, {
       headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
     }, 2);
 
     if (!res || !res.ok) {
-      console.warn(`[Airtable Schema] Meta lookup returned HTTP ${res ? res.status : 'Network Error'}`);
+      console.warn(`[Airtable Schema] Meta lookup returned HTTP ${res ? res.status : 'Network Error'} (using default table names).`);
       return airtableSchemaCache;
     }
 
@@ -179,34 +220,34 @@ async function discoverAirtableBaseSchema(force = false) {
       console.log(`[Airtable Schema] Discovered ${tables.length} tables: ${tables.map(t => `${t.name} (${t.id})`).join(', ')}`);
 
       const sitesMeta =
-        tables.find(t => t.id === 'tblxtDkCjankGSI1J') ||
         tables.find(t => t.name.trim().toLowerCase() === 'sites') ||
+        tables.find(t => t.id === 'tblxtDkCjankGSI1J') ||
         tables.find(t => /\b(sites|courts)\b/i.test(t.name) && !/inbound|message|report|assign/i.test(t.name));
 
       if (sitesMeta) {
-        airtableSchemaCache.sitesTable = sitesMeta.id;
+        airtableSchemaCache.sitesTable = sitesMeta.name;
         airtableSchemaCache.sitesFields = (sitesMeta.fields || []).map(f => f.name);
         const primaryFieldObj = (sitesMeta.fields || []).find(f => f.id === sitesMeta.primaryFieldId) || sitesMeta.fields?.[0];
         if (primaryFieldObj?.name) {
           airtableSchemaCache.sitesPrimaryField = primaryFieldObj.name;
         }
-        console.log(`[Airtable Schema] Bound Sites -> "${sitesMeta.name}" (${sitesMeta.id}) | Primary: "${airtableSchemaCache.sitesPrimaryField}" | Columns: [${airtableSchemaCache.sitesFields.join(', ')}]`);
+        console.log(`[Airtable Schema] Bound Sites -> "${sitesMeta.name}" | Primary: "${airtableSchemaCache.sitesPrimaryField}" | Columns: [${airtableSchemaCache.sitesFields.join(', ')}]`);
       }
 
       const workersMeta =
         tables.find(t => t.name.trim().toLowerCase() === 'workers') ||
         tables.find(t => /\bworker|staff|crew\b/i.test(t.name));
-      if (workersMeta) airtableSchemaCache.workersTable = workersMeta.id;
+      if (workersMeta) airtableSchemaCache.workersTable = workersMeta.name;
 
       const contactsMeta =
         tables.find(t => t.name.trim().toLowerCase() === 'contacts') ||
         tables.find(t => /\bcontact|client|lead|partner\b/i.test(t.name));
-      if (contactsMeta) airtableSchemaCache.contactsTable = contactsMeta.id;
+      if (contactsMeta) airtableSchemaCache.contactsTable = contactsMeta.name;
 
       const assignmentsMeta =
         tables.find(t => t.name.trim().toLowerCase() === 'daily assignments') ||
         tables.find(t => /\bassignment|ticket|work order\b/i.test(t.name));
-      if (assignmentsMeta) airtableSchemaCache.assignmentsTable = assignmentsMeta.id;
+      if (assignmentsMeta) airtableSchemaCache.assignmentsTable = assignmentsMeta.name;
 
       airtableSchemaCache.discovered = true;
     }
@@ -217,24 +258,28 @@ async function discoverAirtableBaseSchema(force = false) {
 }
 
 async function fetchAllAirtableRecords(tableNameOrId, filterFormula = '', sortConfig = '') {
-  let records = [];
+  const records = [];
   let offset = null;
   do {
-    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableNameOrId)}?`;
+    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableNameOrId)}?pageSize=100&`;
     if (filterFormula) url += `filterByFormula=${encodeURIComponent(filterFormula)}&`;
     if (sortConfig) url += `${sortConfig}&`;
     if (offset) url += `offset=${encodeURIComponent(offset)}`;
 
-    try {
-      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (data.records) records = records.concat(data.records);
-      offset = data.offset;
-    } catch (err) {
-      console.warn(`[Airtable Fetch] Error fetching page for ${tableNameOrId}:`, err.message);
-      offset = null;
+    const res = await airtablePacedFetch(url, {
+      headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+    }, 3);
+
+    if (!res || !res.ok) {
+      const errBody = res ? await res.text().catch(() => '') : 'Network error';
+      throw new Error(`HTTP ${res ? res.status : 'NET'} on ${tableNameOrId}: ${errBody.slice(0, 140)}`);
     }
+
+    const data = await res.json();
+    if (Array.isArray(data.records)) {
+      records.push(...data.records);
+    }
+    offset = data.offset || null;
   } while (offset);
   return records;
 }
@@ -256,22 +301,27 @@ function getSiteDisplayName(siteRecord) {
 
 async function getCachedSites(forceRefresh = false) {
   const now = Date.now();
+  const hasCachedData = Array.isArray(memoryCache.sites) && memoryCache.sites.length > 0;
   const isExpired = now - memoryCache.sitesLastFetched > CACHE_TTL_MS;
-  if (forceRefresh || (!memoryCache.sites && isExpired)) {
+
+  if (forceRefresh || !hasCachedData) {
     try {
-      await discoverAirtableBaseSchema(forceRefresh);
-      const fresh = await fetchAllAirtableRecords(airtableSchemaCache.sitesTable);
-      if (Array.isArray(fresh) && (fresh.length > 0 || !memoryCache.sites)) {
+      let fresh = await fetchAllAirtableRecords(airtableSchemaCache.sitesTable);
+      if (fresh.length === 0 && airtableSchemaCache.sitesTable !== 'Sites') {
+        fresh = await fetchAllAirtableRecords('Sites');
+      }
+      if (Array.isArray(fresh) && fresh.length > 0) {
         memoryCache.sites = fresh;
         memoryCache.sitesLastFetched = Date.now();
         console.log(`[Cache Engine] Refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
       }
     } catch (err) {
-      memoryCache.sites = memoryCache.sites || [];
+      console.warn('[Cache Engine] Sites fetch failed (preserving existing cache):', err.message);
     }
     return memoryCache.sites || [];
   }
-  if (isExpired && memoryCache.sites) {
+
+  if (isExpired && hasCachedData) {
     fetchAllAirtableRecords(airtableSchemaCache.sitesTable).then(freshData => {
       if (Array.isArray(freshData) && freshData.length > 0) {
         memoryCache.sites = freshData;
@@ -284,21 +334,24 @@ async function getCachedSites(forceRefresh = false) {
 
 async function getCachedWorkers(forceRefresh = false) {
   const now = Date.now();
+  const hasCachedData = Array.isArray(memoryCache.workers) && memoryCache.workers.length > 0;
   const isExpired = now - memoryCache.workersLastFetched > CACHE_TTL_MS;
-  if (forceRefresh || (!memoryCache.workers && isExpired)) {
+
+  if (forceRefresh || !hasCachedData) {
     try {
-      await discoverAirtableBaseSchema();
       const fresh = await fetchAllAirtableRecords(airtableSchemaCache.workersTable);
-      if (Array.isArray(fresh) && (fresh.length > 0 || !memoryCache.workers)) {
+      if (Array.isArray(fresh) && fresh.length > 0) {
         memoryCache.workers = fresh;
         memoryCache.workersLastFetched = Date.now();
+        console.log(`[Cache Engine] Refreshed ${memoryCache.workers.length} Workers from Airtable into RAM`);
       }
     } catch (err) {
-      memoryCache.workers = memoryCache.workers || [];
+      console.warn('[Cache Engine] Workers fetch failed:', err.message);
     }
     return memoryCache.workers || [];
   }
-  if (isExpired && memoryCache.workers) {
+
+  if (isExpired && hasCachedData) {
     fetchAllAirtableRecords(airtableSchemaCache.workersTable).then(freshData => {
       if (Array.isArray(freshData) && freshData.length > 0) {
         memoryCache.workers = freshData;
@@ -311,46 +364,50 @@ async function getCachedWorkers(forceRefresh = false) {
 
 async function getCachedContacts(forceRefresh = false) {
   const now = Date.now();
-  if (!forceRefresh && memoryCache.contacts && (now - memoryCache.contactsLastFetched < CACHE_TTL_MS)) {
+  const hasCachedData = Array.isArray(memoryCache.contacts) && memoryCache.contacts.length > 0;
+  const isExpired = now - memoryCache.contactsLastFetched > CACHE_TTL_MS;
+
+  if (!forceRefresh && hasCachedData && !isExpired) {
     return memoryCache.contacts;
   }
+
   try {
-    await discoverAirtableBaseSchema();
     const fresh = await fetchAllAirtableRecords(airtableSchemaCache.contactsTable);
-    if (Array.isArray(fresh) && (fresh.length > 0 || !memoryCache.contacts)) {
+    if (Array.isArray(fresh) && fresh.length > 0) {
       memoryCache.contacts = fresh;
-      memoryCache.contactsLastFetched = now;
+      memoryCache.contactsLastFetched = Date.now();
+      console.log(`[Cache Engine] Refreshed ${memoryCache.contacts.length} Contacts from Airtable into RAM`);
     }
     return memoryCache.contacts || [];
   } catch (err) {
-    memoryCache.contacts = memoryCache.contacts || [];
-    memoryCache.contactsLastFetched = now;
-    return memoryCache.contacts;
+    console.warn('[Cache Engine] Contacts fetch skipped:', err.message);
+    return memoryCache.contacts || [];
   }
 }
 
 async function getCachedOpenAssignments(forceRefresh = false) {
   const now = Date.now();
+  const hasCachedData = Array.isArray(memoryCache.assignments) && memoryCache.assignments.length > 0;
   const isExpired = now - memoryCache.assignmentsLastFetched > ASSIGNMENTS_CACHE_TTL_MS;
   const formula = `AND({Status} != 'Complete', {Status} != 'Cancelled')`;
   const sort = `sort%5B0%5D%5Bfield%5D=Assignment%20ID&sort%5B0%5D%5Bdirection%5D=desc`;
 
-  if (forceRefresh || (!memoryCache.assignments && isExpired)) {
+  if (forceRefresh || !hasCachedData) {
     try {
-      await discoverAirtableBaseSchema();
       const fresh = await fetchAllAirtableRecords(airtableSchemaCache.assignmentsTable, formula, sort);
-      if (Array.isArray(fresh) && (fresh.length > 0 || !memoryCache.assignments)) {
+      if (Array.isArray(fresh)) {
         memoryCache.assignments = fresh;
         memoryCache.assignmentsLastFetched = Date.now();
       }
     } catch (err) {
-      memoryCache.assignments = memoryCache.assignments || [];
+      console.warn('[Cache Engine] Open Assignments fetch failed:', err.message);
     }
     return memoryCache.assignments || [];
   }
-  if (isExpired && memoryCache.assignments) {
+
+  if (isExpired && hasCachedData) {
     fetchAllAirtableRecords(airtableSchemaCache.assignmentsTable, formula, sort).then(freshData => {
-      if (Array.isArray(freshData) && freshData.length > 0) {
+      if (Array.isArray(freshData)) {
         memoryCache.assignments = freshData;
         memoryCache.assignmentsLastFetched = Date.now();
       }
@@ -421,19 +478,19 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       if (Object.keys(currentPayload.fields).length === 0) return { success: false, writtenFields: {}, record: null };
-      const res = await fetch(url, {
+      const res = await airtablePacedFetch(url, {
         method,
         headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(currentPayload)
-      });
-      if (res.ok) {
+      }, 2);
+      if (res && res.ok) {
         const data = await res.json();
         if (metrics && metrics.incrementMetric) metrics.incrementMetric('database_mutations');
         return { success: true, writtenFields: currentPayload.fields, record: data };
       }
-      const errorData = await res.json().catch(() => ({}));
+      const errorData = res ? await res.json().catch(() => ({})) : {};
       const errorMsg = errorData?.error?.message || '';
-      if (res.status === 422) {
+      if (res && res.status === 422) {
         const match = errorMsg.match(/(?:field\s*name|field)\s*[:]?\s*["'\\]+([^"'\\]+)["'\\]+/i) || errorMsg.match(/["'\\]+([^"'\\]+)["'\\]+\s*does not exist/i);
         if (match && match[1]) {
           const badField = match[1];
@@ -442,7 +499,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
           continue;
         }
       }
-      throw new Error(`HTTP ${res.status}: ${errorMsg}`);
+      throw new Error(`HTTP ${res ? res.status : 'NET'}: ${errorMsg}`);
     } catch (err) {
       if (attempt === retries) return { success: false, writtenFields: {}, record: null };
     }
@@ -566,7 +623,6 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null, lookupM
     const enriched = enrichRecordFields(site, lookupMaps);
     const primaryDisplayName = getSiteDisplayName(site).toLowerCase();
 
-    // Collect all searchable text values across ALL columns (including resolved linked Contacts/Clients)
     const searchableChunks = [];
     for (const [k, v] of Object.entries(enriched)) {
       if (k === 'record_id') continue;
@@ -614,7 +670,6 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null, lookupM
         continue;
       }
 
-      // Phonetic & edit-distance tolerance ("Weiss" -> "Wise", "Burke" -> "Burk", "Lewinsky" -> "Levinsky")
       if (qTok.length >= 4) {
         const qPhon = normalizePhoneticToken(qTok);
         for (const sw of siteWords) {
@@ -647,11 +702,16 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null, lookupM
 }
 
 async function handleCourtSpecsQuery(config, rawQuestion, siteHint, boundSite, dispatchTarget) {
-  const [allSites, workers, contacts] = await Promise.all([
+  let [allSites, workers, contacts] = await Promise.all([
     getCachedSites(),
     getCachedWorkers(),
     getCachedContacts()
   ]);
+
+  if (!allSites || allSites.length === 0) {
+    allSites = await getCachedSites(true);
+  }
+
   const lookupMaps = buildRecordLookupMaps(allSites, workers, contacts);
   const targetSite = findMatchingSite(allSites, siteHint || rawQuestion, boundSite, lookupMaps);
 
@@ -726,12 +786,16 @@ Instructions:
 async function executeLedgerQuery(config, queryText, dispatchTarget) {
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⏳ Querying Airtable ledgers...`);
   try {
-    const [sites, workers, contacts, openAssignments] = await Promise.all([
+    let [sites, workers, contacts, openAssignments] = await Promise.all([
       getCachedSites(),
       getCachedWorkers(),
       getCachedContacts(),
       getCachedOpenAssignments()
     ]);
+
+    if (!sites || sites.length === 0) {
+      sites = await getCachedSites(true);
+    }
 
     console.log(`[Ledger Query] Analyzing ${sites.length} Sites, ${openAssignments.length} Open Assignments, ${workers.length} Workers, ${contacts.length} Contacts`);
 
@@ -834,11 +898,14 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⏳ Computing virtual readiness matrix for ${siteNameStr}...`);
   if (metrics && metrics.incrementMetric) metrics.incrementMetric('readiness_checks');
 
-  const [allSites, workers, contacts] = await Promise.all([
+  let [allSites, workers, contacts] = await Promise.all([
     getCachedSites(),
     getCachedWorkers(),
     getCachedContacts()
   ]);
+  if (!allSites || allSites.length === 0) {
+    allSites = await getCachedSites(true);
+  }
   const lookupMaps = buildRecordLookupMaps(allSites, workers, contacts);
   const site = findMatchingSite(allSites, siteNameStr, null, lookupMaps);
 
@@ -1256,6 +1323,9 @@ app.post('/webhook', async (req, res) => {
         getCachedWorkers(),
         getCachedContacts()
       ]);
+      if (!allSites || allSites.length === 0) {
+        allSites = await getCachedSites(true);
+      }
     } catch (e) {
       console.warn(`[Cache Log] Failed to retrieve caches: ${e.message}`);
     }
@@ -2095,14 +2165,12 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         try {
           memoryCache.coordinates.clear();
           await discoverAirtableBaseSchema(true);
-          await Promise.all([
-            getCachedSites(true),
-            getCachedWorkers(true),
-            getCachedContacts(true),
-            getCachedOpenAssignments(true),
-            hydrateQBOCache()
-          ]);
-          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Titan OS RAM Hydrated.*\nSites (${memoryCache.sites?.length || 0}), Workers, Contacts, Assignments, and QBO tokens refreshed.`);
+          await getCachedSites(true);
+          await getCachedWorkers(true);
+          await getCachedContacts(true);
+          await getCachedOpenAssignments(true);
+          await hydrateQBOCache();
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Titan OS RAM Hydrated.*\nSites (${memoryCache.sites?.length || 0}), Workers (${memoryCache.workers?.length || 0}), Contacts (${memoryCache.contacts?.length || 0}), Assignments, and QBO tokens refreshed.`);
         } catch (e) {
           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to rebuild cache: ${e.message}`);
         }
@@ -2621,7 +2689,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.35',
+    version: '6.0.36',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
@@ -2667,17 +2735,17 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.35 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.36 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`====================================================================`);
 
   const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
     try {
       await discoverAirtableBaseSchema(true);
-      await getCachedSites();
-      await getCachedWorkers();
-      await getCachedContacts();
-      await getCachedOpenAssignments();
+      await getCachedSites(true);
+      await getCachedWorkers(true);
+      await getCachedContacts(true);
+      await getCachedOpenAssignments(true);
 
       if (inventory && inventory.refreshInventoryCache) {
         await inventory.refreshInventoryCache(CONFIG);
