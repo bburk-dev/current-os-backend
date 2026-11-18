@@ -1,10 +1,10 @@
 /**
- * TITAN OS V6.0.34 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.35 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
- * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, QBO Finance Copilot,
- *          Atomic Message Deduplication, Conversational Voice Estimates,
- *          Progress Draws, Direct Invoicing, Full-Ledger Airtable Analytics,
- *          Court Configuration Inspector, Headless IoT Sensor Telemetry,
+ * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Dynamic Airtable
+ *          Schema & Linked-Record Resolver, QBO Finance Copilot, Atomic Message
+ *          Deduplication, Conversational Voice Estimates, Full-Ledger Airtable
+ *          Analytics, Court Configuration Inspector, Headless IoT Telemetry,
  *          RBAC Bouncer, Zero-UI Site Provisioning, Virtual Readiness,
  *          Executive Drafting Mode + Native Gmail Dispatch, and Field Intelligence.
  */
@@ -102,6 +102,16 @@ const processedMessageIds = new Map();
 const DEDUP_TTL_MS = 300 * 1000;
 const draftingSessions = new Map();
 
+const airtableSchemaCache = {
+  discovered: false,
+  sitesTable: 'Sites',
+  sitesPrimaryField: 'Site Name',
+  sitesFields: [],
+  workersTable: 'Workers',
+  contactsTable: 'Contacts',
+  assignmentsTable: 'Daily Assignments'
+};
+
 const memoryCache = {
   sites: null,
   sitesLastFetched: 0,
@@ -147,11 +157,70 @@ async function fetchWithExponentialBackoff(url, options = {}, retries = 2) {
   }
 }
 
-async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig = '') {
+async function discoverAirtableBaseSchema(force = false) {
+  if (airtableSchemaCache.discovered && !force) return airtableSchemaCache;
+  if (!CONFIG.airtable.apiKey || !CONFIG.airtable.baseId) return airtableSchemaCache;
+
+  try {
+    const schemaUrl = `${CONFIG.airtable.endpoint}/meta/bases/${CONFIG.airtable.baseId}/tables`;
+    const res = await fetchWithExponentialBackoff(schemaUrl, {
+      headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` }
+    }, 2);
+
+    if (!res || !res.ok) {
+      console.warn(`[Airtable Schema] Meta lookup returned HTTP ${res ? res.status : 'Network Error'}`);
+      return airtableSchemaCache;
+    }
+
+    const data = await res.json();
+    const tables = data.tables || [];
+
+    if (tables.length > 0) {
+      console.log(`[Airtable Schema] Discovered ${tables.length} tables: ${tables.map(t => `${t.name} (${t.id})`).join(', ')}`);
+
+      const sitesMeta =
+        tables.find(t => t.id === 'tblxtDkCjankGSI1J') ||
+        tables.find(t => t.name.trim().toLowerCase() === 'sites') ||
+        tables.find(t => /\b(sites|courts)\b/i.test(t.name) && !/inbound|message|report|assign/i.test(t.name));
+
+      if (sitesMeta) {
+        airtableSchemaCache.sitesTable = sitesMeta.id;
+        airtableSchemaCache.sitesFields = (sitesMeta.fields || []).map(f => f.name);
+        const primaryFieldObj = (sitesMeta.fields || []).find(f => f.id === sitesMeta.primaryFieldId) || sitesMeta.fields?.[0];
+        if (primaryFieldObj?.name) {
+          airtableSchemaCache.sitesPrimaryField = primaryFieldObj.name;
+        }
+        console.log(`[Airtable Schema] Bound Sites -> "${sitesMeta.name}" (${sitesMeta.id}) | Primary: "${airtableSchemaCache.sitesPrimaryField}" | Columns: [${airtableSchemaCache.sitesFields.join(', ')}]`);
+      }
+
+      const workersMeta =
+        tables.find(t => t.name.trim().toLowerCase() === 'workers') ||
+        tables.find(t => /\bworker|staff|crew\b/i.test(t.name));
+      if (workersMeta) airtableSchemaCache.workersTable = workersMeta.id;
+
+      const contactsMeta =
+        tables.find(t => t.name.trim().toLowerCase() === 'contacts') ||
+        tables.find(t => /\bcontact|client|lead|partner\b/i.test(t.name));
+      if (contactsMeta) airtableSchemaCache.contactsTable = contactsMeta.id;
+
+      const assignmentsMeta =
+        tables.find(t => t.name.trim().toLowerCase() === 'daily assignments') ||
+        tables.find(t => /\bassignment|ticket|work order\b/i.test(t.name));
+      if (assignmentsMeta) airtableSchemaCache.assignmentsTable = assignmentsMeta.id;
+
+      airtableSchemaCache.discovered = true;
+    }
+  } catch (err) {
+    console.warn('[Airtable Schema] Discovery warning:', err.message);
+  }
+  return airtableSchemaCache;
+}
+
+async function fetchAllAirtableRecords(tableNameOrId, filterFormula = '', sortConfig = '') {
   let records = [];
   let offset = null;
   do {
-    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}?`;
+    let url = `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableNameOrId)}?`;
     if (filterFormula) url += `filterByFormula=${encodeURIComponent(filterFormula)}&`;
     if (sortConfig) url += `${sortConfig}&`;
     if (offset) url += `offset=${encodeURIComponent(offset)}`;
@@ -163,11 +232,26 @@ async function fetchAllAirtableRecords(tableName, filterFormula = '', sortConfig
       if (data.records) records = records.concat(data.records);
       offset = data.offset;
     } catch (err) {
-      console.warn(`[Airtable Fetch] Error fetching page for ${tableName}:`, err.message);
+      console.warn(`[Airtable Fetch] Error fetching page for ${tableNameOrId}:`, err.message);
       offset = null;
     }
   } while (offset);
   return records;
+}
+
+function getSiteDisplayName(siteRecord) {
+  if (!siteRecord || !siteRecord.fields) return 'Unnamed Court';
+  const f = siteRecord.fields;
+  const primary = airtableSchemaCache.sitesPrimaryField;
+  return String(
+    f[primary] ||
+    f['Site Name'] ||
+    f['Name'] ||
+    f['Court Name'] ||
+    f['Project Name'] ||
+    f['Site'] ||
+    siteRecord.id
+  ).trim();
 }
 
 async function getCachedSites(forceRefresh = false) {
@@ -175,18 +259,24 @@ async function getCachedSites(forceRefresh = false) {
   const isExpired = now - memoryCache.sitesLastFetched > CACHE_TTL_MS;
   if (forceRefresh || (!memoryCache.sites && isExpired)) {
     try {
-      memoryCache.sites = await fetchAllAirtableRecords('Sites');
-      memoryCache.sitesLastFetched = Date.now();
-      console.log(`[Cache Engine] Refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
+      await discoverAirtableBaseSchema(forceRefresh);
+      const fresh = await fetchAllAirtableRecords(airtableSchemaCache.sitesTable);
+      if (Array.isArray(fresh) && (fresh.length > 0 || !memoryCache.sites)) {
+        memoryCache.sites = fresh;
+        memoryCache.sitesLastFetched = Date.now();
+        console.log(`[Cache Engine] Refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
+      }
     } catch (err) {
       memoryCache.sites = memoryCache.sites || [];
     }
-    return memoryCache.sites;
+    return memoryCache.sites || [];
   }
   if (isExpired && memoryCache.sites) {
-    fetchAllAirtableRecords('Sites').then(freshData => {
-      memoryCache.sites = freshData;
-      memoryCache.sitesLastFetched = Date.now();
+    fetchAllAirtableRecords(airtableSchemaCache.sitesTable).then(freshData => {
+      if (Array.isArray(freshData) && freshData.length > 0) {
+        memoryCache.sites = freshData;
+        memoryCache.sitesLastFetched = Date.now();
+      }
     }).catch(() => {});
   }
   return memoryCache.sites || [];
@@ -197,17 +287,23 @@ async function getCachedWorkers(forceRefresh = false) {
   const isExpired = now - memoryCache.workersLastFetched > CACHE_TTL_MS;
   if (forceRefresh || (!memoryCache.workers && isExpired)) {
     try {
-      memoryCache.workers = await fetchAllAirtableRecords('Workers');
-      memoryCache.workersLastFetched = Date.now();
+      await discoverAirtableBaseSchema();
+      const fresh = await fetchAllAirtableRecords(airtableSchemaCache.workersTable);
+      if (Array.isArray(fresh) && (fresh.length > 0 || !memoryCache.workers)) {
+        memoryCache.workers = fresh;
+        memoryCache.workersLastFetched = Date.now();
+      }
     } catch (err) {
       memoryCache.workers = memoryCache.workers || [];
     }
-    return memoryCache.workers;
+    return memoryCache.workers || [];
   }
   if (isExpired && memoryCache.workers) {
-    fetchAllAirtableRecords('Workers').then(freshData => {
-      memoryCache.workers = freshData;
-      memoryCache.workersLastFetched = Date.now();
+    fetchAllAirtableRecords(airtableSchemaCache.workersTable).then(freshData => {
+      if (Array.isArray(freshData) && freshData.length > 0) {
+        memoryCache.workers = freshData;
+        memoryCache.workersLastFetched = Date.now();
+      }
     }).catch(() => {});
   }
   return memoryCache.workers || [];
@@ -219,25 +315,13 @@ async function getCachedContacts(forceRefresh = false) {
     return memoryCache.contacts;
   }
   try {
-    let targetTable = 'Contacts';
-    try {
-      const schemaUrl = `${CONFIG.airtable.endpoint}/meta/bases/${CONFIG.airtable.baseId}/tables`;
-      const schemaRes = await fetch(schemaUrl, { headers: { 'Authorization': `Bearer ${CONFIG.airtable.apiKey}` } });
-      if (schemaRes.ok) {
-        const schemaData = await schemaRes.json();
-        const tables = schemaData.tables || [];
-        const matchedTable = tables.find(t => t.name.trim().toLowerCase() === 'contacts') || tables.find(t => /contact|client|lead|partner/i.test(t.name));
-        if (!matchedTable) {
-          memoryCache.contacts = [];
-          memoryCache.contactsLastFetched = now;
-          return memoryCache.contacts;
-        }
-        targetTable = matchedTable.name;
-      }
-    } catch (e) {}
-    memoryCache.contacts = await fetchAllAirtableRecords(targetTable);
-    memoryCache.contactsLastFetched = now;
-    return memoryCache.contacts;
+    await discoverAirtableBaseSchema();
+    const fresh = await fetchAllAirtableRecords(airtableSchemaCache.contactsTable);
+    if (Array.isArray(fresh) && (fresh.length > 0 || !memoryCache.contacts)) {
+      memoryCache.contacts = fresh;
+      memoryCache.contactsLastFetched = now;
+    }
+    return memoryCache.contacts || [];
   } catch (err) {
     memoryCache.contacts = memoryCache.contacts || [];
     memoryCache.contactsLastFetched = now;
@@ -253,17 +337,23 @@ async function getCachedOpenAssignments(forceRefresh = false) {
 
   if (forceRefresh || (!memoryCache.assignments && isExpired)) {
     try {
-      memoryCache.assignments = await fetchAllAirtableRecords('Daily Assignments', formula, sort);
-      memoryCache.assignmentsLastFetched = Date.now();
+      await discoverAirtableBaseSchema();
+      const fresh = await fetchAllAirtableRecords(airtableSchemaCache.assignmentsTable, formula, sort);
+      if (Array.isArray(fresh) && (fresh.length > 0 || !memoryCache.assignments)) {
+        memoryCache.assignments = fresh;
+        memoryCache.assignmentsLastFetched = Date.now();
+      }
     } catch (err) {
       memoryCache.assignments = memoryCache.assignments || [];
     }
-    return memoryCache.assignments;
+    return memoryCache.assignments || [];
   }
   if (isExpired && memoryCache.assignments) {
-    fetchAllAirtableRecords('Daily Assignments', formula, sort).then(freshData => {
-      memoryCache.assignments = freshData;
-      memoryCache.assignmentsLastFetched = Date.now();
+    fetchAllAirtableRecords(airtableSchemaCache.assignmentsTable, formula, sort).then(freshData => {
+      if (Array.isArray(freshData) && freshData.length > 0) {
+        memoryCache.assignments = freshData;
+        memoryCache.assignmentsLastFetched = Date.now();
+      }
     }).catch(() => {});
   }
   return memoryCache.assignments || [];
@@ -321,9 +411,10 @@ async function hydrateQBOCache() {
 
 async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, retries = 2) {
   if (Object.keys(payload).length === 0) return { success: false, writtenFields: {}, record: null };
+  const resolvedTable = tableName === 'Sites' ? airtableSchemaCache.sitesTable : tableName;
   const url = recordId
-    ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}/${recordId}`
-    : `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(tableName)}`;
+    ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(resolvedTable)}/${recordId}`
+    : `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(resolvedTable)}`;
   const method = recordId ? 'PATCH' : 'POST';
   let currentPayload = { fields: { ...payload } };
 
@@ -360,8 +451,59 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
 }
 
 // ====================================================================
-// 3. SMART SITE RESOLVER, COURT SPECS & FULL-LEDGER ANALYST
+// 3. LINKED RECORD ENRICHMENT, SMART SITE RESOLVER & FULL-LEDGER ANALYST
 // ====================================================================
+
+function buildRecordLookupMaps(sites = [], workers = [], contacts = []) {
+  const sitesById = new Map();
+  sites.forEach(s => sitesById.set(s.id, getSiteDisplayName(s)));
+
+  const workersById = new Map();
+  workers.forEach(w => {
+    const f = w.fields || {};
+    workersById.set(w.id, String(f['Full Name'] || f['Worker Name'] || f['Name'] || w.id).trim());
+  });
+
+  const contactsById = new Map();
+  contacts.forEach(c => {
+    const f = c.fields || {};
+    const label = String(f['Full Name'] || f['Contact Name'] || f['Name'] || f['Company'] || f['Email'] || c.id).trim();
+    contactsById.set(c.id, label);
+  });
+
+  return { sitesById, workersById, contactsById };
+}
+
+function enrichRecordFields(record, lookupMaps) {
+  const f = record?.fields || {};
+  const excludedKeys = new Set(['WhatsApp Group ID', 'Client WhatsApp Group ID', 'Subscribed Phones', 'Map Cache']);
+  const enriched = { record_id: record.id };
+
+  for (const [key, val] of Object.entries(f)) {
+    if (excludedKeys.has(key) || val === null || val === undefined || val === '') continue;
+
+    if (Array.isArray(val)) {
+      const resolvedArr = val.map(item => {
+        if (typeof item === 'string' && item.startsWith('rec')) {
+          return lookupMaps?.contactsById?.get(item) ||
+                 lookupMaps?.workersById?.get(item) ||
+                 lookupMaps?.sitesById?.get(item) ||
+                 item;
+        }
+        return item;
+      });
+      enriched[key] = resolvedArr;
+    } else if (typeof val === 'string' && val.startsWith('rec')) {
+      enriched[key] = lookupMaps?.contactsById?.get(val) ||
+                      lookupMaps?.workersById?.get(val) ||
+                      lookupMaps?.sitesById?.get(val) ||
+                      val;
+    } else {
+      enriched[key] = val;
+    }
+  }
+  return enriched;
+}
 
 function levenshteinDistance(a, b) {
   const s = String(a || '');
@@ -391,7 +533,7 @@ function normalizePhoneticToken(word) {
     .replace(/([a-z])\1+/g, '$1');
 }
 
-function findMatchingSite(allSites, queryText, fallbackBoundSite = null) {
+function findMatchingSite(allSites, queryText, fallbackBoundSite = null, lookupMaps = null) {
   if (!Array.isArray(allSites) || allSites.length === 0) return fallbackBoundSite || null;
 
   const rawQuery = String(queryText || '').trim();
@@ -421,28 +563,39 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null) {
   let bestScore = 0;
 
   for (const site of allSites) {
-    const f = site.fields || {};
-    const siteName = String(f['Site Name'] || '').trim();
-    const address = String(f['Address'] || f['Street Address'] || f['Site location'] || '').trim();
-    const clientName = String(f['Client Name'] || '').trim();
-    const city = String(f['City'] || '').trim();
+    const enriched = enrichRecordFields(site, lookupMaps);
+    const primaryDisplayName = getSiteDisplayName(site).toLowerCase();
 
-    const sNameLower = siteName.toLowerCase();
-    const addrLower = address.toLowerCase();
-    const clientLower = clientName.toLowerCase();
-    const combinedLower = `${sNameLower} ${addrLower} ${clientLower} ${city.toLowerCase()}`.trim();
+    // Collect all searchable text values across ALL columns (including resolved linked Contacts/Clients)
+    const searchableChunks = [];
+    for (const [k, v] of Object.entries(enriched)) {
+      if (k === 'record_id') continue;
+      if (typeof v === 'string' && !v.startsWith('http') && !v.startsWith('rec')) {
+        searchableChunks.push(v);
+      } else if (Array.isArray(v)) {
+        v.forEach(item => {
+          if (typeof item === 'string' && !item.startsWith('http') && !item.startsWith('rec')) {
+            searchableChunks.push(item);
+          }
+        });
+      }
+    }
 
+    const fullBlobLower = searchableChunks.join(' ').toLowerCase();
     let score = 0;
 
-    // 1. Exact or full-substring matches on Site Name or Address
-    if (sNameLower && sNameLower === qClean) score += 120;
-    else if (sNameLower && sNameLower.length >= 3 && (qClean.includes(sNameLower) || sNameLower.includes(qClean))) score += 90;
+    if (primaryDisplayName && primaryDisplayName === qClean) score += 130;
+    else if (primaryDisplayName && primaryDisplayName.length >= 3 && (qClean.includes(primaryDisplayName) || primaryDisplayName.includes(qClean))) score += 95;
 
-    if (addrLower && addrLower.length >= 4 && (qClean.includes(addrLower) || addrLower.includes(qClean))) score += 95;
-    if (clientLower && clientLower.length >= 3 && (qClean.includes(clientLower) || clientLower.includes(qClean))) score += 75;
+    for (const chunk of searchableChunks) {
+      const cLower = chunk.toLowerCase().trim();
+      if (cLower.length >= 4 && (qClean.includes(cLower) || cLower.includes(qClean))) {
+        score += 80;
+        break;
+      }
+    }
 
-    // 2. Token-by-token overlap (supports 3+ char names like "Wise", "Burk", "RCOR", "10 Highland")
-    const siteWords = combinedLower
+    const siteWords = fullBlobLower
       .replace(/['’]s\b/g, '')
       .replace(/[^a-z0-9\s]/g, ' ')
       .split(/\s+/)
@@ -452,7 +605,7 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null) {
       if (qTok.length < 3 && !/^\d+$/.test(qTok)) continue;
 
       if (siteWords.includes(qTok)) {
-        score += 45;
+        score += 50;
         continue;
       }
 
@@ -461,14 +614,14 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null) {
         continue;
       }
 
-      // 3. Phonetic & edit-distance tolerance (e.g., "Weiss" -> "Wise", "Burke" -> "Burk", "Lewinsky" -> "Levinsky")
+      // Phonetic & edit-distance tolerance ("Weiss" -> "Wise", "Burke" -> "Burk", "Lewinsky" -> "Levinsky")
       if (qTok.length >= 4) {
         const qPhon = normalizePhoneticToken(qTok);
         for (const sw of siteWords) {
           if (sw.length < 4) continue;
           const swPhon = normalizePhoneticToken(sw);
           if (qPhon === swPhon) {
-            score += 40;
+            score += 42;
             break;
           }
           const dist = levenshteinDistance(qTok, sw);
@@ -494,42 +647,38 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null) {
 }
 
 async function handleCourtSpecsQuery(config, rawQuestion, siteHint, boundSite, dispatchTarget) {
-  const allSites = await getCachedSites();
-  const targetSite = findMatchingSite(allSites, siteHint || rawQuestion, boundSite);
+  const [allSites, workers, contacts] = await Promise.all([
+    getCachedSites(),
+    getCachedWorkers(),
+    getCachedContacts()
+  ]);
+  const lookupMaps = buildRecordLookupMaps(allSites, workers, contacts);
+  const targetSite = findMatchingSite(allSites, siteHint || rawQuestion, boundSite, lookupMaps);
 
   if (!targetSite) {
     return await whatsapp.sendWhatsAppMessage(
       config,
       dispatchTarget,
-      `⚠️ I couldn't match "${siteHint || rawQuestion}" to a site in the Airtable ledger. Try specifying the court name or street address.`
+      `⚠️ I couldn't match "${siteHint || rawQuestion}" across the ${allSites.length} records in the Airtable ledger. Try specifying the court name or street address.`
     );
   }
 
-  const f = targetSite.fields || {};
-  const siteName = f['Site Name'] || 'Registered Court';
-
-  // Clean internal system fields while keeping every operational, config, location, and financial field
-  const excludedKeys = new Set(['WhatsApp Group ID', 'Client WhatsApp Group ID', 'Subscribed Phones', 'Map Cache']);
-  const cleanRecord = {};
-  for (const [k, v] of Object.entries(f)) {
-    if (!excludedKeys.has(k) && v !== null && v !== undefined && v !== '') {
-      cleanRecord[k] = v;
-    }
-  }
+  const enrichedRecord = enrichRecordFields(targetSite, lookupMaps);
+  const siteName = getSiteDisplayName(targetSite);
 
   const prompt = `You are Titan OS, the head court operations assistant for Bounce Padel.
 The user asked: "${rawQuestion}"
 
-Here is the exact Airtable record for "${siteName}":
-${JSON.stringify(cleanRecord, null, 2)}
+Here is the complete Airtable record for "${siteName}" (with linked Contacts/Workers resolved):
+${JSON.stringify(enrichedRecord, null, 2)}
 
 Instructions:
 1. Answer the user's question directly and accurately using ONLY the record above.
 2. If the user asks for general court configuration or court details, present a crisp WhatsApp summary covering:
-   - Site Name & Address / Location
+   - Site Name, Client/Contact, & Address / Location
    - Model Type & Manufacturer
    - Steel Color, Turf Color, & Turf Supplier
-   - Glass Thickness & Lights (check both "Light" and "Lights" fields)
+   - Glass Thickness & Lights (check any field referencing Light / Lights / Lighting)
    - Current Gate, Site Status, Workflow Mode, & Deposit Status (if tracked)
 3. If a specific field requested (such as Lights, Turf Supplier, or Steel Color) is not populated in the record, clearly state that it is not documented in the Airtable ledger yet.
 4. Keep formatting concise, scannable, and WhatsApp-friendly (use *bold* bullets, no tables).`;
@@ -559,11 +708,11 @@ Instructions:
     console.warn('[Court Specs Query] Gemini fallback triggered:', err.message);
   }
 
-  // Deterministic fallback card if Gemini is unreachable
+  const f = enrichedRecord;
   const fallbackCard =
     `🏟️ *TITAN OS | ${siteName.toUpperCase()}*\n` +
     `──────────────────────────────\n` +
-    `• *Address / Location:* ${f['Address'] || f['Site location'] || 'Not specified'}\n` +
+    `• *Address / Location:* ${f['Address'] || f['Site location'] || f['Site Location'] || 'Not specified'}\n` +
     `• *Status / Gate:* ${f['Site Status'] || 'Active'} (${f['Current Gate'] || 'Unset'})\n` +
     `• *Manufacturer / Model:* ${f['Manufacturer'] || 'Unspecified'} — ${f['Model Type'] || 'Standard'}\n` +
     `• *Steel Color:* ${f['Steel Color'] || 'Unspecified'}\n` +
@@ -584,50 +733,19 @@ async function executeLedgerQuery(config, queryText, dispatchTarget) {
       getCachedOpenAssignments()
     ]);
 
-    const siteNameById = new Map(sites.map(s => [s.id, s.fields['Site Name'] || s.id]));
-    const workerNameById = new Map(workers.map(w => [w.id, w.fields['Full Name'] || w.fields['Worker Name'] || w.id]));
+    console.log(`[Ledger Query] Analyzing ${sites.length} Sites, ${openAssignments.length} Open Assignments, ${workers.length} Workers, ${contacts.length} Contacts`);
 
-    const excludedSiteKeys = new Set(['WhatsApp Group ID', 'Client WhatsApp Group ID', 'Subscribed Phones', 'Map Cache']);
-    const fullSites = sites.map(s => {
-      const clean = { record_id: s.id };
-      for (const [k, v] of Object.entries(s.fields || {})) {
-        if (!excludedSiteKeys.has(k) && v !== null && v !== undefined && v !== '') {
-          clean[k] = v;
-        }
-      }
-      return clean;
-    });
-
+    const lookupMaps = buildRecordLookupMaps(sites, workers, contacts);
+    const fullSites = sites.map(s => enrichRecordFields(s, lookupMaps));
     const fullAssignments = openAssignments.map(a => {
-      const f = a.fields || {};
-      const linkedSites = (f['Sites'] || f['Site'] || []).map(id => siteNameById.get(id) || id);
-      const linkedWorkers = (f['Worker'] || []).map(id => workerNameById.get(id) || id);
-      return {
-        assignment_id: f['Assignment ID'],
-        date: f['Date'],
-        status: f['Status'],
-        type: f['Assignment Type'],
-        category: f['Task Category'],
-        priority: f['Priority'],
-        sites: linkedSites,
-        workers: linkedWorkers,
-        notes: f['Notes'] ? String(f['Notes']).slice(0, 300) : ''
-      };
+      const enriched = enrichRecordFields(a, lookupMaps);
+      if (typeof enriched['Notes'] === 'string' && enriched['Notes'].length > 300) {
+        enriched['Notes'] = enriched['Notes'].slice(0, 300);
+      }
+      return enriched;
     });
-
-    const leanWorkers = workers.map(w => ({
-      name: w.fields['Full Name'] || w.fields['Worker Name'],
-      role: w.fields['Role'],
-      active: w.fields['Active'],
-      crew: w.fields['Assigned Crew']
-    }));
-
-    const leanContacts = contacts.slice(0, 100).map(c => ({
-      name: c.fields['Full Name'] || c.fields['Contact Name'],
-      email: c.fields['Email'],
-      role: c.fields['Role'],
-      company: c.fields['Company'] || c.fields['Organization']
-    }));
+    const fullWorkers = workers.map(w => enrichRecordFields(w, lookupMaps));
+    const fullContacts = contacts.slice(0, 150).map(c => enrichRecordFields(c, lookupMaps));
 
     const systemPrompt = `You are Titan OS, the enterprise data analyst for Bounce Padel.
 Current Date: ${new Date().toISOString().split('T')[0]}
@@ -635,9 +753,9 @@ The user asked: "${queryText}"
 
 Calculate the exact answer strictly from the live Airtable JSON tables provided below.
 Rules:
-1. Count and list matching records accurately (check fields like 'Deposit Status', 'Year Installed', 'Total Courts', 'Site Status', 'Workflow Mode', 'Slab Pour Date', 'Current Gate', 'Manufacturer', 'Turf Supplier', 'Lights'/'Light', 'Address', 'Site location', etc.).
-2. If 'Total Courts' is specified on a site record, mention both the number of site records and total court count if relevant.
-3. Never hallucinate numbers or records. If a requested year or field is not populated on records, explain what IS documented in the ledger.
+1. Count and list matching records accurately (inspect all fields on every record, including 'Deposit Status', 'Year Installed', 'Total Courts', 'Site Status', 'Workflow Mode', 'Slab Pour Date', 'Target Date', 'Install Year', 'Current Gate', 'Manufacturer', 'Turf Supplier', 'Lights'/'Light', 'Address', 'Site location', and any date/year strings).
+2. If 'Total Courts' is specified on a site record, report both the site record count and the sum of courts.
+3. Never hallucinate numbers or records. If a specific year (like 2027 or 2024) does not appear on any record, list what deposit statuses or installation years ARE currently documented in the ledger so the user has full clarity.
 4. Format concisely for WhatsApp with *bold* highlights and bullet points.
 
 AIRTABLE SITES (${fullSites.length} records):
@@ -646,11 +764,11 @@ ${JSON.stringify(fullSites)}
 OPEN DAILY ASSIGNMENTS / TICKETS (${fullAssignments.length} records):
 ${JSON.stringify(fullAssignments)}
 
-WORKERS (${leanWorkers.length} records):
-${JSON.stringify(leanWorkers)}
+WORKERS (${fullWorkers.length} records):
+${JSON.stringify(fullWorkers)}
 
-CONTACTS (${leanContacts.length} records):
-${JSON.stringify(leanContacts)}`;
+CONTACTS (${fullContacts.length} records):
+${JSON.stringify(fullContacts)}`;
 
     const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
       method: 'POST',
@@ -716,13 +834,18 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⏳ Computing virtual readiness matrix for ${siteNameStr}...`);
   if (metrics && metrics.incrementMetric) metrics.incrementMetric('readiness_checks');
 
-  const allSites = await getCachedSites();
-  const site = findMatchingSite(allSites, siteNameStr);
+  const [allSites, workers, contacts] = await Promise.all([
+    getCachedSites(),
+    getCachedWorkers(),
+    getCachedContacts()
+  ]);
+  const lookupMaps = buildRecordLookupMaps(allSites, workers, contacts);
+  const site = findMatchingSite(allSites, siteNameStr, null, lookupMaps);
 
   if (!site) return await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⚠️ Could not locate site matching "${siteNameStr}".`);
 
   const siteId = site.id;
-  const siteName = site.fields['Site Name'];
+  const siteName = getSiteDisplayName(site);
 
   let coords = null;
   try {
@@ -1124,12 +1247,20 @@ app.post('/webhook', async (req, res) => {
       : null;
     let site = null;
     let allSites = [];
+    let allWorkers = [];
+    let allContacts = [];
 
     try {
-      allSites = await getCachedSites();
+      [allSites, allWorkers, allContacts] = await Promise.all([
+        getCachedSites(),
+        getCachedWorkers(),
+        getCachedContacts()
+      ]);
     } catch (e) {
-      console.warn(`[Cache Log] Failed to retrieve sites from cache: ${e.message}`);
+      console.warn(`[Cache Log] Failed to retrieve caches: ${e.message}`);
     }
+
+    const lookupMaps = buildRecordLookupMaps(allSites, allWorkers, allContacts);
 
     if (sessionSiteId && allSites.length > 0) {
       site = allSites.find(s => s.id === sessionSiteId) || null;
@@ -1217,14 +1348,14 @@ app.post('/webhook', async (req, res) => {
 
           let directionsStr = "";
           let targetSiteName = "the site";
-          const openAssignments = await fetchAllAirtableRecords('Daily Assignments', `RECORD_ID()='${assignmentId}'`);
+          const openAssignments = await fetchAllAirtableRecords(airtableSchemaCache.assignmentsTable, `RECORD_ID()='${assignmentId}'`);
 
           if (openAssignments.length > 0) {
             const siteArr = openAssignments[0].fields['Sites'] || openAssignments[0].fields['Site'];
             if (siteArr && siteArr.length > 0) {
               const boundSite = allSites.find(s => s.id === siteArr[0]);
               if (boundSite) {
-                targetSiteName = boundSite.fields['Site Name'];
+                targetSiteName = getSiteDisplayName(boundSite);
                 const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, boundSite, airtableWriteWithAutoDrop);
                 if (coords) {
                   directionsStr = `\n\n🚗 *Tap to Navigate:*\nhttps://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
@@ -1488,7 +1619,7 @@ app.post('/webhook', async (req, res) => {
         nearby.sort((a, b) => a.distance - b.distance);
 
         if (nearby.length === 1) {
-          console.log(`[Location Triage] Single site found (${nearby[0].site.fields['Site Name']}). Binding context.`);
+          console.log(`[Location Triage] Single site found (${getSiteDisplayName(nearby[0].site)}). Binding context.`);
           try {
             await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, speakerPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
           } catch (e) {
@@ -1498,7 +1629,7 @@ app.post('/webhook', async (req, res) => {
           console.log(`[Location Triage] Multiple sites found. Dispatching selector buttons.`);
 
           const buttons = nearby.slice(0, 3).map((n) => {
-            let safeTitle = String(n.site.fields['Site Name'] || 'Site').trim();
+            let safeTitle = getSiteDisplayName(n.site).trim();
             if (safeTitle.length > 20) {
               safeTitle = safeTitle.substring(0, 20).trim();
             }
@@ -1671,7 +1802,7 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
+        const registeredSiteNames = allSites.map(s => getSiteDisplayName(s)).filter(Boolean);
         const boundSiteId = whatsapp.getUserBoundSiteId
           ? (whatsapp.getUserBoundSiteId(dispatchTarget) || whatsapp.getUserBoundSiteId(speakerPhone))
           : null;
@@ -1720,7 +1851,7 @@ app.post('/webhook', async (req, res) => {
           if (spokenTriage.intent === 'LOGISTICS_DISPATCH') {
             const requestedItem = spokenTriage.structured_payload?.item || transcript || 'Logistics Items';
             const siteId = activeBoundSite ? activeBoundSite.id : null;
-            const targetSiteName = activeBoundSite ? activeBoundSite.fields['Site Name'] : 'Unknown Field Site';
+            const targetSiteName = activeBoundSite ? getSiteDisplayName(activeBoundSite) : 'Unknown Field Site';
 
             const assignment = await airtableWriteWithAutoDrop('Daily Assignments', {
               'Assignment Type': 'Service',
@@ -1733,7 +1864,6 @@ app.post('/webhook', async (req, res) => {
             if (!assignment.success) return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
             if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
-            const allWorkers = await getCachedWorkers();
             const dispatchTargets = [];
             allWorkers.forEach(w => {
               if (w.fields['Active'] === false) return;
@@ -1800,7 +1930,7 @@ app.post('/webhook', async (req, res) => {
           }
 
           if (spokenTriage.intent === 'READINESS_QUERY') {
-            const targetSiteName = spokenTriage.qbo_customer_name || spokenTriage.referenced_site_name || (activeBoundSite ? activeBoundSite.fields['Site Name'] : null);
+            const targetSiteName = spokenTriage.qbo_customer_name || spokenTriage.referenced_site_name || (activeBoundSite ? getSiteDisplayName(activeBoundSite) : null);
             if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
             return await evaluateVirtualSiteReadiness(CONFIG, targetSiteName, dispatchTarget);
           }
@@ -1814,7 +1944,7 @@ app.post('/webhook', async (req, res) => {
                 .trim();
             }
 
-            const activeTargetSite = findMatchingSite(allSites, targetSiteName, activeBoundSite);
+            const activeTargetSite = findMatchingSite(allSites, targetSiteName, activeBoundSite, lookupMaps);
 
             if (activeTargetSite) {
               let coords = null;
@@ -1826,7 +1956,7 @@ app.post('/webhook', async (req, res) => {
                 satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
                 locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
               } else {
-                const rawLoc = activeTargetSite.fields['Site location'] || activeTargetSite.fields['Address'];
+                const rawLoc = activeTargetSite.fields['Site location'] || activeTargetSite.fields['Site Location'] || activeTargetSite.fields['Address'];
                 if (rawLoc) {
                   mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
                   satUrl = `_Satellite view unavailable for text addresses._`;
@@ -1837,7 +1967,7 @@ app.post('/webhook', async (req, res) => {
               if (mapsUrl) {
                 const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
                                 `──────────────────────────────\n` +
-                                `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
+                                `🏟️ *Destination:* ${getSiteDisplayName(activeTargetSite)}\n` +
                                 `${locDisp}\n` +
                                 `──────────────────────────────\n` +
                                 `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
@@ -1858,7 +1988,7 @@ app.post('/webhook', async (req, res) => {
           const isQuestion = /\b(what|who|when|where|which|how|does|do|is|are|tell me|details|config|lights?)\b/i.test(transcriptLower) || transcript.includes('?');
 
           if (isUpdate) {
-            const activeTargetSite = findMatchingSite(allSites, spokenTriage.referenced_site_name || transcript, activeBoundSite);
+            const activeTargetSite = findMatchingSite(allSites, spokenTriage.referenced_site_name || transcript, activeBoundSite, lookupMaps);
             if (!activeTargetSite) {
               if (whatsapp.updateSessionContext) whatsapp.updateSessionContext(speakerPhone, { pendingText: transcript });
               return await dM(dispatchTarget, `Got it. Which site does this update apply to?`);
@@ -1918,11 +2048,11 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                     const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
                     if (writtenKeys.length > 0) {
                       const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
-                      return await dM(dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                      return await dM(dispatchTarget, `✅ Logged to the *${getSiteDisplayName(activeTargetSite)}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
                     }
-                    return await dM(dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                    return await dM(dispatchTarget, `⚠️ Logged to the *${getSiteDisplayName(activeTargetSite)}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
                   }
-                  return await dM(dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+                  return await dM(dispatchTarget, `❌ Failed to update the *${getSiteDisplayName(activeTargetSite)}* ledger.`);
                 }
               }
             } catch (e) {
@@ -1931,14 +2061,13 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           }
 
           if (isQuestion) {
-            const matchedSite = findMatchingSite(allSites, spokenTriage.referenced_site_name || transcript, activeBoundSite);
+            const matchedSite = findMatchingSite(allSites, spokenTriage.referenced_site_name || transcript, activeBoundSite, lookupMaps);
             if (matchedSite) {
-              return await handleCourtSpecsQuery(CONFIG, transcript, matchedSite.fields['Site Name'], matchedSite, dispatchTarget);
+              return await handleCourtSpecsQuery(CONFIG, transcript, getSiteDisplayName(matchedSite), matchedSite, dispatchTarget);
             }
             return await executeLedgerQuery(CONFIG, transcript, dispatchTarget);
           }
 
-          // Clean fallback so voice memos never fail silently
           if (transcript) {
             return await dM(dispatchTarget, `🎙️ *Heard:* "${transcript}"\n\nReply with a specific court name, \`/help\` for commands, or ask any question about your sites, AR, inventory, or blueprints.`);
           }
@@ -1965,6 +2094,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⏳ Manual cache bust initiated...`);
         try {
           memoryCache.coordinates.clear();
+          await discoverAirtableBaseSchema(true);
           await Promise.all([
             getCachedSites(true),
             getCachedWorkers(true),
@@ -1972,7 +2102,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             getCachedOpenAssignments(true),
             hydrateQBOCache()
           ]);
-          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Titan OS RAM Hydrated.*\nSites, Workers, Contacts, Assignments, and QBO tokens refreshed.`);
+          return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Titan OS RAM Hydrated.*\nSites (${memoryCache.sites?.length || 0}), Workers, Contacts, Assignments, and QBO tokens refreshed.`);
         } catch (e) {
           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to rebuild cache: ${e.message}`);
         }
@@ -2016,7 +2146,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           .replace(/\?/g, '')
           .trim();
 
-        const targetSite = findMatchingSite(allSites, targetSiteName, site);
+        const targetSite = findMatchingSite(allSites, targetSiteName, site, lookupMaps);
 
         if (targetSite) {
           let coords = null;
@@ -2028,7 +2158,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
             locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
           } else {
-            const rawLoc = targetSite.fields['Site location'] || targetSite.fields['Address'];
+            const rawLoc = targetSite.fields['Site location'] || targetSite.fields['Site Location'] || targetSite.fields['Address'];
             if (rawLoc) {
               mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
               satUrl = `_Satellite view unavailable for text addresses._`;
@@ -2039,7 +2169,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           if (mapsUrl) {
             const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
                             `──────────────────────────────\n` +
-                            `🏟️ *Destination:* ${targetSite.fields['Site Name']}\n` +
+                            `🏟️ *Destination:* ${getSiteDisplayName(targetSite)}\n` +
                             `${locDisp}\n` +
                             `──────────────────────────────\n` +
                             `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
@@ -2079,8 +2209,9 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `📍 Drop a WhatsApp pin first, then reply with CREATE SITE: [Name]`);
         }
 
+        const primaryField = airtableSchemaCache.sitesPrimaryField || 'Site Name';
         const newRecord = await airtableWriteWithAutoDrop('Sites', {
-          'Site Name': siteName,
+          [primaryField]: siteName,
           'Workflow Mode': 'INSTALLATION',
           'Site Status': 'ACTIVE',
           'Site location': `${pendingGeo.lat.toFixed(6)}, ${pendingGeo.lon.toFixed(6)}`
@@ -2095,7 +2226,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
       }
 
       // Symmetric Text & Voice NLP Triage
-      const registeredSiteNames = allSites.map(s => s.fields['Site Name']).filter(Boolean);
+      const registeredSiteNames = allSites.map(s => getSiteDisplayName(s)).filter(Boolean);
       const boundSiteId = whatsapp.getUserBoundSiteId
         ? (whatsapp.getUserBoundSiteId(dispatchTarget) || whatsapp.getUserBoundSiteId(speakerPhone))
         : null;
@@ -2137,7 +2268,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         if (triage.intent === 'LOGISTICS_DISPATCH') {
           const requestedItem = triage.structured_payload?.item || triage.transcript_en || txt || 'Logistics Items';
           const siteId = boundSite ? boundSite.id : null;
-          const targetSiteName = boundSite ? boundSite.fields['Site Name'] : 'Unknown Field Site';
+          const targetSiteName = boundSite ? getSiteDisplayName(boundSite) : 'Unknown Field Site';
 
           const assignment = await airtableWriteWithAutoDrop('Daily Assignments', {
             'Assignment Type': 'Service',
@@ -2150,7 +2281,6 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           if (!assignment.success) return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
           if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
-          const allWorkers = await getCachedWorkers();
           const dispatchTargets = [];
           allWorkers.forEach(w => {
             if (w.fields['Active'] === false) return;
@@ -2217,7 +2347,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         }
 
         if (triage.intent === 'READINESS_QUERY') {
-          const targetSiteName = triage.qbo_customer_name || triage.referenced_site_name || (boundSite ? boundSite.fields['Site Name'] : null);
+          const targetSiteName = triage.qbo_customer_name || triage.referenced_site_name || (boundSite ? getSiteDisplayName(boundSite) : null);
           if (!targetSiteName) return await dM(dispatchTarget, `⚠️ Please specify a court name.`);
           return await evaluateVirtualSiteReadiness(CONFIG, targetSiteName, dispatchTarget);
         }
@@ -2232,7 +2362,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
               .trim();
           }
 
-          const activeTargetSite = findMatchingSite(allSites, targetSiteName, boundSite);
+          const activeTargetSite = findMatchingSite(allSites, targetSiteName, boundSite, lookupMaps);
 
           if (activeTargetSite) {
             let coords = null;
@@ -2244,7 +2374,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
               satUrl = `https://www.google.com/maps/@?api=1&map_action=map&center=${coords.lat},${coords.lon}&zoom=19&basemap=satellite`;
               locDisp = `🌐 *Coordinates:* \`${Number(coords.lat).toFixed(5)}, ${Number(coords.lon).toFixed(5)}\``;
             } else {
-              const rawLoc = activeTargetSite.fields['Site location'] || activeTargetSite.fields['Address'];
+              const rawLoc = activeTargetSite.fields['Site location'] || activeTargetSite.fields['Site Location'] || activeTargetSite.fields['Address'];
               if (rawLoc) {
                 mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(rawLoc)}`;
                 satUrl = `_Satellite view unavailable for text addresses._`;
@@ -2255,7 +2385,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             if (mapsUrl) {
               const navCard = `🧭 *TITAN OS | DIGITAL SITE PASS*\n` +
                               `──────────────────────────────\n` +
-                              `🏟️ *Destination:* ${activeTargetSite.fields['Site Name']}\n` +
+                              `🏟️ *Destination:* ${getSiteDisplayName(activeTargetSite)}\n` +
                               `${locDisp}\n` +
                               `──────────────────────────────\n` +
                               `🚗 *Driving Directions:*\n${mapsUrl}\n\n` +
@@ -2276,7 +2406,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         const isQuestion = /\b(what|who|when|where|which|how|does|do|is|are|tell me|details|config|lights?)\b/i.test(lTxt) || txt.endsWith('?');
 
         if (isUpdate) {
-          const activeTargetSite = findMatchingSite(allSites, triage?.referenced_site_name || txt, boundSite);
+          const activeTargetSite = findMatchingSite(allSites, triage?.referenced_site_name || txt, boundSite, lookupMaps);
           if (!activeTargetSite) {
             return await dM(dispatchTarget, `Got it. Which site does this update apply to?`);
           }
@@ -2323,19 +2453,19 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                 const writtenKeys = Object.keys(writeResult.writtenFields).filter(k => k !== 'Last Note' && k !== 'Last Intent');
                 if (writtenKeys.length > 0) {
                   const writtenSummary = writtenKeys.map(k => `${k}: *${writeResult.writtenFields[k]}*`).join('\n• ');
-                  return await dM(dispatchTarget, `✅ Logged to the *${activeTargetSite.fields['Site Name']}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
+                  return await dM(dispatchTarget, `✅ Logged to the *${getSiteDisplayName(activeTargetSite)}* ledger.\n\n*Successfully Updated:*\n• ${writtenSummary}`);
                 }
-                return await dM(dispatchTarget, `⚠️ Logged to the *${activeTargetSite.fields['Site Name']}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
+                return await dM(dispatchTarget, `⚠️ Logged to the *${getSiteDisplayName(activeTargetSite)}* ledger, but Airtable rejected the specific column updates (Schema mismatch).`);
               }
-              return await dM(dispatchTarget, `❌ Failed to update the *${activeTargetSite.fields['Site Name']}* ledger.`);
+              return await dM(dispatchTarget, `❌ Failed to update the *${getSiteDisplayName(activeTargetSite)}* ledger.`);
             }
           }
         }
 
         if (isQuestion) {
-          const matchedSite = findMatchingSite(allSites, triage?.referenced_site_name || txt, boundSite);
+          const matchedSite = findMatchingSite(allSites, triage?.referenced_site_name || txt, boundSite, lookupMaps);
           if (matchedSite) {
-            return await handleCourtSpecsQuery(CONFIG, txt, matchedSite.fields['Site Name'], matchedSite, dispatchTarget);
+            return await handleCourtSpecsQuery(CONFIG, txt, getSiteDisplayName(matchedSite), matchedSite, dispatchTarget);
           }
           return await executeLedgerQuery(CONFIG, txt, dispatchTarget);
         }
@@ -2379,7 +2509,8 @@ app.post('/api/telemetry/iot', async (req, res) => {
       return;
     }
 
-    console.log(`[IoT Telemetry] Logging physical telemetry for ${site.fields['Site Name']}: Moisture=${slab_moisture_pct}%, Temp=${slab_temp_c}°C`);
+    const displayName = getSiteDisplayName(site);
+    console.log(`[IoT Telemetry] Logging physical telemetry for ${displayName}: Moisture=${slab_moisture_pct}%, Temp=${slab_temp_c}°C`);
 
     const holds = [];
     if (slab_moisture_pct !== undefined && slab_moisture_pct > 3.0) {
@@ -2399,7 +2530,7 @@ app.post('/api/telemetry/iot', async (req, res) => {
     if (holds.length > 0) {
       const alertCard = `⚠️ *TITAN OS | IN-SITU PHYSICAL HOLD*\n` +
                         `──────────────────────────────\n` +
-                        `🏟️ *Court:* ${site.fields['Site Name']}\n` +
+                        `🏟️ *Court:* ${displayName}\n` +
                         `📡 *Source:* Embedded Concrete Data Logger\n` +
                         `──────────────────────────────\n` +
                         holds.join('\n') + `\n\n` +
@@ -2490,9 +2621,11 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.34',
+    version: '6.0.35',
     oracleDocsLoaded: getActiveOracleURIs().length,
-    sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0
+    sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
+    sitesTableResolved: airtableSchemaCache.sitesTable,
+    sitesPrimaryField: airtableSchemaCache.sitesPrimaryField
   });
 });
 
@@ -2534,12 +2667,13 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
   process.on('unhandledRejection', (reason) => console.error('[CRITICAL] Unhandled Rejection:', reason));
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.34 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.35 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`====================================================================`);
 
   const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[Core Engine] System online and listening on PORT ${PORT}`);
     try {
+      await discoverAirtableBaseSchema(true);
       await getCachedSites();
       await getCachedWorkers();
       await getCachedContacts();
