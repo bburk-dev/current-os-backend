@@ -1,13 +1,14 @@
 /**
- * TITAN OS V6.0.38 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.39 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
  *          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
- *          QBO Finance Copilot, Atomic Message Deduplication, Conversational
- *          Voice Estimates, Full-Ledger Airtable Analytics, Court Configuration
- *          Inspector, Headless IoT Telemetry, RBAC Bouncer, Zero-UI Site
- *          Provisioning, Virtual Readiness, Executive Drafting Mode + Native
- *          Gmail Dispatch, and Field Intelligence.
+ *          Bilingual Forensic Pipeline (Native Worker Card + English Joy Cannon
+ *          & Ledger Sync), Retroactive "Be Water" Media Binding Buffer, QBO
+ *          Finance Copilot, Atomic Message Deduplication, Voice Estimates,
+ *          Full-Ledger Analytics, Court Configuration Inspector, IoT Telemetry,
+ *          RBAC Bouncer, Zero-UI Site Provisioning, Virtual Readiness, and
+ *          Executive Drafting Mode + Native Gmail Dispatch.
  */
 
 // ====================================================================
@@ -113,7 +114,9 @@ const CONFIG = {
 let oracleFileURIs = [];
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
+const UNBOUND_MEDIA_TTL_MS = 10 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
+const pendingUnboundMediaBatches = new Map();
 const processedMessageIds = new Map();
 const DEDUP_TTL_MS = 300 * 1000;
 const draftingSessions = new Map();
@@ -123,9 +126,13 @@ const airtableSchemaCache = {
   sitesTable: 'Sites',
   sitesPrimaryField: 'Site Name',
   sitesFields: [],
+  sitesFieldTypes: {},
   workersTable: 'Workers',
   contactsTable: 'Contacts',
-  assignmentsTable: 'Daily Assignments'
+  assignmentsTable: 'Daily Assignments',
+  reportsTable: 'Reports 2',
+  reportsFields: [],
+  reportsFieldTypes: {}
 };
 
 const memoryCache = {
@@ -242,6 +249,10 @@ async function discoverAirtableBaseSchema(force = false) {
       if (sitesMeta) {
         airtableSchemaCache.sitesTable = sitesMeta.name;
         airtableSchemaCache.sitesFields = (sitesMeta.fields || []).map(f => f.name);
+        const sTypes = {};
+        (sitesMeta.fields || []).forEach(f => { sTypes[f.name] = f.type; });
+        airtableSchemaCache.sitesFieldTypes = sTypes;
+
         const primaryFieldObj = (sitesMeta.fields || []).find(f => f.id === sitesMeta.primaryFieldId) || sitesMeta.fields?.[0];
         if (primaryFieldObj?.name) {
           airtableSchemaCache.sitesPrimaryField = primaryFieldObj.name;
@@ -263,6 +274,19 @@ async function discoverAirtableBaseSchema(force = false) {
         tables.find(t => t.name.trim().toLowerCase() === 'daily assignments') ||
         tables.find(t => /\bassignment|ticket|work order\b/i.test(t.name));
       if (assignmentsMeta) airtableSchemaCache.assignmentsTable = assignmentsMeta.name;
+
+      const reportsMeta =
+        tables.find(t => t.name.trim().toLowerCase() === 'reports 2') ||
+        tables.find(t => t.id === 'tblc7FCmSZzHnBXd9') ||
+        tables.find(t => /\breports?\b/i.test(t.name) && !/status/i.test(t.name));
+      if (reportsMeta) {
+        airtableSchemaCache.reportsTable = reportsMeta.name;
+        airtableSchemaCache.reportsFields = (reportsMeta.fields || []).map(f => f.name);
+        const rTypes = {};
+        (reportsMeta.fields || []).forEach(f => { rTypes[f.name] = f.type; });
+        airtableSchemaCache.reportsFieldTypes = rTypes;
+        console.log(`[Airtable Schema] Bound Reports -> "${reportsMeta.name}" | Columns: [${airtableSchemaCache.reportsFields.join(', ')}]`);
+      }
 
       airtableSchemaCache.discovered = true;
     }
@@ -483,7 +507,10 @@ async function hydrateQBOCache() {
 
 async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, retries = 2) {
   if (Object.keys(payload).length === 0) return { success: false, writtenFields: {}, record: null };
-  const resolvedTable = tableName === 'Sites' ? airtableSchemaCache.sitesTable : tableName;
+  let resolvedTable = tableName;
+  if (tableName === 'Sites') resolvedTable = airtableSchemaCache.sitesTable;
+  else if (tableName === 'Reports 2') resolvedTable = airtableSchemaCache.reportsTable;
+
   const url = recordId
     ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(resolvedTable)}/${recordId}`
     : `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(resolvedTable)}`;
@@ -520,6 +547,309 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
     }
   }
   return { success: false, writtenFields: {}, record: null };
+}
+
+// ====================================================================
+// 2B. BILINGUAL FORENSIC PAYLOAD BUILDER & LEDGER NORMALIZER
+// ====================================================================
+
+function looksNonEnglish(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (/[¡¿áéíóúñüàèìòùâêîôûç]/i.test(s)) return true;
+  if (/\b(el|la|los|las|está|están|pista|jaula|vidrio|luces|progreso|trabajo|instalación|completado|pendiente|con|para|del|por|sin|sobre|equipo|material|cancha|malla|césped|base)\b/i.test(s)) {
+    return true;
+  }
+  return false;
+}
+
+async function translateTextToEnglish(text) {
+  const raw = String(text || '').trim();
+  if (!raw || !looksNonEnglish(raw) || !CONFIG.gemini.apiKey) return raw;
+
+  try {
+    const prompt = `Translate the following construction site status note into clear, concise, professional English for an executive client update and engineering ledger. Preserve all technical terms, numbers, and gate references accurately. Output ONLY the translated English text with no preamble or quotes:\n\n${raw}`;
+    const res = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.0 }
+      })
+    }, 1);
+
+    if (res && res.ok) {
+      const data = await res.json();
+      const translated = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+      if (translated) return translated;
+    }
+  } catch (err) {
+    console.warn('[Bilingual Translator] Falling back to original text:', err.message);
+  }
+  return raw;
+}
+
+function buildForensicLedgerPayloads({
+  siteRecord,
+  workerName,
+  verifiedGatesCount,
+  totalGatesCount,
+  workerNativeSummary,
+  englishLedgerSummary,
+  signedMediaUrls,
+  discoveredSchema
+}) {
+  const safeTotal = totalGatesCount > 0 ? totalGatesCount : 9;
+  const ratio = Math.min(1, Math.max(0, verifiedGatesCount / safeTotal));
+  const percentInt = Math.round(ratio * 100);
+  const currentGateLabel = `Gate ${verifiedGatesCount} (${verifiedGatesCount}/${safeTotal} Verified)`;
+  const primaryVideoUrl = Array.isArray(signedMediaUrls) && signedMediaUrls.length > 0 ? signedMediaUrls[0] : '';
+  const allUrlsJoined = Array.isArray(signedMediaUrls) ? signedMediaUrls.join('\n') : '';
+
+  const schemaObj = discoveredSchema || airtableSchemaCache;
+  const sitesColumns = schemaObj.sitesFields || schemaObj?.Sites?.columns || [];
+  const sitesTypes = schemaObj.sitesFieldTypes || schemaObj?.Sites?.columnTypes || {};
+
+  const siteFields = {
+    'Current Gate': currentGateLabel,
+    'Last Note': `[FORENSIC SWEEP] ${workerName}: ${currentGateLabel}. ${englishLedgerSummary}`
+  };
+
+  if (sitesColumns.length === 0 || sitesColumns.includes('Completion %')) {
+    const colType = sitesTypes['Completion %'];
+    siteFields['Completion %'] = colType === 'number' ? percentInt : Number(ratio.toFixed(2));
+  }
+
+  if (primaryVideoUrl && (sitesColumns.length === 0 || sitesColumns.includes('Latest Video Link'))) {
+    siteFields['Latest Video Link'] = primaryVideoUrl;
+  }
+
+  if (
+    verifiedGatesCount >= 1 &&
+    siteRecord?.fields?.['Workflow Mode'] === 'INSTALLATION' &&
+    siteRecord?.fields?.['Site Status'] === 'PLANNING'
+  ) {
+    siteFields['Site Status'] = 'ACTIVE';
+  }
+
+  const reportsColumns = schemaObj.reportsFields || schemaObj?.['Reports 2']?.columns || [];
+  const reportsTypes = schemaObj.reportsFieldTypes || schemaObj?.['Reports 2']?.columnTypes || {};
+  const reportFields = {};
+
+  const assignFirstMatchingColumn = (candidates, value) => {
+    if (value === undefined || value === null || value === '') return;
+    if (reportsColumns.length === 0) {
+      reportFields[candidates[0]] = value;
+      return;
+    }
+    const match = candidates.find((col) => reportsColumns.includes(col));
+    if (match) {
+      reportFields[match] = value;
+    }
+  };
+
+  assignFirstMatchingColumn(['Summary', 'Notes', 'Report Summary', 'Description', 'Last Note'], englishLedgerSummary);
+  assignFirstMatchingColumn(['Technician', 'Submitted By', 'Installer', 'Worker Name', 'Worker'], workerName);
+  assignFirstMatchingColumn(['Gate', 'Current Gate', 'Verified Gate'], currentGateLabel);
+
+  if (allUrlsJoined) {
+    const mediaCandidates = ['Video Link', 'Media URL', 'Media URLs', 'Video URL', 'Latest Video Link', 'Attachments', 'Media Links'];
+    const mediaCol = reportsColumns.find((col) => mediaCandidates.includes(col));
+    if (mediaCol) {
+      if (reportsTypes[mediaCol] === 'multipleAttachments') {
+        reportFields[mediaCol] = (Array.isArray(signedMediaUrls) ? signedMediaUrls : [allUrlsJoined]).map(u => ({ url: u }));
+      } else {
+        reportFields[mediaCol] = allUrlsJoined;
+      }
+    }
+  }
+
+  const filledBlocks = Math.round(ratio * 10);
+  const progressBar = `[${'█'.repeat(filledBlocks)}${'░'.repeat(10 - filledBlocks)}] ${percentInt}%`;
+
+  const joyCannonMessage = [
+    `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`,
+    `━━━━━━━━━━━━━━━━━━━━`,
+    `🏟️ *Project:* ${siteRecord ? getSiteDisplayName(siteRecord) : 'Active Site'}`,
+    `📊 *Progress:* ${progressBar}`,
+    `━━━━━━━━━━━━━━━━━━━━`,
+    englishLedgerSummary,
+    primaryVideoUrl ? `\n📸 *Latest Site Capture:*\n${primaryVideoUrl}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return {
+    siteFields,
+    reportFields,
+    joyCannonMessage,
+    workerPunchCardSummary: workerNativeSummary || englishLedgerSummary
+  };
+}
+
+CONFIG.buildForensicLedgerPayloads = buildForensicLedgerPayloads;
+
+function createForensicAirtableWriter(baseWriteFn, batchContext) {
+  return async function forensicAirtableWriter(tableName, payload, recordId = null, retries = 2) {
+    if (!payload || typeof payload !== 'object') {
+      return await baseWriteFn(tableName, payload, recordId, retries);
+    }
+
+    const enrichedPayload = { ...payload };
+
+    // 1. Enhance Sites updates with Completion %, English Last Note, and ACTIVE status transition
+    if (tableName === 'Sites' || tableName === airtableSchemaCache.sitesTable) {
+      const gateStr = String(enrichedPayload['Current Gate'] || '');
+      const ratioMatch = gateStr.match(/(\d+)\s*\/\s*(\d+)/);
+      const singleGateMatch = gateStr.match(/Gate\s*(\d+)/i);
+
+      if (ratioMatch || singleGateMatch) {
+        const verifiedCount = ratioMatch ? parseInt(ratioMatch[1], 10) : parseInt(singleGateMatch[1], 10);
+        const totalCount = ratioMatch ? parseInt(ratioMatch[2], 10) : 9;
+        const safeTotal = totalCount > 0 ? totalCount : 9;
+        const ratio = Math.min(1, Math.max(0, verifiedCount / safeTotal));
+        const colType = airtableSchemaCache.sitesFieldTypes['Completion %'];
+
+        if (enrichedPayload['Completion %'] === undefined) {
+          enrichedPayload['Completion %'] = colType === 'number'
+            ? Math.round(ratio * 100)
+            : Number(ratio.toFixed(2));
+        }
+
+        const targetSite = batchContext?.site;
+        if (
+          verifiedCount >= 1 &&
+          targetSite?.fields?.['Workflow Mode'] === 'INSTALLATION' &&
+          targetSite?.fields?.['Site Status'] === 'PLANNING' &&
+          !enrichedPayload['Site Status']
+        ) {
+          enrichedPayload['Site Status'] = 'ACTIVE';
+        }
+      }
+
+      if (typeof enrichedPayload['Last Note'] === 'string' && looksNonEnglish(enrichedPayload['Last Note'])) {
+        const prefixMatch = enrichedPayload['Last Note'].match(/^(\[[^\]]+\]\s*[^:]+:\s*(?:Gate\s*\d+\s*\([^)]+\)\.\s*)?)(.*)$/s);
+        if (prefixMatch && prefixMatch[2]) {
+          const translatedBody = await translateTextToEnglish(prefixMatch[2]);
+          enrichedPayload['Last Note'] = `${prefixMatch[1]}${translatedBody}`;
+        } else {
+          enrichedPayload['Last Note'] = await translateTextToEnglish(enrichedPayload['Last Note']);
+        }
+      }
+    }
+
+    // 2. Dynamically map Reports 2 fields to actual Airtable schema columns & translate notes to English
+    if (tableName === 'Reports 2' || tableName === airtableSchemaCache.reportsTable) {
+      const rCols = airtableSchemaCache.reportsFields || [];
+      const rTypes = airtableSchemaCache.reportsFieldTypes || {};
+
+      const rawNote = enrichedPayload['Last Note'] || enrichedPayload['Summary'] || enrichedPayload['Notes'];
+      if (rawNote) {
+        const englishNote = await translateTextToEnglish(rawNote);
+        const noteCol = rCols.find(c => ['Last Note', 'Summary', 'Notes', 'Report Summary', 'Description'].includes(c));
+        if (noteCol) {
+          delete enrichedPayload['Last Note'];
+          enrichedPayload[noteCol] = englishNote;
+        }
+      }
+
+      const rawMedia = enrichedPayload['Media Links'] || enrichedPayload['Video Link'] || enrichedPayload['Media URL'];
+      if (rawMedia) {
+        const mediaCol = rCols.find(c => ['Media Links', 'Video Link', 'Media URL', 'Media URLs', 'Video URL', 'Latest Video Link', 'Attachments'].includes(c));
+        if (mediaCol) {
+          delete enrichedPayload['Media Links'];
+          if (rTypes[mediaCol] === 'multipleAttachments') {
+            const urls = Array.isArray(rawMedia) ? rawMedia : String(rawMedia).split(/\s+/).filter(u => u.startsWith('http'));
+            enrichedPayload[mediaCol] = urls.map(u => ({ url: u }));
+          } else {
+            enrichedPayload[mediaCol] = Array.isArray(rawMedia) ? rawMedia.join('\n') : String(rawMedia);
+          }
+        }
+      }
+
+      if (enrichedPayload['Worker'] !== undefined) {
+        const workerCol = rCols.find(c => ['Worker', 'Workers', 'Technician', 'Submitted By', 'Installer', 'Worker Name'].includes(c));
+        if (workerCol) {
+          const val = enrichedPayload['Worker'];
+          delete enrichedPayload['Worker'];
+          if (rTypes[workerCol] === 'multipleRecordLinks') {
+            if (Array.isArray(val)) enrichedPayload[workerCol] = val;
+            else if (batchContext?.worker?.id) enrichedPayload[workerCol] = [batchContext.worker.id];
+          } else {
+            enrichedPayload[workerCol] = Array.isArray(val)
+              ? (batchContext?.callerIdentity?.name || val.join(', '))
+              : String(val);
+          }
+        }
+      }
+    }
+
+    return await baseWriteFn(tableName, enrichedPayload, recordId, retries);
+  };
+}
+
+// Ensure outbound Joy Cannon stakeholder broadcasts are always translated to English
+// while keeping the worker's own field punch card in their native language.
+if (whatsapp && typeof whatsapp.sendWhatsAppMessage === 'function' && !whatsapp.__joyCannonEnglishWrapped) {
+  const originalSendWhatsAppMessage = whatsapp.sendWhatsAppMessage.bind(whatsapp);
+  whatsapp.sendWhatsAppMessage = async function wrappedSendWhatsAppMessage(cfg, target, messageText, ...rest) {
+    try {
+      if (typeof messageText === 'string' && messageText.includes('BUILD MILESTONE UPDATE') && looksNonEnglish(messageText)) {
+        const lines = messageText.split('\n');
+        const captureIdx = lines.findIndex(l => l.includes('Latest Site Capture'));
+        const dividerIndices = lines.reduce((acc, l, idx) => (l.startsWith('━━') || l.startsWith('──') ? [...acc, idx] : acc), []);
+        const bodyStart = dividerIndices.length >= 2 ? dividerIndices[1] + 1 : 4;
+        const bodyEnd = captureIdx > bodyStart ? captureIdx : lines.length;
+
+        const narrativeLines = lines.slice(bodyStart, bodyEnd).filter(l => l.trim().length > 0);
+        if (narrativeLines.length > 0) {
+          const translatedNarrative = await translateTextToEnglish(narrativeLines.join('\n'));
+          const rebuiltLines = [
+            ...lines.slice(0, bodyStart),
+            translatedNarrative,
+            ...(captureIdx >= 0 ? ['', ...lines.slice(captureIdx)] : [])
+          ];
+          messageText = rebuiltLines.join('\n');
+        }
+      }
+    } catch (e) {
+      console.warn('[Joy Cannon Translator] Fallback to original message:', e.message);
+    }
+    return await originalSendWhatsAppMessage(cfg, target, messageText, ...rest);
+  };
+  whatsapp.__joyCannonEnglishWrapped = true;
+}
+
+async function runForensicMediaBatch(batchObj) {
+  const forensicWriter = createForensicAirtableWriter(airtableWriteWithAutoDrop, batchObj);
+  await whatsapp.processMediaBatch(CONFIG, batchObj, forensicWriter, getActiveOracleURIs());
+  await getCachedSites(true);
+}
+
+async function replayPendingUnboundMediaBatch(speakerPhone, boundSite, dispatchTarget) {
+  const pending = pendingUnboundMediaBatches.get(speakerPhone);
+  if (!pending) return;
+
+  pendingUnboundMediaBatches.delete(speakerPhone);
+  if (Date.now() - pending.timestamp > UNBOUND_MEDIA_TTL_MS) return;
+
+  const siteName = getSiteDisplayName(boundSite);
+  console.log(`[Be Water Recovery] Replaying ${pending.batch.items.length} buffered media file(s) from ${speakerPhone} against bound site "${siteName}"...`);
+
+  try {
+    await whatsapp.sendWhatsAppMessage(
+      CONFIG,
+      dispatchTarget,
+      `🔄 *Be Water Auto-Recovery:* Applying your recent site video/photo upload (${pending.batch.items.length} file(s)) to *${siteName}* now...`
+    );
+    const hydratedBatch = {
+      ...pending.batch,
+      site: boundSite
+    };
+    await runForensicMediaBatch(hydratedBatch);
+  } catch (err) {
+    console.error('[Be Water Recovery Error]:', err.message);
+  }
 }
 
 // ====================================================================
@@ -766,11 +1096,11 @@ ${JSON.stringify(enrichedRecord, null, 2)}
 Instructions:
 1. Answer the user's question directly and accurately using ONLY the record above.
 2. If the user asks for general court configuration or court details, present a crisp WhatsApp summary covering:
-   - Site Name, Client Name / Partner, & Site Location
-   - Model Type, Manufacturer, & Court Classification
-   - Steel Color, Turf Color, & Turf Supplier
-   - Foundation Type & Lights (from the "Lights" field)
-   - Current Gate, Completion %, Site Status, Workflow Mode, Year Installed, & Deposit Status (if populated)
+  - Site Name, Client Name / Partner, & Site Location
+  - Model Type, Manufacturer, & Court Classification
+  - Steel Color, Turf Color, & Turf Supplier
+  - Foundation Type & Lights (from the "Lights" field)
+  - Current Gate, Completion %, Site Status, Workflow Mode, Year Installed, & Deposit Status (if populated)
 3. If a specific field requested (such as Lights, Turf Supplier, or Steel Color) is not populated in the record, clearly state that it is not documented in the Airtable ledger yet.
 4. Keep formatting concise, scannable, and WhatsApp-friendly (use *bold* bullets, no tables).`;
 
@@ -1520,6 +1850,7 @@ app.post('/webhook', async (req, res) => {
 
           try {
             await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, speakerPhone, dist, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
+            await replayPendingUnboundMediaBatch(speakerPhone, selectedSite, dispatchTarget);
           } catch (e) {
             console.error('[Context Binding Error]:', e.message);
           }
@@ -1734,6 +2065,7 @@ app.post('/webhook', async (req, res) => {
           console.log(`[Location Triage] Single site found (${getSiteDisplayName(nearby[0].site)}). Binding context.`);
           try {
             await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, speakerPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
+            await replayPendingUnboundMediaBatch(speakerPhone, nearby[0].site, dispatchTarget);
           } catch (e) {
             console.error('[Context Binding Error]:', e.message);
           }
@@ -1877,7 +2209,33 @@ app.post('/webhook', async (req, res) => {
             return;
           }
 
-          await whatsapp.processMediaBatch(CONFIG, currentBatch, airtableWriteWithAutoDrop, getActiveOracleURIs());
+          // Re-check live session site binding in case worker pinned while debounce timer ran
+          const liveBoundId = whatsapp.getUserBoundSiteId
+            ? (whatsapp.getUserBoundSiteId(dispatchTarget) || whatsapp.getUserBoundSiteId(speakerPhone))
+            : null;
+          if (!currentBatch.site && liveBoundId) {
+            const freshSites = await getCachedSites();
+            currentBatch.site = freshSites.find(s => s.id === liveBoundId) || null;
+          }
+
+          // "Be Water" Retroactive Buffer: if worker uploaded media before dropping pin,
+          // hold a copy in RAM for 10 minutes so dropping a pin auto-replays the sweep.
+          if (!currentBatch.site) {
+            const existingPending = pendingUnboundMediaBatches.get(speakerPhone);
+            const mergedItems = existingPending && (Date.now() - existingPending.timestamp <= UNBOUND_MEDIA_TTL_MS)
+              ? [...existingPending.batch.items, ...currentBatch.items]
+              : [...currentBatch.items];
+
+            pendingUnboundMediaBatches.set(speakerPhone, {
+              timestamp: Date.now(),
+              batch: {
+                ...currentBatch,
+                items: mergedItems
+              }
+            });
+          }
+
+          await runForensicMediaBatch(currentBatch);
         } catch (batchErr) {
           console.error('[Batch Engine Failure]:', batchErr);
           await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Error processing media submission: ${batchErr.message}`);
@@ -1984,7 +2342,7 @@ app.post('/webhook', async (req, res) => {
               const rLower = r.map(role => String(role).toLowerCase());
 
               if (rLower.includes('delivery') || rLower.includes('admin') || rLower.includes('supervisor') || rLower.includes('logistics and freight')) {
-                const phoneNum = String(w.fields['WhatsApp Number'] || w.fields['Phone'] || '').replace(/\D/g, '');
+                const phoneNum = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
                 let e164 = phoneNum;
                 if (e164.length === 10) e164 = '1' + e164;
                 if (e164 && e164 !== speakerPhone && e164 !== displayBotPhone) dispatchTargets.push(e164);
@@ -2157,7 +2515,8 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                   const parsed = JSON.parse(cleanJson);
                   const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
 
-                  const payload = { 'Last Note': `[VOICE UPDATE] ${callerIdentity.name}: "${transcript}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
+                  const englishTranscript = await translateTextToEnglish(transcript);
+                  const payload = { 'Last Note': `[VOICE UPDATE] ${callerIdentity.name}: "${englishTranscript}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
                   for (const [key, value] of Object.entries(normalized)) {
                     if (!protectedColumns.includes(key) && !/^(Summary|Headline|Title)\s*\(/i.test(key)) {
                       payload[key] = value;
@@ -2411,7 +2770,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             const rLower = r.map(role => String(role).toLowerCase());
 
             if (rLower.includes('delivery') || rLower.includes('admin') || rLower.includes('supervisor') || rLower.includes('logistics and freight')) {
-              const phoneNum = String(w.fields['WhatsApp Number'] || w.fields['Phone'] || '').replace(/\D/g, '');
+              const phoneNum = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
               let e164 = phoneNum;
               if (e164.length === 10) e164 = '1' + e164;
               if (e164 && e164 !== speakerPhone && e164 !== displayBotPhone) dispatchTargets.push(e164);
@@ -2572,7 +2931,8 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
               const parsed = JSON.parse(rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
               const normalized = whatsapp.normalizeSitePayload ? whatsapp.normalizeSitePayload(parsed, activeTargetSite) : parsed;
 
-              const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${txt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
+              const englishTxt = await translateTextToEnglish(txt);
+              const payload = { 'Last Note': `[TEXT UPDATE] ${callerIdentity.name}: "${englishTxt}"`, 'Last Intent': 'DYNAMIC_SITE_UPDATE' };
               for (const [key, value] of Object.entries(normalized)) {
                 if (!protectedColumns.includes(key) && !/^(Summary|Headline|Title)\s*\(/i.test(key)) {
                   payload[key] = value;
@@ -2755,11 +3115,12 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.38',
+    version: '6.0.39',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
-    sitesPrimaryField: airtableSchemaCache.sitesPrimaryField
+    sitesPrimaryField: airtableSchemaCache.sitesPrimaryField,
+    reportsTableResolved: airtableSchemaCache.reportsTable
   });
 });
 
@@ -2805,7 +3166,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
     : 'MISSING';
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.38 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.39 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`🔑 Airtable Auth: ${keyFingerprint} | Base: ${CONFIG.airtable.baseId}`);
   console.log(`====================================================================`);
 
