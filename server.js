@@ -1,14 +1,17 @@
 /**
- * TITAN OS V6.0.39 — HEADLESS ERP ORCHESTRATOR
+ * TITAN OS V6.0.41 — HEADLESS ERP ORCHESTRATOR
  * Module: server.js
  * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
  *          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
- *          Bilingual Forensic Pipeline (Native Worker Card + English Joy Cannon
- *          & Ledger Sync), Retroactive "Be Water" Media Binding Buffer, QBO
- *          Finance Copilot, Atomic Message Deduplication, Voice Estimates,
- *          Full-Ledger Analytics, Court Configuration Inspector, IoT Telemetry,
- *          RBAC Bouncer, Zero-UI Site Provisioning, Virtual Readiness, and
- *          Executive Drafting Mode + Native Gmail Dispatch.
+ *          Canonical 9-Gate Named Milestones (with Passive Gate 5 Silicone &
+ *          Conditional Gate 6 Lights Y/N Logic), Schema-Exact Reports 2 &
+ *          Sites Sync (Verified Image, Client Milestone Title, Completion %,
+ *          Joy Cannon Update), Bilingual Forensic Pipeline (Native Worker Card
+ *          + English Joy Cannon & Ledger Notes), Retroactive "Be Water" Media
+ *          Binding Buffer, QBO Finance Copilot, Atomic Message Deduplication,
+ *          Voice Estimates, Full-Ledger Analytics, Court Configuration Inspector,
+ *          IoT Telemetry, RBAC Bouncer, Zero-UI Site Provisioning, Virtual
+ *          Readiness, and Executive Drafting Mode + Native Gmail Dispatch.
  */
 
 // ====================================================================
@@ -107,6 +110,212 @@ const CONFIG = {
     refreshToken: cleanEnv(process.env.GMAIL_REFRESH_TOKEN)
   }
 };
+
+// ====================================================================
+// 1B. CANONICAL 9-GATE MILESTONE ENGINE (PASSIVE & CONDITIONAL RULES)
+// ====================================================================
+const GATE_CATALOG = {
+  1: {
+    en: 'Foundation and site readiness',
+    es: 'Preparación de base y sitio',
+    passive: false,
+    requiresLights: false
+  },
+  2: {
+    en: 'Steel frame up',
+    es: 'Estructura de acero levantada',
+    passive: false,
+    requiresLights: false
+  },
+  3: {
+    en: 'Side mesh and upper mesh up',
+    es: 'Malla lateral y malla superior instaladas',
+    passive: false,
+    requiresLights: false
+  },
+  4: {
+    en: 'Glass installed',
+    es: 'Vidrio instalado',
+    passive: false,
+    requiresLights: false
+  },
+  5: {
+    en: 'Silicone applied',
+    es: 'Silicona aplicada',
+    passive: true,
+    requiresLights: false
+  },
+  6: {
+    en: 'Lighting up',
+    es: 'Iluminación instalada',
+    passive: false,
+    requiresLights: true
+  },
+  7: {
+    en: 'Turf installed and sand is in',
+    es: 'Césped instalado y arena colocada',
+    passive: false,
+    requiresLights: false
+  },
+  8: {
+    en: 'Net posts and net are up',
+    es: 'Postes de red y red instalados',
+    passive: false,
+    requiresLights: false
+  },
+  9: {
+    en: 'Site is clean and ready for play!',
+    es: '¡Sitio limpio y listo para jugar!',
+    passive: false,
+    requiresLights: false
+  }
+};
+
+function siteHasLights(siteRecord) {
+  if (!siteRecord || !siteRecord.fields) return false;
+  const raw = siteRecord.fields['Lights'];
+  if (raw === true) return true;
+  const val = String(raw || '').trim().toLowerCase();
+  return val === 'yes' || val === 'y' || val === 'true' || val === '1';
+}
+
+function getActiveGateNumbersForSite(siteRecord) {
+  const hasLights = siteHasLights(siteRecord);
+  return Object.entries(GATE_CATALOG)
+    .filter(([, meta]) => {
+      if (meta.passive) return false;
+      if (meta.requiresLights && !hasLights) return false;
+      return true;
+    })
+    .map(([num]) => parseInt(num, 10))
+    .sort((a, b) => a - b);
+}
+
+function getGateName(gateNumber, lang = 'en') {
+  const num = parseInt(gateNumber, 10);
+  const entry = GATE_CATALOG[num];
+  if (!entry) return lang === 'es' ? `Etapa ${num}` : `Milestone ${num}`;
+  return lang === 'es' ? entry.es : entry.en;
+}
+
+function computeSiteGateProgress(siteRecord, highestOrClearedGates) {
+  const activeGateNums = getActiveGateNumbersForSite(siteRecord);
+  const totalActiveGates = activeGateNums.length; // 8 if Lights=Yes, 7 if Lights=No (Gate 5 Silicone is passive)
+
+  let verifiedActiveCount = 0;
+  let passiveSiliconeApplied = false;
+  let latestMilestoneNum = 1;
+
+  if (Array.isArray(highestOrClearedGates) && highestOrClearedGates.length > 0) {
+    const nums = highestOrClearedGates
+      .map(g => {
+        if (typeof g === 'number') return g;
+        const m = String(g).match(/(\d+)/);
+        return m ? parseInt(m[1], 10) : null;
+      })
+      .filter(n => n !== null && GATE_CATALOG[n]);
+
+    if (nums.includes(5)) passiveSiliconeApplied = true;
+    const activeCleared = nums.filter(n => activeGateNums.includes(n));
+    verifiedActiveCount = activeCleared.length;
+    if (nums.length > 0) latestMilestoneNum = Math.max(...nums);
+  } else {
+    const rawNum = parseInt(highestOrClearedGates, 10) || 1;
+    latestMilestoneNum = rawNum;
+    if (rawNum >= 5) passiveSiliconeApplied = true;
+    verifiedActiveCount = activeGateNums.filter(n => n <= rawNum).length;
+  }
+
+  const ratio = totalActiveGates > 0
+    ? Math.min(1, Math.max(0, verifiedActiveCount / totalActiveGates))
+    : 0;
+  const percentInt = Math.round(ratio * 100);
+  const milestoneTitleEn = getGateName(latestMilestoneNum, 'en');
+  const currentGateLabel = `${milestoneTitleEn} (${verifiedActiveCount}/${totalActiveGates} Verified)`;
+
+  return {
+    activeGateNums,
+    totalActiveGates,
+    verifiedActiveCount,
+    passiveSiliconeApplied,
+    latestMilestoneNum,
+    milestoneTitleEn,
+    currentGateLabel,
+    ratio,
+    percentInt
+  };
+}
+
+function replaceGateNumbersWithNames(text, lang = 'en', siteRecord = null) {
+  if (!text || typeof text !== 'string') return text;
+  const verifiedWord = lang === 'es' ? 'Verificado' : 'Verified';
+  const passiveWord = lang === 'es' ? 'reconocido' : 'acknowledged';
+  const activeTotal = siteRecord ? getActiveGateNumbersForSite(siteRecord).length : null;
+
+  let out = text;
+
+  // 1. Replace "Gate 3 (3/9 Verified)" or "Gate 3 (3/9 Verificado)"
+  out = out.replace(
+    /\b(?:Gate|Puerta|Fase)\s*#?\s*(\d{1,2})\s*\((\d+)\s*\/\s*(\d+)\s*(?:Verified|Verificado)?\)/gi,
+    (_, gNumStr, doneStr, totalStr) => {
+      const gNum = parseInt(gNumStr, 10);
+      const name = getGateName(gNum, lang);
+      if (GATE_CATALOG[gNum]?.passive) {
+        return `${name} (${passiveWord})`;
+      }
+      if (siteRecord) {
+        const prog = computeSiteGateProgress(siteRecord, gNum);
+        return `${name} (${prog.verifiedActiveCount}/${prog.totalActiveGates} ${verifiedWord})`;
+      }
+      const denom = activeTotal || totalStr;
+      return `${name} (${doneStr}/${denom} ${verifiedWord})`;
+    }
+  );
+
+  // 2. Replace plural lists like "Gates 1, 2, and 3" or "Gates 1, 2, 3"
+  out = out.replace(
+    /\b(?:Gates|Puertas|Fases)\s+((?:#?\d{1,2}(?:\s*,\s*|\s+(?:and|y)\s+)?)+)/gi,
+    (_, listChunk) => {
+      return listChunk.replace(/#?(\d{1,2})/g, (__, nStr) => {
+        const n = parseInt(nStr, 10);
+        const name = getGateName(n, lang);
+        return GATE_CATALOG[n]?.passive ? `${name} (${passiveWord})` : name;
+      });
+    }
+  );
+
+  // 3. Replace standalone "Gate 3" / "Gate #3"
+  out = out.replace(
+    /\b(?:Gate|Puerta|Fase)\s*#?\s*(\d{1,2})\b/gi,
+    (_, gNumStr) => {
+      const gNum = parseInt(gNumStr, 10);
+      const name = getGateName(gNum, lang);
+      return GATE_CATALOG[gNum]?.passive ? `${name} (${passiveWord})` : name;
+    }
+  );
+
+  return out;
+}
+
+function extractMilestoneTitleFromText(text) {
+  const s = String(text || '');
+  const gateNumMatch = s.match(/\b(?:Gate|Puerta|Fase)\s*#?\s*(\d{1,2})\b/i);
+  if (gateNumMatch) {
+    return getGateName(gateNumMatch[1], 'en');
+  }
+  for (const entry of Object.values(GATE_CATALOG)) {
+    if (s.toLowerCase().includes(entry.en.toLowerCase())) {
+      return entry.en;
+    }
+  }
+  return null;
+}
+
+CONFIG.GATE_CATALOG = GATE_CATALOG;
+CONFIG.siteHasLights = siteHasLights;
+CONFIG.getActiveGateNumbersForSite = getActiveGateNumbersForSite;
+CONFIG.getGateName = getGateName;
+CONFIG.computeSiteGateProgress = computeSiteGateProgress;
 
 // ====================================================================
 // 2. STATE MACHINES, AIRTABLE PACER & CACHE-ASIDE ENGINE
@@ -568,7 +777,7 @@ async function translateTextToEnglish(text) {
   if (!raw || !looksNonEnglish(raw) || !CONFIG.gemini.apiKey) return raw;
 
   try {
-    const prompt = `Translate the following construction site status note into clear, concise, professional English for an executive client update and engineering ledger. Preserve all technical terms, numbers, and gate references accurately. Output ONLY the translated English text with no preamble or quotes:\n\n${raw}`;
+    const prompt = `Translate the following construction site status note into clear, concise, professional English for an executive client update and engineering ledger. Preserve all technical terms, numbers, and milestone references accurately. Output ONLY the translated English text with no preamble or quotes:\n\n${raw}`;
     const res = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -589,43 +798,57 @@ async function translateTextToEnglish(text) {
   return raw;
 }
 
+function formatAirtableMediaValue(rawMedia, fieldType) {
+  const urls = Array.isArray(rawMedia)
+    ? rawMedia.map(u => String(u).trim()).filter(u => u.startsWith('http'))
+    : String(rawMedia || '').split(/\s+/).map(u => u.trim()).filter(u => u.startsWith('http'));
+
+  if (urls.length === 0) return null;
+  if (fieldType === 'multipleAttachments') {
+    return urls.map(u => ({ url: u }));
+  }
+  if (fieldType === 'url') {
+    return urls[0];
+  }
+  return urls.join('\n');
+}
+
 function buildForensicLedgerPayloads({
   siteRecord,
+  workerRecord,
   workerName,
-  verifiedGatesCount,
-  totalGatesCount,
+  verifiedGates,
   workerNativeSummary,
   englishLedgerSummary,
   signedMediaUrls,
   discoveredSchema
 }) {
-  const safeTotal = totalGatesCount > 0 ? totalGatesCount : 9;
-  const ratio = Math.min(1, Math.max(0, verifiedGatesCount / safeTotal));
-  const percentInt = Math.round(ratio * 100);
-  const currentGateLabel = `Gate ${verifiedGatesCount} (${verifiedGatesCount}/${safeTotal} Verified)`;
+  const progress = computeSiteGateProgress(siteRecord, verifiedGates);
+  const namedEnglishSummary = replaceGateNumbersWithNames(englishLedgerSummary, 'en', siteRecord);
+  const namedWorkerSummary = replaceGateNumbersWithNames(workerNativeSummary || englishLedgerSummary, 'es', siteRecord);
   const primaryVideoUrl = Array.isArray(signedMediaUrls) && signedMediaUrls.length > 0 ? signedMediaUrls[0] : '';
-  const allUrlsJoined = Array.isArray(signedMediaUrls) ? signedMediaUrls.join('\n') : '';
 
   const schemaObj = discoveredSchema || airtableSchemaCache;
   const sitesColumns = schemaObj.sitesFields || schemaObj?.Sites?.columns || [];
   const sitesTypes = schemaObj.sitesFieldTypes || schemaObj?.Sites?.columnTypes || {};
 
   const siteFields = {
-    'Current Gate': currentGateLabel,
-    'Last Note': `[FORENSIC SWEEP] ${workerName}: ${currentGateLabel}. ${englishLedgerSummary}`
+    'Current Gate': progress.currentGateLabel,
+    'Last Note': `[FORENSIC SWEEP] ${workerName}: ${progress.currentGateLabel}. ${namedEnglishSummary}`
   };
 
   if (sitesColumns.length === 0 || sitesColumns.includes('Completion %')) {
     const colType = sitesTypes['Completion %'];
-    siteFields['Completion %'] = colType === 'number' ? percentInt : Number(ratio.toFixed(2));
+    siteFields['Completion %'] = colType === 'number' ? progress.percentInt : Number(progress.ratio.toFixed(2));
   }
 
   if (primaryVideoUrl && (sitesColumns.length === 0 || sitesColumns.includes('Latest Video Link'))) {
-    siteFields['Latest Video Link'] = primaryVideoUrl;
+    const formattedSiteMedia = formatAirtableMediaValue(signedMediaUrls, sitesTypes['Latest Video Link']);
+    if (formattedSiteMedia) siteFields['Latest Video Link'] = formattedSiteMedia;
   }
 
   if (
-    verifiedGatesCount >= 1 &&
+    progress.verifiedActiveCount >= 1 &&
     siteRecord?.fields?.['Workflow Mode'] === 'INSTALLATION' &&
     siteRecord?.fields?.['Site Status'] === 'PLANNING'
   ) {
@@ -636,44 +859,51 @@ function buildForensicLedgerPayloads({
   const reportsTypes = schemaObj.reportsFieldTypes || schemaObj?.['Reports 2']?.columnTypes || {};
   const reportFields = {};
 
-  const assignFirstMatchingColumn = (candidates, value) => {
-    if (value === undefined || value === null || value === '') return;
-    if (reportsColumns.length === 0) {
-      reportFields[candidates[0]] = value;
-      return;
+  if (reportsColumns.includes('Joy Cannon Update')) {
+    reportFields['Joy Cannon Update'] = namedEnglishSummary;
+  }
+  if (reportsColumns.includes('Worker Summary')) {
+    reportFields['Worker Summary'] = namedEnglishSummary;
+  }
+  if (reportsColumns.includes('Active Gate')) {
+    reportFields['Active Gate'] = progress.currentGateLabel;
+  }
+  if (reportsColumns.includes('Client Milestone Title')) {
+    reportFields['Client Milestone Title'] = progress.milestoneTitleEn;
+  }
+  if (reportsColumns.includes('Worker')) {
+    if (reportsTypes['Worker'] === 'multipleRecordLinks') {
+      if (workerRecord?.id) reportFields['Worker'] = [workerRecord.id];
+    } else if (workerName) {
+      reportFields['Worker'] = workerName;
     }
-    const match = candidates.find((col) => reportsColumns.includes(col));
-    if (match) {
-      reportFields[match] = value;
-    }
-  };
+  }
+  if (reportsColumns.includes('Sites') && siteRecord?.id && reportsTypes['Sites'] === 'multipleRecordLinks') {
+    reportFields['Sites'] = [siteRecord.id];
+  }
 
-  assignFirstMatchingColumn(['Summary', 'Notes', 'Report Summary', 'Description', 'Last Note'], englishLedgerSummary);
-  assignFirstMatchingColumn(['Technician', 'Submitted By', 'Installer', 'Worker Name', 'Worker'], workerName);
-  assignFirstMatchingColumn(['Gate', 'Current Gate', 'Verified Gate'], currentGateLabel);
-
-  if (allUrlsJoined) {
-    const mediaCandidates = ['Video Link', 'Media URL', 'Media URLs', 'Video URL', 'Latest Video Link', 'Attachments', 'Media Links'];
+  if (Array.isArray(signedMediaUrls) && signedMediaUrls.length > 0) {
+    const mediaCandidates = ['Verified Image', 'Media Links', 'Video Link', 'Media URL', 'Latest Video Link'];
     const mediaCol = reportsColumns.find((col) => mediaCandidates.includes(col));
     if (mediaCol) {
-      if (reportsTypes[mediaCol] === 'multipleAttachments') {
-        reportFields[mediaCol] = (Array.isArray(signedMediaUrls) ? signedMediaUrls : [allUrlsJoined]).map(u => ({ url: u }));
-      } else {
-        reportFields[mediaCol] = allUrlsJoined;
+      const formattedReportMedia = formatAirtableMediaValue(signedMediaUrls, reportsTypes[mediaCol]);
+      if (formattedReportMedia) {
+        reportFields[mediaCol] = formattedReportMedia;
       }
     }
   }
 
-  const filledBlocks = Math.round(ratio * 10);
-  const progressBar = `[${'█'.repeat(filledBlocks)}${'░'.repeat(10 - filledBlocks)}] ${percentInt}%`;
+  const filledBlocks = Math.round(progress.ratio * 10);
+  const progressBar = `[${'█'.repeat(filledBlocks)}${'░'.repeat(10 - filledBlocks)}] ${progress.percentInt}%`;
 
   const joyCannonMessage = [
     `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`,
     `━━━━━━━━━━━━━━━━━━━━`,
     `🏟️ *Project:* ${siteRecord ? getSiteDisplayName(siteRecord) : 'Active Site'}`,
+    `🏁 *Milestone:* ${progress.milestoneTitleEn}`,
     `📊 *Progress:* ${progressBar}`,
     `━━━━━━━━━━━━━━━━━━━━`,
-    englishLedgerSummary,
+    namedEnglishSummary,
     primaryVideoUrl ? `\n📸 *Latest Site Capture:*\n${primaryVideoUrl}` : ''
   ]
     .filter(Boolean)
@@ -683,7 +913,7 @@ function buildForensicLedgerPayloads({
     siteFields,
     reportFields,
     joyCannonMessage,
-    workerPunchCardSummary: workerNativeSummary || englishLedgerSummary
+    workerPunchCardSummary: namedWorkerSummary
   };
 }
 
@@ -696,90 +926,137 @@ function createForensicAirtableWriter(baseWriteFn, batchContext) {
     }
 
     const enrichedPayload = { ...payload };
+    const targetSite = batchContext?.site || null;
 
-    // 1. Enhance Sites updates with Completion %, English Last Note, and ACTIVE status transition
+    // 1. Enhance Sites updates with Named Milestones, Lights-Aware Completion %, English Last Note, Latest Video Link, and ACTIVE status transition
     if (tableName === 'Sites' || tableName === airtableSchemaCache.sitesTable) {
       const gateStr = String(enrichedPayload['Current Gate'] || '');
-      const ratioMatch = gateStr.match(/(\d+)\s*\/\s*(\d+)/);
       const singleGateMatch = gateStr.match(/Gate\s*(\d+)/i);
+      const ratioMatch = gateStr.match(/(\d+)\s*\/\s*(\d+)/);
 
-      if (ratioMatch || singleGateMatch) {
-        const verifiedCount = ratioMatch ? parseInt(ratioMatch[1], 10) : parseInt(singleGateMatch[1], 10);
-        const totalCount = ratioMatch ? parseInt(ratioMatch[2], 10) : 9;
-        const safeTotal = totalCount > 0 ? totalCount : 9;
-        const ratio = Math.min(1, Math.max(0, verifiedCount / safeTotal));
+      if (singleGateMatch) {
+        const gNum = parseInt(singleGateMatch[1], 10);
+        const progress = computeSiteGateProgress(targetSite, gNum);
         const colType = airtableSchemaCache.sitesFieldTypes['Completion %'];
 
+        enrichedPayload['Current Gate'] = progress.currentGateLabel;
         if (enrichedPayload['Completion %'] === undefined) {
           enrichedPayload['Completion %'] = colType === 'number'
-            ? Math.round(ratio * 100)
-            : Number(ratio.toFixed(2));
+            ? progress.percentInt
+            : Number(progress.ratio.toFixed(2));
         }
 
-        const targetSite = batchContext?.site;
         if (
-          verifiedCount >= 1 &&
+          progress.verifiedActiveCount >= 1 &&
           targetSite?.fields?.['Workflow Mode'] === 'INSTALLATION' &&
           targetSite?.fields?.['Site Status'] === 'PLANNING' &&
           !enrichedPayload['Site Status']
         ) {
           enrichedPayload['Site Status'] = 'ACTIVE';
         }
+      } else if (ratioMatch) {
+        const verifiedCount = parseInt(ratioMatch[1], 10);
+        const totalCount = parseInt(ratioMatch[2], 10) || 9;
+        const ratio = Math.min(1, Math.max(0, verifiedCount / totalCount));
+        const colType = airtableSchemaCache.sitesFieldTypes['Completion %'];
+
+        enrichedPayload['Current Gate'] = replaceGateNumbersWithNames(gateStr, 'en', targetSite);
+        if (enrichedPayload['Completion %'] === undefined) {
+          enrichedPayload['Completion %'] = colType === 'number'
+            ? Math.round(ratio * 100)
+            : Number(ratio.toFixed(2));
+        }
+      } else if (gateStr) {
+        enrichedPayload['Current Gate'] = replaceGateNumbersWithNames(gateStr, 'en', targetSite);
       }
 
-      if (typeof enrichedPayload['Last Note'] === 'string' && looksNonEnglish(enrichedPayload['Last Note'])) {
-        const prefixMatch = enrichedPayload['Last Note'].match(/^(\[[^\]]+\]\s*[^:]+:\s*(?:Gate\s*\d+\s*\([^)]+\)\.\s*)?)(.*)$/s);
-        if (prefixMatch && prefixMatch[2]) {
-          const translatedBody = await translateTextToEnglish(prefixMatch[2]);
-          enrichedPayload['Last Note'] = `${prefixMatch[1]}${translatedBody}`;
-        } else {
-          enrichedPayload['Last Note'] = await translateTextToEnglish(enrichedPayload['Last Note']);
+      if (enrichedPayload['Latest Video Link']) {
+        const formattedSiteMedia = formatAirtableMediaValue(
+          enrichedPayload['Latest Video Link'],
+          airtableSchemaCache.sitesFieldTypes['Latest Video Link']
+        );
+        if (formattedSiteMedia) {
+          enrichedPayload['Latest Video Link'] = formattedSiteMedia;
         }
+      }
+
+      if (typeof enrichedPayload['Last Note'] === 'string') {
+        let noteText = enrichedPayload['Last Note'];
+        if (looksNonEnglish(noteText)) {
+          const prefixMatch = noteText.match(/^(\[[^\]]+\]\s*[^:]+:\s*(?:Gate\s*\d+\s*\([^)]+\)\.\s*)?)(.*)$/s);
+          if (prefixMatch && prefixMatch[2]) {
+            const translatedBody = await translateTextToEnglish(prefixMatch[2]);
+            noteText = `${prefixMatch[1]}${translatedBody}`;
+          } else {
+            noteText = await translateTextToEnglish(noteText);
+          }
+        }
+        enrichedPayload['Last Note'] = replaceGateNumbersWithNames(noteText, 'en', targetSite);
       }
     }
 
-    // 2. Dynamically map Reports 2 fields to actual Airtable schema columns & translate notes to English
+    // 2. Dynamically map Reports 2 fields to exact Airtable schema columns (Verified Image, Client Milestone Title, Joy Cannon Update, Worker Summary, Worker)
     if (tableName === 'Reports 2' || tableName === airtableSchemaCache.reportsTable) {
       const rCols = airtableSchemaCache.reportsFields || [];
       const rTypes = airtableSchemaCache.reportsFieldTypes || {};
 
-      const rawNote = enrichedPayload['Last Note'] || enrichedPayload['Summary'] || enrichedPayload['Notes'];
+      const rawGate = enrichedPayload['Active Gate'] || enrichedPayload['Current Gate'] || enrichedPayload['Last Note'] || '';
+      const extractedMilestoneTitle = extractMilestoneTitleFromText(rawGate);
+      if (extractedMilestoneTitle && rCols.includes('Client Milestone Title') && !enrichedPayload['Client Milestone Title']) {
+        enrichedPayload['Client Milestone Title'] = extractedMilestoneTitle;
+      }
+      if (enrichedPayload['Active Gate']) {
+        enrichedPayload['Active Gate'] = replaceGateNumbersWithNames(String(enrichedPayload['Active Gate']), 'en', targetSite);
+      }
+
+      const rawNote = enrichedPayload['Last Note'] || enrichedPayload['Joy Cannon Update'] || enrichedPayload['Worker Summary'];
       if (rawNote) {
-        const englishNote = await translateTextToEnglish(rawNote);
-        const noteCol = rCols.find(c => ['Last Note', 'Summary', 'Notes', 'Report Summary', 'Description'].includes(c));
-        if (noteCol) {
-          delete enrichedPayload['Last Note'];
-          enrichedPayload[noteCol] = englishNote;
+        const translatedNote = await translateTextToEnglish(rawNote);
+        const namedEnglishNote = replaceGateNumbersWithNames(translatedNote, 'en', targetSite);
+        delete enrichedPayload['Last Note'];
+        if (rCols.includes('Joy Cannon Update')) {
+          enrichedPayload['Joy Cannon Update'] = namedEnglishNote;
+        }
+        if (rCols.includes('Worker Summary')) {
+          enrichedPayload['Worker Summary'] = namedEnglishNote;
         }
       }
 
-      const rawMedia = enrichedPayload['Media Links'] || enrichedPayload['Video Link'] || enrichedPayload['Media URL'];
+      if (typeof enrichedPayload['Joy Cannon Update'] === 'string') {
+        const translatedJC = await translateTextToEnglish(enrichedPayload['Joy Cannon Update']);
+        enrichedPayload['Joy Cannon Update'] = replaceGateNumbersWithNames(translatedJC, 'en', targetSite);
+      }
+      if (typeof enrichedPayload['Worker Summary'] === 'string') {
+        const translatedWS = await translateTextToEnglish(enrichedPayload['Worker Summary']);
+        enrichedPayload['Worker Summary'] = replaceGateNumbersWithNames(translatedWS, 'en', targetSite);
+      }
+
+      const rawMedia = enrichedPayload['Media Links'] || enrichedPayload['Verified Image'] || enrichedPayload['Video Link'];
       if (rawMedia) {
-        const mediaCol = rCols.find(c => ['Media Links', 'Video Link', 'Media URL', 'Media URLs', 'Video URL', 'Latest Video Link', 'Attachments'].includes(c));
+        delete enrichedPayload['Media Links'];
+        const mediaCol = rCols.find(c => ['Verified Image', 'Media Links', 'Video Link', 'Media URL', 'Latest Video Link'].includes(c));
         if (mediaCol) {
-          delete enrichedPayload['Media Links'];
-          if (rTypes[mediaCol] === 'multipleAttachments') {
-            const urls = Array.isArray(rawMedia) ? rawMedia : String(rawMedia).split(/\s+/).filter(u => u.startsWith('http'));
-            enrichedPayload[mediaCol] = urls.map(u => ({ url: u }));
-          } else {
-            enrichedPayload[mediaCol] = Array.isArray(rawMedia) ? rawMedia.join('\n') : String(rawMedia);
+          const formattedReportMedia = formatAirtableMediaValue(rawMedia, rTypes[mediaCol]);
+          if (formattedReportMedia) {
+            enrichedPayload[mediaCol] = formattedReportMedia;
           }
         }
       }
 
       if (enrichedPayload['Worker'] !== undefined) {
-        const workerCol = rCols.find(c => ['Worker', 'Workers', 'Technician', 'Submitted By', 'Installer', 'Worker Name'].includes(c));
-        if (workerCol) {
-          const val = enrichedPayload['Worker'];
-          delete enrichedPayload['Worker'];
-          if (rTypes[workerCol] === 'multipleRecordLinks') {
-            if (Array.isArray(val)) enrichedPayload[workerCol] = val;
-            else if (batchContext?.worker?.id) enrichedPayload[workerCol] = [batchContext.worker.id];
+        const val = enrichedPayload['Worker'];
+        if (rTypes['Worker'] === 'multipleRecordLinks') {
+          if (Array.isArray(val) && val[0]?.startsWith?.('rec')) {
+            enrichedPayload['Worker'] = val;
+          } else if (batchContext?.worker?.id) {
+            enrichedPayload['Worker'] = [batchContext.worker.id];
           } else {
-            enrichedPayload[workerCol] = Array.isArray(val)
-              ? (batchContext?.callerIdentity?.name || val.join(', '))
-              : String(val);
+            delete enrichedPayload['Worker'];
           }
+        } else {
+          enrichedPayload['Worker'] = Array.isArray(val)
+            ? (batchContext?.callerIdentity?.name || val.join(', '))
+            : String(val);
         }
       }
     }
@@ -788,36 +1065,86 @@ function createForensicAirtableWriter(baseWriteFn, batchContext) {
   };
 }
 
-// Ensure outbound Joy Cannon stakeholder broadcasts are always translated to English
-// while keeping the worker's own field punch card in their native language.
-if (whatsapp && typeof whatsapp.sendWhatsAppMessage === 'function' && !whatsapp.__joyCannonEnglishWrapped) {
+// Wrap outbound WhatsApp messages so:
+// 1. Joy Cannon broadcasts are always English, show named milestones, include a Milestone header,
+//    and compute progress against the site's Lights Y/N active gate count (excluding passive Gate 5).
+// 2. Installer punch cards replace raw "Gate N" labels with named milestones in the installer's
+//    native language (Spanish for Yeikol, English for English techs) and omit Lighting up if Lights=No.
+if (whatsapp && typeof whatsapp.sendWhatsAppMessage === 'function' && !whatsapp.__milestoneNamingWrapped) {
   const originalSendWhatsAppMessage = whatsapp.sendWhatsAppMessage.bind(whatsapp);
   whatsapp.sendWhatsAppMessage = async function wrappedSendWhatsAppMessage(cfg, target, messageText, ...rest) {
     try {
-      if (typeof messageText === 'string' && messageText.includes('BUILD MILESTONE UPDATE') && looksNonEnglish(messageText)) {
-        const lines = messageText.split('\n');
-        const captureIdx = lines.findIndex(l => l.includes('Latest Site Capture'));
-        const dividerIndices = lines.reduce((acc, l, idx) => (l.startsWith('━━') || l.startsWith('──') ? [...acc, idx] : acc), []);
-        const bodyStart = dividerIndices.length >= 2 ? dividerIndices[1] + 1 : 4;
-        const bodyEnd = captureIdx > bodyStart ? captureIdx : lines.length;
+      if (typeof messageText === 'string') {
+        const cleanTarget = String(target || '').replace(/\D/g, '');
+        const recipientWorker = Array.isArray(memoryCache.workers)
+          ? memoryCache.workers.find(w => {
+              const rawNum = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
+              return rawNum && (rawNum === cleanTarget || cleanTarget.endsWith(rawNum) || rawNum.endsWith(cleanTarget));
+            })
+          : null;
+        const recipientLang = String(recipientWorker?.fields?.['Language'] || 'English').toLowerCase().startsWith('span') ? 'es' : 'en';
 
-        const narrativeLines = lines.slice(bodyStart, bodyEnd).filter(l => l.trim().length > 0);
-        if (narrativeLines.length > 0) {
-          const translatedNarrative = await translateTextToEnglish(narrativeLines.join('\n'));
+        if (messageText.includes('BUILD MILESTONE UPDATE')) {
+          const projectMatch = messageText.match(/Project:\*?\s*([^\n]+)/i);
+          const projectName = projectMatch ? projectMatch[1].trim() : '';
+          const matchedSite = (projectName && Array.isArray(memoryCache.sites))
+            ? memoryCache.sites.find(s => getSiteDisplayName(s).toLowerCase() === projectName.toLowerCase())
+            : null;
+
+          const gateMatch = messageText.match(/\b(?:Gate|Puerta|Fase)\s*#?\s*(\d{1,2})\b/i);
+          const milestoneTitle = gateMatch
+            ? getGateName(parseInt(gateMatch[1], 10), 'en')
+            : extractMilestoneTitleFromText(messageText);
+
+          const lines = messageText.split('\n');
+          const captureIdx = lines.findIndex(l => l.includes('Latest Site Capture'));
+          const dividerIndices = lines.reduce((acc, l, idx) => (l.startsWith('━━') || l.startsWith('──') ? [...acc, idx] : acc), []);
+          const bodyStart = dividerIndices.length >= 2 ? dividerIndices[1] + 1 : 4;
+          const bodyEnd = captureIdx > bodyStart ? captureIdx : lines.length;
+
+          const headerLines = lines.slice(0, bodyStart).map(line => {
+            if (gateMatch && matchedSite && line.includes('Progress:')) {
+              const prog = computeSiteGateProgress(matchedSite, parseInt(gateMatch[1], 10));
+              const filled = Math.round(prog.ratio * 10);
+              const bar = `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${prog.percentInt}%`;
+              return `📊 *Progress:* ${bar}`;
+            }
+            return replaceGateNumbersWithNames(line, 'en', matchedSite);
+          });
+
+          if (milestoneTitle && !headerLines.some(l => l.includes('Milestone:'))) {
+            const projIdx = headerLines.findIndex(l => l.includes('Project:'));
+            const insertAt = projIdx >= 0 ? projIdx + 1 : 2;
+            headerLines.splice(insertAt, 0, `🏁 *Milestone:* ${milestoneTitle}`);
+          }
+
+          const narrativeLines = lines.slice(bodyStart, bodyEnd).filter(l => l.trim().length > 0);
+          let processedNarrative = '';
+          if (narrativeLines.length > 0) {
+            const englishNarrative = await translateTextToEnglish(narrativeLines.join('\n'));
+            processedNarrative = replaceGateNumbersWithNames(englishNarrative, 'en', matchedSite);
+          }
+
           const rebuiltLines = [
-            ...lines.slice(0, bodyStart),
-            translatedNarrative,
+            ...headerLines,
+            ...(processedNarrative ? [processedNarrative] : []),
             ...(captureIdx >= 0 ? ['', ...lines.slice(captureIdx)] : [])
           ];
           messageText = rebuiltLines.join('\n');
+        } else if (/\b(?:Gate|Puerta|Fase)\s*#?\s*\d{1,2}\b/i.test(messageText)) {
+          const boundId = whatsapp.getUserBoundSiteId ? whatsapp.getUserBoundSiteId(cleanTarget) : null;
+          const boundSite = (boundId && Array.isArray(memoryCache.sites))
+            ? memoryCache.sites.find(s => s.id === boundId)
+            : null;
+          messageText = replaceGateNumbersWithNames(messageText, recipientLang, boundSite);
         }
       }
     } catch (e) {
-      console.warn('[Joy Cannon Translator] Fallback to original message:', e.message);
+      console.warn('[Milestone Formatter] Fallback to original message:', e.message);
     }
     return await originalSendWhatsAppMessage(cfg, target, messageText, ...rest);
   };
-  whatsapp.__joyCannonEnglishWrapped = true;
+  whatsapp.__milestoneNamingWrapped = true;
 }
 
 async function runForensicMediaBatch(batchObj) {
@@ -1100,7 +1427,7 @@ Instructions:
   - Model Type, Manufacturer, & Court Classification
   - Steel Color, Turf Color, & Turf Supplier
   - Foundation Type & Lights (from the "Lights" field)
-  - Current Gate, Completion %, Site Status, Workflow Mode, Year Installed, & Deposit Status (if populated)
+  - Current Milestone (from "Current Gate"), Completion %, Site Status, Workflow Mode, Year Installed, & Deposit Status (if populated)
 3. If a specific field requested (such as Lights, Turf Supplier, or Steel Color) is not populated in the record, clearly state that it is not documented in the Airtable ledger yet.
 4. Keep formatting concise, scannable, and WhatsApp-friendly (use *bold* bullets, no tables).`;
 
@@ -1121,7 +1448,7 @@ Instructions:
         return await whatsapp.sendWhatsAppMessage(
           config,
           dispatchTarget,
-          `🏟️ *TITAN OS | ${siteName.toUpperCase()}*\n──────────────────────────────\n${answer}`
+          `🏟️ *TITAN OS | ${siteName.toUpperCase()}*\n──────────────────────────────\n${replaceGateNumbersWithNames(answer, 'en', targetSite)}`
         );
       }
     }
@@ -1135,7 +1462,7 @@ Instructions:
     `──────────────────────────────\n` +
     `• *Client / Venue:* ${f['Client Name'] || f['Parent Venue / Complex'] || 'Not specified'}\n` +
     `• *Site Location:* ${f['Site Location'] || 'Not specified'}\n` +
-    `• *Status / Gate:* ${f['Site Status'] || 'Active'} (${f['Current Gate'] || 'Unset'})\n` +
+    `• *Status / Milestone:* ${f['Site Status'] || 'Active'} (${replaceGateNumbersWithNames(f['Current Gate'] || 'Unset', 'en', targetSite)})\n` +
     `• *Manufacturer / Model:* ${f['Manufacturer'] || 'Unspecified'} — ${f['Model Type'] || 'Standard'}\n` +
     `• *Steel Color:* ${f['Steel Color'] || 'Unspecified'}\n` +
     `• *Turf:* ${f['Turf Color'] || 'Unspecified'} (${f['Turf Supplier'] || 'Unspecified'})\n` +
@@ -1217,7 +1544,7 @@ ${JSON.stringify(fullContacts)}`;
       const data = await res.json();
       const answer = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (answer) {
-        return await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `📊 *TITAN OS | LEDGER ANALYTICS*\n──────────────────────────────\n${answer.trim()}`);
+        return await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `📊 *TITAN OS | LEDGER ANALYTICS*\n──────────────────────────────\n${replaceGateNumbersWithNames(answer.trim(), 'en')}`);
       }
     }
     throw new Error('Gemini returned an empty query result.');
@@ -2601,7 +2928,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
                          `━━━━━━━━━━━━━━━━━━━━\n` +
                          `*👷 Field Installation*\n` +
                          `• Drop a 📍 Pin to check in.\n` +
-                         `• Send photos/videos/receipts to log expenses or 9-Gate progress.\n` +
+                         `• Send photos/videos/receipts to log expenses or build milestones.\n` +
                          `• Send voice notes to dynamically update court specs.\n\n` +
                          `*🏟️ Court Specs & Airtable Analytics*\n` +
                          `• "What court configuration does Weiss have?"\n` +
@@ -3115,7 +3442,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.39',
+    version: '6.0.41',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
@@ -3166,7 +3493,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
     : 'MISSING';
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.39 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.41 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`🔑 Airtable Auth: ${keyFingerprint} | Base: ${CONFIG.airtable.baseId}`);
   console.log(`====================================================================`);
 
