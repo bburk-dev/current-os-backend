@@ -1,19 +1,12 @@
 /**
  * TITAN OS V6.0.34 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
  * Module: whatsapp.js
- * Purpose: Webhooks, Debouncing, NLP Intent Routing, 9-Gate Forensic Vision,
- *          Supabase Private Vault Storage, Dual-Engine Geocoding, BOM Triggers,
- *          Semantic Email Triage, and Executive UI Formatting
+ * Purpose: Webhooks, Debouncing, NLP Intent Routing, 10-Gate Forensic Vision,
+ *          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
+ *          and Executive UI Formatting
  */
 
 const crypto = require('crypto');
-
-let metrics;
-try {
-  metrics = require('./metrics');
-} catch (e) {
-  metrics = null;
-}
 
 // ====================================================================
 // 0. GLOBAL UTILITIES (EXPONENTIAL BACKOFF)
@@ -124,6 +117,52 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
   }
 }
 
+async function sendWhatsAppImage(config, toTarget, imageUrl, captionText = '', retries = 2) {
+  if (!toTarget || !imageUrl || !config.meta.phoneNumberId) {
+    console.warn(`[Meta Outbound Media] Aborted: Target or URL missing.`);
+    return false;
+  }
+
+  let cleanDestination = String(toTarget).replace(/\D/g, '');
+  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: cleanDestination,
+    type: 'image',
+    image: {
+      link: imageUrl,
+      caption: captionText
+    }
+  };
+
+  const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
+
+  try {
+    const res = await fetchWithExponentialBackoff(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.meta.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    }, retries);
+
+    if (!res || !res.ok) {
+      const errData = res ? await res.text() : 'Network failure';
+      console.error(`WhatsApp Media dispatch failed to ${cleanDestination}: ${errData}`);
+      const fallbackText = `${captionText}\n\n📸 *Asset Link:*\n${imageUrl}`;
+      return await sendWhatsAppMessage(config, cleanDestination, fallbackText, retries);
+    }
+    return true;
+  } catch (err) {
+    console.error(`WhatsApp Media dispatch exception to ${cleanDestination}:`, err.message);
+    const fallbackText = `${captionText}\n\n📸 *Asset Link:*\n${imageUrl}`;
+    return await sendWhatsAppMessage(config, cleanDestination, fallbackText, retries);
+  }
+}
+
 async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   if (!toTarget || !buttons || buttons.length === 0 || !config.meta.phoneNumberId) return false;
 
@@ -180,16 +219,16 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   }
 }
 
-async function fanOutToSubscribers(config, phoneNumbersData, messageBody, buttons = []) {
+async function fanOutToSubscribers(config, phoneNumbersData, messageBody, imageUrl = null) {
   if (!phoneNumbersData) return;
-
+  
   let rawNumbers = [];
   if (Array.isArray(phoneNumbersData)) {
-    rawNumbers = phoneNumbersData;
+      rawNumbers = phoneNumbersData;
   } else if (typeof phoneNumbersData === 'string') {
-    rawNumbers = phoneNumbersData.split(',');
+      rawNumbers = phoneNumbersData.split(',');
   } else {
-    return;
+      return;
   }
 
   const cleanNumbers = rawNumbers.map(n => {
@@ -199,17 +238,17 @@ async function fanOutToSubscribers(config, phoneNumbersData, messageBody, button
   }).filter(n => n.length >= 10);
 
   const uniqueTargets = [...new Set(cleanNumbers)];
-
-  if (uniqueTargets.length === 0) {
-    console.log(`[Joy Cannon] No valid E164 subscriber numbers found.`);
-    return;
+  
+  if(uniqueTargets.length === 0) {
+      console.log(`[Joy Cannon] No valid E164 subscriber numbers found.`);
+      return;
   }
 
-  console.log(`[Joy Cannon] Broadcasting to ${uniqueTargets.length} subscribers...`);
+  console.log(`[Joy Cannon] Broadcasting to ${uniqueTargets.length} subscribers (Image: ${Boolean(imageUrl)})...`);
 
   for (const target of uniqueTargets) {
-    if (buttons.length > 0) {
-      await sendWhatsAppButtons(config, target, messageBody, buttons);
+    if (imageUrl) {
+      await sendWhatsAppImage(config, target, imageUrl, messageBody);
     } else {
       await sendWhatsAppMessage(config, target, messageBody);
     }
@@ -235,7 +274,7 @@ async function geocodeAddressWithGoogle(config, addressString) {
   try {
     const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
     const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanAddress)}&key=${apiKey}`;
-    const res = await fetchWithExponentialBackoff(url, {}, 1);
+    const res = await fetchWithExponentialBackoff(url, {}, 2);
     if (!res || !res.ok) return null;
     const data = await res.json();
 
@@ -243,53 +282,10 @@ async function geocodeAddressWithGoogle(config, addressString) {
       const loc = data.results[0].geometry.location;
       return { lat: loc.lat, lon: loc.lng, formattedAddress: data.results[0].formatted_address };
     }
-    if (data.status && data.status !== 'ZERO_RESULTS') {
-      console.warn(`[Google Geocoder] Returned status "${data.status}": ${data.error_message || ''}`);
-    }
     return null;
   } catch (err) {
     return null;
   }
-}
-
-async function geocodeAddressWithNominatim(addressString) {
-  if (!addressString) return null;
-  const cleanAddress = addressString.replace(/-{2,}/g, '-').replace(/[^\w\s,#.-]/gi, '').trim();
-  if (cleanAddress.length < 4) return null;
-
-  const candidates = [cleanAddress];
-  if (!/\b(canada|usa|united states|ontario|on|quebec|qc|bc|ab|ny|fl|tx|ca)\b/i.test(cleanAddress)) {
-    candidates.push(`${cleanAddress}, Ontario, Canada`);
-  }
-
-  for (const query of candidates) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': 'TitanOS-BouncePadel-ERP/6.0.34',
-          'Accept': 'application/json'
-        },
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-
-      if (!res.ok) continue;
-      const results = await res.json();
-      if (Array.isArray(results) && results.length > 0) {
-        const lat = parseFloat(results[0].lat);
-        const lon = parseFloat(results[0].lon);
-        if (!isNaN(lat) && !isNaN(lon)) {
-          return { lat, lon, formattedAddress: results[0].display_name };
-        }
-      }
-    } catch (err) {
-      clearTimeout(timer);
-    }
-  }
-  return null;
 }
 
 function getGoogleMapsLinks(lat, lon) {
@@ -416,7 +412,6 @@ function parseCoordinatePair(rawVal) {
     .replace(/[\u2212\u2013\u2014]/g, '-')
     .trim();
 
-  // Extract coordinates from Google Maps URLs (@44.0024,-79.4630 or ?q=44.0024,-79.4630 or destination=...)
   const urlMatch = cleaned.match(/(?:@|[?&](?:q|query|ll|center|destination)=)(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/i);
   if (urlMatch) {
     const lat = parseFloat(urlMatch[1]);
@@ -441,60 +436,27 @@ function parseCoordinatePair(rawVal) {
 async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtableWriteWithAutoDrop, autoPersistSiteId = null) {
   let rawValue = rawLocationOrSite;
   let siteId = autoPersistSiteId;
-  let hasExistingSiteLocationCoords = false;
+  let siteName = null;
 
   if (typeof rawLocationOrSite === 'object' && rawLocationOrSite !== null) {
     const fields = rawLocationOrSite.fields || rawLocationOrSite;
     siteId = rawLocationOrSite.id || autoPersistSiteId;
+    siteName = fields['Site Name'] || null;
 
-    if (siteId && memoryCache?.coordinates?.has(siteId)) {
-      return memoryCache.coordinates.get(siteId);
-    }
+    const siteLocationKey = Object.keys(fields).find(
+      k => k.trim().toLowerCase() === 'site location'
+    );
+    rawValue = siteLocationKey ? fields[siteLocationKey] : undefined;
+
+    const directCoords = parseCoordinatePair(rawValue);
+    if (directCoords) return directCoords;
 
     const explicitLat = fields['Latitude'] ?? fields['Lat'];
     const explicitLon = fields['Longitude'] ?? fields['Lon'] ?? fields['Lng'];
     if (explicitLat !== undefined && explicitLon !== undefined && explicitLat !== '' && explicitLon !== '') {
       const lat = parseFloat(explicitLat);
       const lon = parseFloat(explicitLon);
-      if (!isNaN(lat) && !isNaN(lon)) {
-        const coords = { lat, lon };
-        if (siteId) memoryCache?.coordinates?.set(siteId, coords);
-        return coords;
-      }
-    }
-
-    // Check every candidate field for direct coordinate pairs first
-    const candidateKeys = ['site location', 'coordinates', 'location', 'map link', 'google maps', 'address', 'street address'];
-    for (const key of Object.keys(fields)) {
-      if (candidateKeys.includes(key.trim().toLowerCase()) && fields[key]) {
-        const directCoords = parseCoordinatePair(fields[key]);
-        if (directCoords) {
-          if (key.trim().toLowerCase() === 'site location') hasExistingSiteLocationCoords = true;
-          if (siteId) memoryCache?.coordinates?.set(siteId, directCoords);
-          return directCoords;
-        }
-      }
-    }
-
-    // Build best full-text address from available Airtable fields
-    const primaryAddrKey = Object.keys(fields).find(k =>
-      ['site location', 'address', 'street address', 'location'].includes(k.trim().toLowerCase()) && fields[k]
-    );
-    const baseAddr = primaryAddrKey
-      ? (Array.isArray(fields[primaryAddrKey]) ? String(fields[primaryAddrKey][0] || '') : String(fields[primaryAddrKey]))
-      : '';
-
-    const city = fields['City'] || '';
-    const province = fields['Province'] || fields['State'] || '';
-    const postal = fields['Postal Code'] || fields['Zip'] || '';
-    const extraParts = [city, province, postal].map(v => String(v || '').trim()).filter(Boolean);
-
-    if (baseAddr.trim()) {
-      rawValue = extraParts.length > 0 && !baseAddr.toLowerCase().includes(String(city).toLowerCase())
-        ? `${baseAddr.trim()}, ${extraParts.join(', ')}`
-        : baseAddr.trim();
-    } else if (extraParts.length > 0) {
-      rawValue = extraParts.join(', ');
+      if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
     }
   } else {
     const directCoords = parseCoordinatePair(rawValue);
@@ -502,25 +464,33 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
   }
 
   const addressStr = Array.isArray(rawValue) ? String(rawValue[0] || '').trim() : String(rawValue || '').trim();
-  if (addressStr.length > 4 && addressStr !== '[object Object]') {
+  if (addressStr.length > 5 && addressStr !== '[object Object]') {
     if (memoryCache?.coordinates?.has(addressStr)) {
-      const cached = memoryCache.coordinates.get(addressStr);
-      if (siteId) memoryCache?.coordinates?.set(siteId, cached);
-      return cached;
+      return memoryCache.coordinates.get(addressStr);
     }
 
-    let geoResult = await geocodeAddressWithGoogle(config, addressStr);
-    if (!geoResult) {
-      geoResult = await geocodeAddressWithNominatim(addressStr);
-    }
-
-    if (geoResult) {
-      const coords = { lat: geoResult.lat, lon: geoResult.lon };
+    const googleResult = await geocodeAddressWithGoogle(config, addressStr);
+    if (googleResult) {
+      const coords = { lat: googleResult.lat, lon: googleResult.lon };
       memoryCache?.coordinates?.set(addressStr, coords);
-      if (siteId) memoryCache?.coordinates?.set(siteId, coords);
+      if (siteId && airtableWriteWithAutoDrop) {
+        const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
+        airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
+      }
+      return coords;
+    }
+  }
 
-      if (siteId && airtableWriteWithAutoDrop && !hasExistingSiteLocationCoords) {
-        const coordString = `${geoResult.lat.toFixed(6)}, ${geoResult.lon.toFixed(6)}`;
+  if (siteName && siteName.length > 3) {
+    if (memoryCache?.coordinates?.has(siteName)) {
+      return memoryCache.coordinates.get(siteName);
+    }
+    const googleResult = await geocodeAddressWithGoogle(config, siteName);
+    if (googleResult) {
+      const coords = { lat: googleResult.lat, lon: googleResult.lon };
+      memoryCache?.coordinates?.set(siteName, coords);
+      if (siteId && airtableWriteWithAutoDrop) {
+        const coordString = `${googleResult.lat.toFixed(6)}, ${googleResult.lon.toFixed(6)}`;
         airtableWriteWithAutoDrop('Sites', { 'Site location': coordString }, siteId).catch(() => {});
       }
       return coords;
@@ -656,43 +626,46 @@ Rules:
 }
 
 // ====================================================================
-// 6. BLIND VISUAL FORENSICS, SUPABASE VAULT, & 9-GATE BATCH PIPELINE
+// 6. BLIND VISUAL FORENSICS, SUPABASE VAULT, & 10-GATE BATCH PIPELINE
 // ====================================================================
 
-const INDUSTRIAL_9_GATE_PROMPT = `You are the Lead Forensic Construction Auditor for Bounce Padel.
-Evaluate the attached field photos/videos against the 9-Gate Padel Court Installation Standard:
-Gate 1: Concrete Slab / Foundation / Sub-base Prepped (Includes bare cement foundations, indoor warehouse floors, or pre-existing tennis/sport courts. CRITICAL: Flag any large concrete cracks or pools of water as blockers).
-Gate 2: Perimeter Steel Frame Erected & Anchored (Super panoramic frames lack corner posts. Credit this gate if bottom steel is complete and top steel is connected. Temporary 4x4 wooden supports holding the top steel are expected and validate this stage prior to glass. Note: Third-party manufactured courts listed in Site Context may feature standard corner posts).
-Gate 3: Structural Wire Mesh Panels & Entrance Gates Installed (Credit when both the lower and top wire mesh panels, including the integrated lower mesh entrance gates, are fully installed and visually straight, forming the distinct recognizable cage of a padel court).
-Gate 4: 12mm Tempered Glass Panels Seated & Clamped (Verify glass panels are fully erected. Check the connection tabs/brackets: ensure all bolts are visually present, none are missing, and they sit flush. Do not evaluate or require tensioning).
-Gate 5: LED Lighting Columns & Fixtures Mounted (CONDITIONAL: Only evaluate if the provided Site Context states Lights = 'Yes'. If 'Yes', verify 4 light posts are erected, each with exactly 2 LED light fixtures attached. Do not require the lights to be turned on. If the Site Context states Lights = 'No' or the site does not feature lights, automatically mark Gate 5 as verified/skipped to prevent blocking progress).
-Gate 6: Artificial Turf Unrolled, Cut & Seamed (Turf arrives in 3 pre-lined rolls. Verify turf is laid, cut cleanly around the perimeter, and seams are joined with minimal visual gaps. Credit photos showing seam tape and adhesive applied as valid progress for this gate).
-Gate 7: Silica Sand Infill Brushed In (Verify silica sand is visibly present and evenly brushed across the turf. Flag any unbrushed swirls, heavy clumps, or isolated mounds of sand as blockers, as this indicates improper pouring or spreading without final brushing).
-Gate 8: Center Net Posts & Tensioned Net Installed (Verify the physical presence of two center posts and the net strung tightly between them without excessive sagging. Ensure safety padding is visibly installed around both posts).
-Gate 9: Site Cleanliness & Complete Debris/Tool Removal
+const INDUSTRIAL_10_GATE_PROMPT = `You are the Lead Forensic Construction Auditor for Bounce Padel.
+Evaluate the attached field photos/videos against the 10-Gate Padel Court Installation Standard. Note that naming conventions use descriptive milestone titles rather than simple numeric completion tags to ensure absolute clarity for non-technical stakeholders.
+
+Gate 0: Pre-Flight Delivery Audit & Material Inspection (CRITICAL: Inspect all offloaded freight. Verify the physical presence and undamaged condition of steel bundles, structural wire mesh panels, 12mm tempered glass panes, turf rolls, non-gating structural silicone, center posts, tensioned nets, and the complete installation kit. Flag any offloading damage, forklift cuts to turf, or cracked/chipped glass immediately as critical blockers prior to mobilization).
+Gate 1: Concrete Foundation & Sub-base Preparation (Includes bare cement foundations, indoor warehouse floors, or pre-existing tennis/sport courts. CRITICAL: Flag any large concrete cracks, uneven curing, or pooling water as blockers).
+Gate 2: Perimeter Steel Frame Erection & Anchoring (Super panoramic frames lack corner posts. Credit this gate if bottom steel is complete and top steel is connected. Temporary 4x4 wooden supports holding the top steel are expected and validate this stage prior to glass. Note: Third-party manufactured courts listed in Site Context may feature standard corner posts).
+Gate 3: Lower Perimeter Wire Mesh Installation (Credit when lower wire mesh panels, including integrated lower mesh entrance gates, are fully installed and visually straight, forming the distinct lower cage of a padel court).
+Gate 4: Upper Perimeter Structural Wire Mesh Installation (Credit when upper wire mesh extension panels are fully installed, secured, and aligned with the lower frame structure).
+Gate 5: 12mm Tempered Glass Panel Seating & Clamping (Verify glass panels are fully erected. Check the connection tabs/brackets: ensure all bolts are visually present, none are missing, and they sit flush. Do not evaluate or require tensioning).
+Gate 6: Non-Gating Structural Silicone Application (Verify application of non-gating structural silicone sealant along glass joints and structural junctions to ensure weatherproofing).
+Gate 7: Artificial Turf Unrolling, Seaming & Adhesion (Turf arrives in 3 pre-lined rolls. Verify turf is laid, cut cleanly around the perimeter, and seams are joined with minimal visual gaps. Credit photos showing seam tape and adhesive applied as valid progress for this gate).
+Gate 8: Silica Sand Infill Application & Grooming (Verify silica sand is visibly present and evenly brushed across the turf. Flag any unbrushed swirls, heavy clumps, or isolated mounds of sand as blockers, as this indicates improper pouring or spreading without final brushing).
+Gate 9: Center Net Posts & Tensioned Net Assembly (Verify the physical presence of two center posts and the net strung tightly between them without excessive sagging. Ensure safety padding is visibly installed around both posts).
+Gate 10: Worksite Stewardship & Debris Mitigation (Verify general site cleanliness. Ensure construction debris, packaging, cardboard, tools, buckets, or brooms are actively managed. CRITICAL CONTEXT: Account for external trades or shared site environments; focus on maintaining an orderly, safe footprint directly attributable to the padel installation crew without unfairly penalizing shared trade congestion).
 
 CRITICAL RULES:
 1. ADDITIVE INGESTION: Credit every gate clearly supported by visual evidence. Never punish missing angles; list unverified gates as pending adjustments.
-2. GATE 9 CLEANLINESS GUARDRAIL: If loose trash, packaging, cardboard, tools, buckets, brooms, or construction debris are visible anywhere on or around the playing surface, Gate 9 MUST be marked false/withheld even if Gates 1–8 are complete. Do not flag permanently mounted club accessories (e.g., wastepaper baskets attached to the exterior mesh, or tennis ball tubes strapped to the fence) as construction debris. These are permitted final fixtures.
+2. GATE 0 CONDITIONAL REQUIREMENT: Gate 0 must be rigorously verified before higher structural gates are credited.
 3. VISUAL TRUTH OVERRIDES AUDIO: If the provided captions or audio claim the court is clean, finished, or ready, you MUST ignore those claims and rely STRICTLY on the visual pixel evidence. Do not let user dictation override visual reality.
-4. NO HALLUCINATION: There are exactly 9 gates. DO NOT output gates 10, 11, or 12 under any circumstances.
+4. NO HALLUCINATION: There are exactly 11 gates (0 through 10). DO NOT output gates 11, 12, or higher under any circumstances.
 5. Return STRICTLY JSON:
 {
-  "highest_gate": number (0 to 9),
-  "verified_gates": [number] (ONLY integers between 1 and 9),
+  "highest_gate": number (0 to 10),
+  "verified_gates": [number] (ONLY integers between 0 and 10),
   "cleanliness_passed": boolean,
   "blockers_detected": ["string"],
   "field_observations": "string (concise material/hardware/friction notes for Dark Matter log)",
-  "summary": "string (concise, encouraging 2-sentence field summary in target language)"
+  "summary": "string (concise, encouraging 2-sentence field summary describing the specific milestone achieved in target language)"
 }`;
 
 const MAINTENANCE_TRIAGE_PROMPT = `You are the Lead Maintenance Inspector for Bounce Padel.
 Inspect the attached court photos/videos for turf wear, sand compaction, glass alignment, net tension, lighting outages, rust, debris, or drainage issues.
-CRITICAL RULE: VISUAL TRUTH OVERRIDES AUDIO. If the user claims the court is clean or perfect, ignore it and rely STRICTLY on visual pixel evidence. If tools, buckets, brooms, or trash are visible, cleanliness_passed must be false. Do not flag permanently mounted club accessories (e.g., wastepaper baskets attached to the exterior mesh, or tennis ball tubes strapped to the fence) as construction debris.
+CRITICAL RULE: VISUAL TRUTH OVERRIDES AUDIO. If the user claims the court is clean or perfect, ignore it and rely STRICTLY on visual pixel evidence. Account for shared site environments when evaluating worksite stewardship.
 Return STRICTLY JSON:
 {
-  "highest_gate": 9,
-  "verified_gates": [9],
+  "highest_gate": 10,
+  "verified_gates": [10],
   "cleanliness_passed": boolean,
   "blockers_detected": ["string (any maintenance defects or left-behind tools found)"],
   "field_observations": "string (concise asset health notes)",
@@ -829,14 +802,16 @@ async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispa
   }
 }
 
-function generateProgressBar(percentage) {
-  const totalBlocks = 10;
-  const filledBlocks = Math.round((percentage / 100) * totalBlocks);
-  const emptyBlocks = totalBlocks - filledBlocks;
-  return `[${'█'.repeat(filledBlocks)}${'░'.repeat(emptyBlocks)}] ${Math.round(percentage)}%`;
+// UI HELPER: Generates a 10-block progress bar based on percentage (11 gates total 0-10)
+function generateProgressBar(count) {
+  const totalGates = 11;
+  const clampedCount = Math.min(Math.max(count, 0), totalGates);
+  const filledBlocks = Math.round((clampedCount / totalGates) * 10);
+  const emptyBlocks = 10 - filledBlocks;
+  return `[${'█'.repeat(filledBlocks)}${'░'.repeat(emptyBlocks)}] (${clampedCount}/${totalGates})`;
 }
 
-async function evaluateCourtMediaBatch(config, items, cumulativeContext, maintenanceTriagePrompt = MAINTENANCE_TRIAGE_PROMPT, industrialSystemPrompt = INDUSTRIAL_9_GATE_PROMPT) {
+async function evaluateCourtMediaBatch(config, items, cumulativeContext, maintenanceTriagePrompt = MAINTENANCE_TRIAGE_PROMPT, industrialSystemPrompt = INDUSTRIAL_10_GATE_PROMPT) {
   const contentParts = [
     {
       text: `Context: You are evaluating a Padel court at site: ${cumulativeContext.siteName}. ` +
@@ -925,7 +900,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       }
     }
 
-    // Stage 2: Parallel Supabase Vault Archival + 9-Gate Forensic Evaluation
+    // Stage 2: Parallel Supabase Vault Archival + 10-Gate Forensic Evaluation
     const uploadPromises = items.map(item => uploadMediaToSupabaseVault(config, item));
     const evalPromise = evaluateCourtMediaBatch(config, items, {
       siteName,
@@ -939,32 +914,44 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 
     const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
     const validLinks = signedUrls.filter(Boolean);
+    const highestQualityImage = validLinks.find(url => /\.(jpg|jpeg|png)$/i.test(url)) || validLinks[0];
 
-    if (metrics && metrics.incrementMetric) {
-      metrics.incrementMetric('remote_audits_completed');
-    }
-
-    // Enforce Gate 9 Non-Monotonic Cleanliness Guardrail and clamp to 1-9
-    let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates].filter(g => g >= 1 && g <= 9) : [];
+    // Enforce Gate 10 Non-Monotonic Cleanliness Guardrail and clamp to 0-10
+    let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates].filter(g => g >= 0 && g <= 10) : [];
     if (audit.cleanliness_passed === false) {
-      verifiedGates = verifiedGates.filter(g => g !== 9);
+      verifiedGates = verifiedGates.filter(g => g !== 10);
     }
     const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
-
-    // Core Structural Gates Required for a complete court
-    const coreGates = [1, 2, 3, 4, 6, 7, 8];
+    
+    // Core Structural Gates Required for a complete court (Gates 1 through 9)
+    const coreGates = [1, 2, 3, 4, 5, 6, 7, 8, 9];
     const hasAllCore = coreGates.every(g => verifiedGates.includes(g));
     const isInstallationComplete = workflowMode === 'INSTALLATION' && hasAllCore && audit.cleanliness_passed !== false;
+    
+    const progressBar = generateProgressBar(verifiedGates.length);
 
-    const progressPercentage = (verifiedGates.length / 9) * 100;
-    const progressBar = generateProgressBar(progressPercentage);
+    // Map Specific Milestone Titles instead of generic numeric tags
+    const gateMilestoneMap = {
+      0: "Gate 0: Pre-Flight Delivery Audit",
+      1: "Gate 1: Concrete Foundation & Sub-base",
+      2: "Gate 2: Perimeter Steel Frame Erection",
+      3: "Gate 3: Lower Perimeter Wire Mesh",
+      4: "Gate 4: Upper Perimeter Wire Mesh",
+      5: "Gate 5: 12mm Tempered Glass Seating",
+      6: "Gate 6: Non-Gating Structural Silicone",
+      7: "Gate 7: Artificial Turf & Seaming",
+      8: "Gate 8: Silica Sand Infill Application",
+      9: "Gate 9: Center Net & Tensioned Assembly",
+      10: "Gate 10: Worksite Stewardship"
+    };
 
+    const latestMilestoneTitle = verifiedGates.length > 0 ? gateMilestoneMap[highestGate] : `Gate ${highestGate}`;
     const gateLabel = workflowMode === 'MAINTENANCE'
       ? 'Maintenance Sweep'
-      : (isInstallationComplete ? 'Gate 9 (9/9 Verified)' : `Gate ${highestGate} (${verifiedGates.length}/9 Verified)`);
+      : (isInstallationComplete ? 'Gate 10: Worksite Stewardship Complete (11/11 Verified)' : `${latestMilestoneTitle} (${verifiedGates.length}/11 Verified)`);
 
     // Stage 3: Ledger Mutation (Sites & Reports 2) + Auto-Transition to Maintenance Mode
-    const auditNote = `[FORENSIC SWEEP] ${workerName}: ${gateLabel}. ${audit.summary || ''}${validLinks.length > 0 ? `\nVault: ${validLinks[0]}` : ''}`;
+    const auditNote = `[FORENSIC SWEEP] ${workerName}: ${gateLabel}. ${audit.summary || ''}${validLinks.length > 0 ? `\nVault: ${validLinks.join(', ')}` : ''}`;
 
     const sitePatch = {
       'Last Note': auditNote,
@@ -975,7 +962,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     if (isInstallationComplete) {
       sitePatch['Current Gate'] = gateLabel;
       sitePatch['Workflow Mode'] = 'MAINTENANCE';
-    } else if (workflowMode === 'INSTALLATION' && highestGate > 0) {
+    } else if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
       sitePatch['Current Gate'] = gateLabel;
     }
 
@@ -996,13 +983,13 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       await logToDarkMatterVault(config, siteName, workerName, workflowMode, combinedCaptions, audit.field_observations);
     }
 
-    // Stage 4: Automated BOM Depletion on Structural Gates (2: Steel, 4: Glass, 6: Turf)
+    // Stage 4: Automated BOM Depletion on Structural Gates (2: Steel, 5: Glass, 7: Turf)
     if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
       try {
         const inventory = require('./inventory');
         if (inventory && inventory.processMilestoneBOMDeduction) {
           for (const g of verifiedGates) {
-            if ([2, 4, 6].includes(g)) {
+            if ([2, 5, 7].includes(g)) {
               await inventory.processMilestoneBOMDeduction(config, site, g);
             }
           }
@@ -1017,7 +1004,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       ? `\n⚠️ *Pending Adjustments:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
       : '';
     const cleanWarning = (audit.cleanliness_passed === false)
-      ? `\n🧹 *Gate 9 Held:* Debris/tools visible on apron. Clear site to seal Gate 9.\n`
+      ? `\n🧹 *Gate 10 Held:* Debris/tools visible on foot print. Manage site footprint to seal Gate 10.\n`
       : '';
     const completionNotice = isInstallationComplete
       ? `\n🔄 *Lifecycle Transition:* Court automatically flipped to *Maintenance Mode*.\n`
@@ -1034,21 +1021,21 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 
     await sendWhatsAppMessage(config, dispatchTarget, punchCard);
 
+    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST WITH NATIVE IMAGE EMBEDDING
     const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
-    if (subscriberPhones && workflowMode === 'INSTALLATION' && highestGate > 0) {
+    if (subscriberPhones && workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
       const joyHeader = isInstallationComplete
         ? `🏆 *BOUNCE PADEL | COURT BUILD COMPLETE*`
         : `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`;
-
+      
       const joyMsg = `${joyHeader}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `🏟️ *Project:* ${siteName}\n` +
         `📊 *Progress:* ${progressBar}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `${audit.summary || 'Construction progressing on schedule.'}` +
-        (validLinks.length > 0 ? `\n\n📸 *Latest Site Capture:*\n${validLinks[0]}` : '');
+        `${audit.summary || 'Construction progressing on schedule.'}`;
 
-      await fanOutToSubscribers(config, subscriberPhones, joyMsg);
+      await fanOutToSubscribers(config, subscriberPhones, joyMsg, highestQualityImage);
     }
   } catch (err) {
     console.error('[processMediaBatch Runtime Error]:', err.message);
@@ -1230,6 +1217,7 @@ module.exports = {
   updateSessionContext,
   sendWhatsAppReaction,
   sendWhatsAppMessage,
+  sendWhatsAppImage,
   sendWhatsAppButtons,
   fanOutToSubscribers,
   isIndoorSite,
