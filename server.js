@@ -1,17 +1,17 @@
 /**
- * TITAN OS V6.0.41 — HEADLESS ERP ORCHESTRATOR
- * Module: server.js
- * Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
- *          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
- *          Canonical 9-Gate Named Milestones (with Passive Gate 5 Silicone &
- *          Conditional Gate 6 Lights Y/N Logic), Schema-Exact Reports 2 &
- *          Sites Sync (Verified Image, Client Milestone Title, Completion %,
- *          Joy Cannon Update), Bilingual Forensic Pipeline (Native Worker Card
- *          + English Joy Cannon & Ledger Notes), Retroactive "Be Water" Media
- *          Binding Buffer, QBO Finance Copilot, Atomic Message Deduplication,
- *          Voice Estimates, Full-Ledger Analytics, Court Configuration Inspector,
- *          IoT Telemetry, RBAC Bouncer, Zero-UI Site Provisioning, Virtual
- *          Readiness, and Executive Drafting Mode + Native Gmail Dispatch.
+- TITAN OS V6.0.41 — HEADLESS ERP ORCHESTRATOR
+- Module: server.js
+- Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
+-          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
+-          Canonical 9-Gate Named Milestones (with Passive Gate 5 Silicone &
+-          Conditional Gate 6 Lights Y/N Logic), Schema-Exact Reports 2 &
+-          Sites Sync (Verified Image, Client Milestone Title, Completion %,
+-          Joy Cannon Update), Bilingual Forensic Pipeline (Native Worker Card
+-          + English Joy Cannon & Ledger Notes), Retroactive "Be Water" Media
+-          Binding Buffer, QBO Finance Copilot, Atomic Message Deduplication,
+-          Voice Estimates, Full-Ledger Analytics, Court Configuration Inspector,
+-          IoT Telemetry, RBAC Bouncer, Zero-UI Site Provisioning, Virtual
+-          Readiness, and Executive Drafting Mode + Native Gmail Dispatch.
  */
 
 // ====================================================================
@@ -2521,8 +2521,28 @@ app.post('/webhook', async (req, res) => {
 
                 if (isScreenshot) {
                   draftingSessions.set(speakerPhone, { active: false, context: parsedCheck.ocr_text });
+                  
+                  // NEW: Autonomously create a Daily Assignment for the Sales Lead
+                  try {
+                    const assignmentPayload = {
+                      'Assignment Type': 'Sales',
+                      'Status': 'Open',
+                      'Priority': 'High',
+                      'Notes': `[COMMERCIAL LEAD - SCREENSHOT INGESTION] Follow up required.\n\nExtracted Text:\n${String(parsedCheck.ocr_text || '').slice(0, 500)}...`
+                    };
+                    
+                    if (worker && worker.id) {
+                      assignmentPayload['Worker'] = [worker.id];
+                    }
+
+                    await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+                    console.log(`[Sales Engine] Autonomous Sales Assignment created from screenshot ingestion by ${speakerPhone}.`);
+                  } catch (assignErr) {
+                    console.error('[Sales Engine] Failed to create Daily Assignment from screenshot:', assignErr.message);
+                  }
+
                   const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
-                  await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?`, buttons);
+                  await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?\n\n_Note: A Sales ticket has been autonomously generated on the ledger._`, buttons);
                   return;
                 }
               }
@@ -3394,12 +3414,37 @@ async function processInboundEmailWebhook(req, res) {
 
     const emailMatch = String(fromAddr).match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
     if (emailMatch && emailMatch[1]) {
+      const targetEmail = emailMatch[1].toLowerCase().trim();
       draftingSessions.set(CONFIG.meta.targetVerifiedPhone, {
         active: false,
         context: `From: ${fromAddr}\nSubject: ${subjectLine}\n\n${cleanText.slice(0, 2000)}`,
         subject: subjectLine.startsWith('Re:') ? subjectLine : `Re: ${subjectLine}`,
-        targetEmail: emailMatch[1].toLowerCase().trim()
+        targetEmail: targetEmail
       });
+
+      // TITAN OS DIRECT DISPATCH NOTIFICATION
+      try {
+        const buttons = [{ id: `DRAFT_REPLY_${targetEmail}`, title: "Draft Reply" }];
+        const leadCard = `📧 *TITAN OS | COMMERCIAL LEAD DETECTED*\n──────────────────────────────\n*From:* ${fromAddr}\n*Subject:* ${subjectLine}\n\n${cleanText.slice(0, 300)}...\n──────────────────────────────\nWould you like to draft a professional reply?`;
+        
+        if (whatsapp && whatsapp.sendWhatsAppButtons) {
+          await whatsapp.sendWhatsAppButtons(CONFIG, CONFIG.meta.targetVerifiedPhone, leadCard, buttons);
+        }
+      } catch(e) {
+        console.error('[Email Ingress] Failed to alert admin:', e);
+      }
+
+      // AUTONOMOUS DAILY ASSIGNMENT FOR EMAIL LEAD
+      try {
+        await airtableWriteWithAutoDrop('Daily Assignments', {
+          'Assignment Type': 'Sales',
+          'Status': 'Open',
+          'Priority': 'High',
+          'Notes': `[COMMERCIAL LEAD - EMAIL] Follow up required with ${fromAddr}.\n\nSubject: ${subjectLine}\n\n${cleanText.slice(0, 500)}...`
+        });
+      } catch(e) {
+        console.error('[Email Ingress] Failed to create assignment:', e);
+      }
     }
 
     if (whatsapp && whatsapp.handleInboundEmail) {
