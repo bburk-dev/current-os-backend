@@ -1,9 +1,9 @@
 /**
- * TITAN OS V6.0.34 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
- * Module: whatsapp.js
- * Purpose: Webhooks, Debouncing, NLP Intent Routing, 10-Gate Forensic Vision,
- *          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
- *          and Executive UI Formatting
+- TITAN OS V6.0.34 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+- Module: whatsapp.js
+- Purpose: Webhooks, Debouncing, NLP Intent Routing, 10-Gate Forensic Vision,
+-          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
+-          and Executive UI Formatting
  */
 
 const crypto = require('crypto');
@@ -1160,6 +1160,39 @@ Return STRICTLY JSON:
 
     for (const phone of targetPhones) {
       await sendWhatsAppButtons(config, phone, formattedDispatch, buttons);
+    }
+    
+    // NEW: Autonomous Daily Assignment Creation for Commercial Leads
+    if (triage.category === 'COMMERCIAL_LEAD') {
+      try {
+        const airtableEndpoint = config.airtable?.endpoint || 'https://api.airtable.com/v0';
+        const airtableBaseId = config.airtable?.baseId;
+        const airtableApiKey = config.airtable?.apiKey;
+        
+        if (airtableApiKey && airtableBaseId) {
+          const assignmentPayload = {
+            fields: {
+              'Assignment Type': 'Sales',
+              'Status': 'Open',
+              'Priority': 'High',
+              'Notes': `[COMMERCIAL LEAD - EMAIL] Follow up required with ${senderDisplay}.\n\nSubject: ${emailPayload.subject}\n\n${bodyText.slice(0, 500)}...`
+            }
+          };
+
+          const writeUrl = `${airtableEndpoint}/${airtableBaseId}/Daily%20Assignments`;
+          await fetch(writeUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${airtableApiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(assignmentPayload)
+          });
+          console.log(`[Email Handler] Autonomous Sales Assignment created for ${senderEmails[0]}.`);
+        }
+      } catch (assignErr) {
+        console.error('[Email Handler] Failed to create assignment:', assignErr.message);
+      }
     }
 
     console.log(`[Email Handler] Dispatched priority relay card to HQ.`);
