@@ -1,5 +1,5 @@
 /**
-- TITAN OS V6.0.43 — HEADLESS ERP ORCHESTRATOR
+- TITAN OS V6.0.44 — HEADLESS ERP ORCHESTRATOR
 - Module: server.js
 - Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
 -          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
@@ -12,7 +12,7 @@
 -          Voice Estimates, Full-Ledger Analytics, Court Configuration Inspector,
 -          IoT Telemetry, RBAC Bouncer, Zero-UI Site Provisioning, Virtual
 -          Readiness, Executive Drafting Mode + Native Gmail Dispatch, and
--          Swarm Logistics Push Dispatch (Fabrication + Pinned Agents).
+-          Swarm Logistics Push Dispatch (Persistent Pin Hydration + Fabrication).
  */
 
 // ====================================================================
@@ -1293,7 +1293,7 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null, lookupM
   if (!Array.isArray(allSites) || allSites.length === 0) return fallbackBoundSite || null;
 
   const rawQuery = String(queryText || '').trim();
-  if (!rawQuery) return fallbackBoundSite || null;
+  if (!rawQuery || /^(none|null|n\/a|unknown|unbound)$/i.test(rawQuery)) return fallbackBoundSite || null;
 
   const qClean = rawQuery
     .toLowerCase()
@@ -1324,7 +1324,7 @@ function findMatchingSite(allSites, queryText, fallbackBoundSite = null, lookupM
 
     const searchableChunks = [];
     for (const [k, v] of Object.entries(enriched)) {
-      if (k === 'record_id') continue;
+      if (k === 'record_id' || k === 'Last Note') continue;
       if (typeof v === 'string' && !v.startsWith('http') && !v.startsWith('rec')) {
         searchableChunks.push(v);
       } else if (Array.isArray(v)) {
@@ -2026,9 +2026,26 @@ app.post('/webhook', async (req, res) => {
     const hasFinanceAccess = userRoles.some(r => r.includes('admin') || r.includes('finance') || r.includes('executive')) || isMasterAdmin;
     const hasInventoryAccess = userRoles.some(r => r.includes('admin') || r.includes('fabrication') || r.includes('warehouse') || r.includes('supervisor') || r.includes('executive')) || isMasterAdmin;
 
-    const sessionSiteId = whatsapp.getUserBoundSiteId
+    const worker = callerIdentity.workerRecord;
+    let sessionSiteId = whatsapp.getUserBoundSiteId
       ? (whatsapp.getUserBoundSiteId(dispatchTarget) || whatsapp.getUserBoundSiteId(speakerPhone))
       : null;
+
+    // Hydrate persisted site pin from Airtable Workers record if RAM was cleared on Render restart
+    if (!sessionSiteId && worker?.fields?.['Current Site Bound']) {
+      const persisted = worker.fields['Current Site Bound'];
+      const persistedId = Array.isArray(persisted) ? persisted[0] : persisted;
+      if (persistedId && typeof persistedId === 'string') {
+        sessionSiteId = persistedId;
+        if (whatsapp.userActiveSiteMap) {
+          const cleanSpeaker = String(speakerPhone).replace(/\D/g, '');
+          whatsapp.userActiveSiteMap.set(cleanSpeaker, persistedId);
+          if (cleanSpeaker.length === 10) whatsapp.userActiveSiteMap.set('1' + cleanSpeaker, persistedId);
+          else if (cleanSpeaker.length === 11 && cleanSpeaker.startsWith('1')) whatsapp.userActiveSiteMap.set(cleanSpeaker.slice(1), persistedId);
+        }
+      }
+    }
+
     let site = null;
     let allSites = [];
     let allWorkers = [];
@@ -2059,8 +2076,6 @@ app.post('/webhook', async (req, res) => {
         return gid && (gid === dispatchTarget || dispatchTarget.includes(gid));
       }) || null;
     }
-
-    const worker = callerIdentity.workerRecord;
 
     try {
       let safeMessageType = message.type || 'text';
@@ -2248,6 +2263,9 @@ app.post('/webhook', async (req, res) => {
           }
 
           try {
+            if (worker && worker.fields) {
+              worker.fields['Current Site Bound'] = [selectedSite.id];
+            }
             await whatsapp.bindSiteContext(CONFIG, selectedSite, worker, callerIdentity, dispatchTarget, speakerPhone, dist, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
             await replayPendingUnboundMediaBatch(speakerPhone, selectedSite, dispatchTarget);
           } catch (e) {
@@ -2463,6 +2481,9 @@ app.post('/webhook', async (req, res) => {
           }
 
           try {
+            if (worker && worker.fields) {
+              worker.fields['Current Site Bound'] = [nearby[0].site.id];
+            }
             await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, speakerPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
             await replayPendingUnboundMediaBatch(speakerPhone, nearby[0].site, dispatchTarget);
           } catch (e) {
@@ -2740,7 +2761,10 @@ app.post('/webhook', async (req, res) => {
           // VOICE NLP SWARM BROADCASTER (Schema-Exact 'Service' + 'Task Category': 'Logistics')
           if (spokenTriage.intent === 'LOGISTICS_DISPATCH') {
             const requestedItem = spokenTriage.structured_payload?.item || spokenTriage.transcript_en || transcript || 'Logistics Items';
-            const resolvedSite = activeBoundSite || findMatchingSite(allSites, spokenTriage.referenced_site_name || transcript, null, lookupMaps);
+            const explicitSiteHint = spokenTriage.referenced_site_name && !/^(none|null|n\/a|unknown)$/i.test(String(spokenTriage.referenced_site_name).trim())
+              ? spokenTriage.referenced_site_name
+              : null;
+            const resolvedSite = activeBoundSite || (explicitSiteHint ? findMatchingSite(allSites, explicitSiteHint, null, lookupMaps) : null);
             const siteId = resolvedSite ? resolvedSite.id : null;
             const targetSiteName = resolvedSite ? getSiteDisplayName(resolvedSite) : 'Unbound Field Site';
 
@@ -2761,20 +2785,22 @@ app.post('/webhook', async (req, res) => {
             if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
             const ticketId = assignment.record.id;
-            await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged for *${targetSiteName}*. Dispatching to local swarm and production team...`);
 
             const runnerRoles = ['delivery', 'logistics', 'supervisor', 'fabrication', 'production'];
             const swarmRunners = allWorkers.filter(w => {
               if (w.fields['Active'] === false) return false;
               const wPhone = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
               const e164 = wPhone.length === 10 ? '1' + wPhone : wPhone;
-              const wRole = String(w.fields['Role'] || '').toLowerCase();
+              if (!e164 || e164 === displayBotPhone) return false;
 
+              const wRole = String(w.fields['Role'] || '').toLowerCase();
               const isRunner = runnerRoles.some(r => wRole.includes(r));
               const isPinnedToSite = Boolean(siteId && whatsapp.getUserBoundSiteId && (whatsapp.getUserBoundSiteId(e164) === siteId || whatsapp.getUserBoundSiteId(wPhone) === siteId));
-              const isNotRequester = Boolean(e164 && e164 !== speakerPhone && e164 !== displayBotPhone);
+              const isRequester = e164 === speakerPhone;
 
-              return (isRunner || isPinnedToSite) && isNotRequester;
+              // Include runners/production, anyone pinned to the site, and the requester if they hold a runner/supervisor role
+              if (isRequester) return isRunner;
+              return isRunner || isPinnedToSite;
             });
 
             let mapLink = 'Coordinates pending';
@@ -2792,10 +2818,19 @@ app.post('/webhook', async (req, res) => {
               { id: `DONE_LOG_${ticketId}`, title: 'Mark Completed' }
             ];
 
-            const uniqueTargets = [...new Set(swarmRunners.map(r => {
+            const recipientNames = [];
+            const uniqueTargets = [];
+            for (const r of swarmRunners) {
               const p = String(r.fields['WhatsApp Number'] || r.fields['Phone E164'] || r.fields['Phone'] || r.fields['Mobile'] || '').replace(/\D/g, '');
-              return p.length === 10 ? '1' + p : p;
-            }).filter(Boolean))];
+              const e164 = p.length === 10 ? '1' + p : p;
+              if (e164 && !uniqueTargets.includes(e164)) {
+                uniqueTargets.push(e164);
+                recipientNames.push(r.fields['Full Name'] || e164);
+              }
+            }
+
+            const pinReminder = !resolvedSite ? `\n\n_Tip: Drop a 📍 Location Pin so future tickets automatically bind to your court._` : '';
+            await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged for *${targetSiteName}*.\n📣 *Swarm Notified:* ${recipientNames.join(', ') || 'Fleet'}${pinReminder}`);
 
             for (const runnerPhone of uniqueTargets) {
               await whatsapp.sendWhatsAppButtons(CONFIG, runnerPhone, broadcastMsg, buttons);
@@ -3187,7 +3222,10 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         // TEXT NLP SWARM BROADCASTER (Schema-Exact 'Service' + 'Task Category': 'Logistics')
         if (triage.intent === 'LOGISTICS_DISPATCH') {
           const requestedItem = triage.structured_payload?.item || triage.transcript_en || txt || 'Logistics Items';
-          const resolvedSite = boundSite || findMatchingSite(allSites, triage.referenced_site_name || txt, null, lookupMaps);
+          const explicitSiteHint = triage.referenced_site_name && !/^(none|null|n\/a|unknown)$/i.test(String(triage.referenced_site_name).trim())
+            ? triage.referenced_site_name
+            : null;
+          const resolvedSite = boundSite || (explicitSiteHint ? findMatchingSite(allSites, explicitSiteHint, null, lookupMaps) : null);
           const siteId = resolvedSite ? resolvedSite.id : null;
           const targetSiteName = resolvedSite ? getSiteDisplayName(resolvedSite) : 'Unbound Field Site';
 
@@ -3208,20 +3246,21 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
           const ticketId = assignment.record.id;
-          await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged for *${targetSiteName}*. Dispatching to local swarm and production team...`);
 
           const runnerRoles = ['delivery', 'logistics', 'supervisor', 'fabrication', 'production'];
           const swarmRunners = allWorkers.filter(w => {
             if (w.fields['Active'] === false) return false;
             const wPhone = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
             const e164 = wPhone.length === 10 ? '1' + wPhone : wPhone;
-            const wRole = String(w.fields['Role'] || '').toLowerCase();
+            if (!e164 || e164 === displayBotPhone) return false;
 
+            const wRole = String(w.fields['Role'] || '').toLowerCase();
             const isRunner = runnerRoles.some(r => wRole.includes(r));
             const isPinnedToSite = Boolean(siteId && whatsapp.getUserBoundSiteId && (whatsapp.getUserBoundSiteId(e164) === siteId || whatsapp.getUserBoundSiteId(wPhone) === siteId));
-            const isNotRequester = Boolean(e164 && e164 !== speakerPhone && e164 !== displayBotPhone);
+            const isRequester = e164 === speakerPhone;
 
-            return (isRunner || isPinnedToSite) && isNotRequester;
+            if (isRequester) return isRunner;
+            return isRunner || isPinnedToSite;
           });
 
           let mapLink = 'Coordinates pending';
@@ -3239,10 +3278,19 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             { id: `DONE_LOG_${ticketId}`, title: 'Mark Completed' }
           ];
 
-          const uniqueTargets = [...new Set(swarmRunners.map(r => {
+          const recipientNames = [];
+          const uniqueTargets = [];
+          for (const r of swarmRunners) {
             const p = String(r.fields['WhatsApp Number'] || r.fields['Phone E164'] || r.fields['Phone'] || r.fields['Mobile'] || '').replace(/\D/g, '');
-            return p.length === 10 ? '1' + p : p;
-          }).filter(Boolean))];
+            const e164 = p.length === 10 ? '1' + p : p;
+            if (e164 && !uniqueTargets.includes(e164)) {
+              uniqueTargets.push(e164);
+              recipientNames.push(r.fields['Full Name'] || e164);
+            }
+          }
+
+          const pinReminder = !resolvedSite ? `\n\n_Tip: Drop a 📍 Location Pin so future tickets automatically bind to your court._` : '';
+          await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged for *${targetSiteName}*.\n📣 *Swarm Notified:* ${recipientNames.join(', ') || 'Fleet'}${pinReminder}`);
 
           for (const runnerPhone of uniqueTargets) {
             await whatsapp.sendWhatsAppButtons(CONFIG, runnerPhone, broadcastMsg, buttons);
@@ -3597,7 +3645,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.43',
+    version: '6.0.44',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
@@ -3648,7 +3696,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
     : 'MISSING';
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.43 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.44 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`🔑 Airtable Auth: ${keyFingerprint} | Base: ${CONFIG.airtable.baseId}`);
   console.log(`====================================================================`);
 
