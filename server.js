@@ -1,5 +1,5 @@
 /**
-- TITAN OS V6.0.42 — HEADLESS ERP ORCHESTRATOR
+- TITAN OS V6.0.43 — HEADLESS ERP ORCHESTRATOR
 - Module: server.js
 - Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
 -          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
@@ -564,7 +564,7 @@ async function getCachedSites(forceRefresh = false) {
         memoryCache.sitesLastFetched = Date.now();
         console.log(`[Cache Engine] Refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
 
-        // NEW: Autonomous Geocoding Background Check
+        // Autonomous Geocoding Background Check
         setTimeout(async () => {
           for (const s of memoryCache.sites) {
             try { await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop); } catch (e) {}
@@ -757,9 +757,20 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
           delete currentPayload.fields[badField];
           continue;
         }
+        const optMatch = errorMsg.match(/create new select option\s*["'\\]+([^"'\\]+)["'\\]+/i);
+        if (optMatch && optMatch[1]) {
+          const badOption = optMatch[1];
+          const offendingKey = Object.keys(currentPayload.fields).find(k => String(currentPayload.fields[k]) === badOption);
+          if (offendingKey) {
+            console.warn(`[Airtable Auto-Healer] Dropping invalid select option "${badOption}" on field "${offendingKey}" from ${tableName}`);
+            delete currentPayload.fields[offendingKey];
+            continue;
+          }
+        }
       }
       throw new Error(`HTTP ${res ? res.status : 'NET'}: ${errorMsg}`);
     } catch (err) {
+      console.error(`[Airtable Write Error] ${tableName}:`, err.message);
       if (attempt === retries) return { success: false, writtenFields: {}, record: null };
     }
   }
@@ -2726,19 +2737,23 @@ app.post('/webhook', async (req, res) => {
             return await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, getActiveOracleURIs(), dM, dB, callerIdentity);
           }
 
-          // VOICE NLP SWARM BROADCASTER
+          // VOICE NLP SWARM BROADCASTER (Schema-Exact 'Service' + 'Task Category': 'Logistics')
           if (spokenTriage.intent === 'LOGISTICS_DISPATCH') {
             const requestedItem = spokenTriage.structured_payload?.item || spokenTriage.transcript_en || transcript || 'Logistics Items';
-            const siteId = activeBoundSite ? activeBoundSite.id : null;
-            const targetSiteName = activeBoundSite ? getSiteDisplayName(activeBoundSite) : 'Unknown Field Site';
+            const resolvedSite = activeBoundSite || findMatchingSite(allSites, spokenTriage.referenced_site_name || transcript, null, lookupMaps);
+            const siteId = resolvedSite ? resolvedSite.id : null;
+            const targetSiteName = resolvedSite ? getSiteDisplayName(resolvedSite) : 'Unbound Field Site';
 
-            const assignment = await airtableWriteWithAutoDrop('Daily Assignments', {
-              'Assignment Type': 'Logistics',
+            const ticketPayload = {
+              'Assignment Type': 'Service',
+              'Task Category': 'Logistics',
               'Status': 'Open',
               'Priority': 'High',
-              'Sites': siteId ? [siteId] : [],
               'Notes': `[FIELD REQUEST] ${callerIdentity.name} at ${targetSiteName}: ${requestedItem}`
-            });
+            };
+            if (siteId) ticketPayload['Sites'] = [siteId];
+
+            const assignment = await airtableWriteWithAutoDrop('Daily Assignments', ticketPayload);
 
             if (!assignment.success || !assignment.record?.id) {
               return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
@@ -2746,7 +2761,7 @@ app.post('/webhook', async (req, res) => {
             if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
             const ticketId = assignment.record.id;
-            await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged. Dispatching to local swarm and production team...`);
+            await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged for *${targetSiteName}*. Dispatching to local swarm and production team...`);
 
             const runnerRoles = ['delivery', 'logistics', 'supervisor', 'fabrication', 'production'];
             const swarmRunners = allWorkers.filter(w => {
@@ -2763,9 +2778,9 @@ app.post('/webhook', async (req, res) => {
             });
 
             let mapLink = 'Coordinates pending';
-            if (activeBoundSite) {
+            if (resolvedSite) {
               try {
-                const c = await whatsapp.resolveCoordinates(CONFIG, memoryCache, activeBoundSite, airtableWriteWithAutoDrop);
+                const c = await whatsapp.resolveCoordinates(CONFIG, memoryCache, resolvedSite, airtableWriteWithAutoDrop);
                 if (c) mapLink = `https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lon}`;
               } catch (e) {}
             }
@@ -3169,19 +3184,23 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           return await finance.handleConversationalChangeOrder(CONFIG, triage, dispatchTarget, getActiveOracleURIs(), dM, dB, callerIdentity);
         }
 
-        // TEXT NLP SWARM BROADCASTER
+        // TEXT NLP SWARM BROADCASTER (Schema-Exact 'Service' + 'Task Category': 'Logistics')
         if (triage.intent === 'LOGISTICS_DISPATCH') {
           const requestedItem = triage.structured_payload?.item || triage.transcript_en || txt || 'Logistics Items';
-          const siteId = boundSite ? boundSite.id : null;
-          const targetSiteName = boundSite ? getSiteDisplayName(boundSite) : 'Unknown Field Site';
+          const resolvedSite = boundSite || findMatchingSite(allSites, triage.referenced_site_name || txt, null, lookupMaps);
+          const siteId = resolvedSite ? resolvedSite.id : null;
+          const targetSiteName = resolvedSite ? getSiteDisplayName(resolvedSite) : 'Unbound Field Site';
 
-          const assignment = await airtableWriteWithAutoDrop('Daily Assignments', {
-            'Assignment Type': 'Logistics',
+          const ticketPayload = {
+            'Assignment Type': 'Service',
+            'Task Category': 'Logistics',
             'Status': 'Open',
             'Priority': 'High',
-            'Sites': siteId ? [siteId] : [],
             'Notes': `[FIELD REQUEST] ${callerIdentity.name} at ${targetSiteName}: ${requestedItem}`
-          });
+          };
+          if (siteId) ticketPayload['Sites'] = [siteId];
+
+          const assignment = await airtableWriteWithAutoDrop('Daily Assignments', ticketPayload);
 
           if (!assignment.success || !assignment.record?.id) {
             return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
@@ -3189,7 +3208,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
           const ticketId = assignment.record.id;
-          await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged. Dispatching to local swarm and production team...`);
+          await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged for *${targetSiteName}*. Dispatching to local swarm and production team...`);
 
           const runnerRoles = ['delivery', 'logistics', 'supervisor', 'fabrication', 'production'];
           const swarmRunners = allWorkers.filter(w => {
@@ -3206,9 +3225,9 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           });
 
           let mapLink = 'Coordinates pending';
-          if (boundSite) {
+          if (resolvedSite) {
             try {
-              const c = await whatsapp.resolveCoordinates(CONFIG, memoryCache, boundSite, airtableWriteWithAutoDrop);
+              const c = await whatsapp.resolveCoordinates(CONFIG, memoryCache, resolvedSite, airtableWriteWithAutoDrop);
               if (c) mapLink = `https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lon}`;
             } catch (e) {}
           }
@@ -3578,7 +3597,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.42',
+    version: '6.0.43',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
@@ -3629,7 +3648,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
     : 'MISSING';
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.42 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.43 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`🔑 Airtable Auth: ${keyFingerprint} | Base: ${CONFIG.airtable.baseId}`);
   console.log(`====================================================================`);
 
