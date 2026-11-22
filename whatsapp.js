@@ -1,9 +1,10 @@
 /**
-- TITAN OS V6.0.37 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+- TITAN OS V6.0.42 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
 - Module: whatsapp.js
-- Purpose: Webhooks, Debouncing, NLP Intent Routing, 10-Gate Forensic Vision,
--          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
--          Executive UI Formatting, and Native Joy Cannon Templates
+- Purpose: Webhooks, Debouncing, NLP Intent Routing (Swarm & Fabrication),
+-          10-Gate Forensic Vision, Named Milestone Alignment, Time-Slice
+-          Stamping (Install Started/Completed), Supabase Private Vault
+-          Storage, BOM Triggers, Semantic Email Triage, and Joy Cannon
  */
 
 const crypto = require('crypto');
@@ -169,6 +170,8 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   let cleanDestination = String(toTarget).replace(/\D/g, '');
   if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
 
+  const safeBodyText = String(textBody || '').slice(0, 1020);
+
   const actionButtons = buttons.slice(0, 3).map((btn, idx) => {
     let safeTitle = String(btn.title || 'Select').trim();
     if (safeTitle.length > 20) {
@@ -190,7 +193,7 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      body: { text: textBody },
+      body: { text: safeBodyText },
       action: { buttons: actionButtons }
     }
   };
@@ -209,12 +212,12 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
     if (!res || !res.ok) {
       const errTxt = res ? await res.text() : 'Network failure';
       console.warn(`[Meta Buttons] Rejected: ${errTxt}. Falling back to text.`);
-      const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
+      const fallbackText = `${safeBodyText}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
       return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
     }
     return true;
   } catch (err) {
-    const fallbackText = `${textBody}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
+    const fallbackText = `${safeBodyText}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
     return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
   }
 }
@@ -233,14 +236,14 @@ async function sendWhatsAppTemplate(config, toTarget, templateName, variablesObj
   ];
 
   const components = [];
-  
+
   if (headerImageUrl) {
     components.push({
       type: 'header',
       parameters: [{ type: 'image', image: { link: headerImageUrl } }]
     });
   }
-  
+
   components.push({
     type: 'body',
     parameters: bodyParameters
@@ -283,16 +286,16 @@ async function sendWhatsAppTemplate(config, toTarget, templateName, variablesObj
   }
 }
 
-async function fanOutToSubscribers(config, phoneNumbersData, variablesObj, imageUrl = null) {
+async function fanOutToSubscribers(config, phoneNumbersData, variablesObjOrText, imageUrl = null) {
   if (!phoneNumbersData) return;
-  
+
   let rawNumbers = [];
   if (Array.isArray(phoneNumbersData)) {
-      rawNumbers = phoneNumbersData;
+    rawNumbers = phoneNumbersData;
   } else if (typeof phoneNumbersData === 'string') {
-      rawNumbers = phoneNumbersData.split(',');
+    rawNumbers = phoneNumbersData.split(',');
   } else {
-      return;
+    return;
   }
 
   const cleanNumbers = rawNumbers.map(n => {
@@ -302,10 +305,18 @@ async function fanOutToSubscribers(config, phoneNumbersData, variablesObj, image
   }).filter(n => n.length >= 10);
 
   const uniqueTargets = [...new Set(cleanNumbers)];
-  
-  if(uniqueTargets.length === 0) {
-      console.log(`[Joy Cannon] No valid E164 subscriber numbers found.`);
-      return;
+
+  if (uniqueTargets.length === 0) {
+    console.log(`[Joy Cannon] No valid E164 subscriber numbers found.`);
+    return;
+  }
+
+  // Support plain-text executive briefings (e.g., Friday Newsletter) as well as structured Joy Cannon templates
+  if (typeof variablesObjOrText === 'string') {
+    for (const target of uniqueTargets) {
+      await sendWhatsAppMessage(config, target, variablesObjOrText);
+    }
+    return;
   }
 
   console.log(`[Joy Cannon] Broadcasting template to ${uniqueTargets.length} subscribers...`);
@@ -313,7 +324,7 @@ async function fanOutToSubscribers(config, phoneNumbersData, variablesObj, image
   const headerMedia = imageUrl || 'https://images.unsplash.com/photo-1698246479704-aebc2fdfbc02?q=80&w=600&auto=format&fit=crop';
 
   for (const target of uniqueTargets) {
-    await sendWhatsAppTemplate(config, target, 'joy_cannon_update', variablesObj, headerMedia);
+    await sendWhatsAppTemplate(config, target, 'joy_cannon_update', variablesObjOrText, headerMedia);
   }
 }
 
@@ -564,7 +575,12 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
 
 async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWriteWithAutoDrop, generateMorningEasterEgg, overriddenWeatherStr = '') {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
-  userActiveSiteMap.set(fromPhone, site.id);
+  const cleanDigits = String(fromPhone || '').replace(/\D/g, '');
+  if (cleanDigits) {
+    userActiveSiteMap.set(cleanDigits, site.id);
+    if (cleanDigits.length === 10) userActiveSiteMap.set('1' + cleanDigits, site.id);
+    else if (cleanDigits.length === 11 && cleanDigits.startsWith('1')) userActiveSiteMap.set(cleanDigits.slice(1), site.id);
+  }
 
   if (worker && worker.id) {
     try {
@@ -610,11 +626,21 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 }
 
 function getUserBoundSiteId(fromPhone) {
-  return userActiveSiteMap.get(fromPhone) || null;
+  if (!fromPhone) return null;
+  const cleanDigits = String(fromPhone).replace(/\D/g, '');
+  if (!cleanDigits) return null;
+  if (userActiveSiteMap.has(cleanDigits)) return userActiveSiteMap.get(cleanDigits);
+  if (cleanDigits.length === 10 && userActiveSiteMap.has('1' + cleanDigits)) {
+    return userActiveSiteMap.get('1' + cleanDigits);
+  }
+  if (cleanDigits.length === 11 && cleanDigits.startsWith('1') && userActiveSiteMap.has(cleanDigits.slice(1))) {
+    return userActiveSiteMap.get(cleanDigits.slice(1));
+  }
+  return null;
 }
 
 function updateSessionContext(fromPhone, update) {
-  if (!userActiveSiteMap.has(fromPhone)) return;
+  if (!getUserBoundSiteId(fromPhone)) return;
   console.log(`[Session State] Updated context for ${fromPhone}:`, update);
 }
 
@@ -638,7 +664,7 @@ Respond STRICTLY with JSON:
   "referenced_site_name": "string (extract the site name or street address if mentioned)",
   "qbo_customer_name": "string (extract the client name if mentioned for finance)",
   "transcript_en": "string (the english translation of the text or audio)",
-  "structured_payload": {"item": "string (for LOGISTICS_DISPATCH only: what is explicitly missing or needed in the field)"}
+  "structured_payload": {"item": "string (for LOGISTICS_DISPATCH only: what is explicitly missing, wrong, or needed in the field)"}
 }
 
 Rules:
@@ -646,7 +672,7 @@ Rules:
 - If the user asks about a specific site's court details, configuration, specifications, lights, turf color, steel color, glass, manufacturer, gate, status, or address (e.g., "Can I have the court details for 10 Highland Road", "Does Wise have lights?", "What turf does RCOR have?"), classify as COURT_SPECS_QUERY and extract the site name or street address into referenced_site_name.
 - If the user asks for directions, a map, pin, or address to drive to a site (e.g., "Can I have directions to Padel Park"), classify as NAVIGATION_QUERY.
 - If the user asks analytical questions across the fleet or database (e.g., "How many courts are scheduled?", "What is our capacity?"), classify as LEDGER_QUERY.
-- If the user states they are missing parts, need a delivery, or require materials brought to the site (e.g., "We need sand", "Missing entrance plates"), MUST classify as LOGISTICS_DISPATCH.
+- If the user states they are missing parts, need a delivery, require materials brought to the site, or report a fabrication/production mismatch (e.g., "We need two bags of sand", "You sent two right entrances, pick up the right and bring a left entrance", "The tabs are in the wrong place", "Missing an entrance plate", "Missing a piece of steel", or any steel, glass, light post, or turf supply/swap need), MUST classify as LOGISTICS_DISPATCH.
 - Only classify as READINESS_QUERY if they explicitly ask if a site is ready to mobilize or build.`;
 
   const contentParts = [{ text: intentPrompt }];
@@ -734,6 +760,33 @@ Return STRICTLY JSON:
   "field_observations": "string (concise asset health notes)",
   "summary": "string (concise 2-sentence maintenance report in target language)"
 }`;
+
+async function translateSummaryToEnglishForClient(config, text) {
+  const raw = String(text || '').trim();
+  if (!raw || !config?.gemini?.apiKey) return raw;
+  const looksSpanish = /[¡¿áéíóúñü]/i.test(raw) || /\b(el|la|los|las|está|están|pista|jaula|vidrio|luces|progreso|trabajo|instalación|completado|pendiente|con|para|del|por|sin|sobre|equipo|material|cancha|malla|césped|base)\b/i.test(raw);
+  if (!looksSpanish) return raw;
+
+  try {
+    const prompt = `Translate the following padel court construction update into clear, warm, professional English for an executive client milestone notification. Preserve technical accuracy and output ONLY the translated English text:\n\n${raw}`;
+    const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.0 }
+      })
+    }, 1);
+    if (res && res.ok) {
+      const data = await res.json();
+      const translated = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+      if (translated) return translated;
+    }
+  } catch (err) {
+    console.warn('[Joy Cannon Translator] Falling back to original summary:', err.message);
+  }
+  return raw;
+}
 
 async function uploadMediaToSupabaseVault(config, item) {
   if (!config?.supabase?.url || !config?.supabase?.serviceRoleKey) return null;
@@ -985,35 +1038,66 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       verifiedGates = verifiedGates.filter(g => g !== 10);
     }
     const highestGate = verifiedGates.length > 0 ? Math.max(...verifiedGates) : (audit.highest_gate || 0);
-    
+
     // Core Structural Gates Required for a complete court (Gates 1 through 9)
     const coreGates = [1, 2, 3, 4, 5, 6, 7, 8, 9];
     const hasAllCore = coreGates.every(g => verifiedGates.includes(g));
     const isInstallationComplete = workflowMode === 'INSTALLATION' && hasAllCore && audit.cleanliness_passed !== false;
-    
-    const progressBar = generateProgressBar(verifiedGates.length);
 
-    // Map Specific Milestone Titles instead of generic numeric tags
-    const gateMilestoneMap = {
-      0: "Gate 0: Pre-Flight Delivery Audit",
-      1: "Gate 1: Concrete Foundation & Sub-base",
-      2: "Gate 2: Perimeter Steel Frame Erection",
-      3: "Gate 3: Lower Perimeter Wire Mesh",
-      4: "Gate 4: Upper Perimeter Wire Mesh",
-      5: "Gate 5: 12mm Tempered Glass Seating",
-      6: "Gate 6: Non-Gating Structural Silicone",
-      7: "Gate 7: Artificial Turf & Seaming",
-      8: "Gate 8: Silica Sand Infill Application",
-      9: "Gate 9: Center Net & Tensioned Assembly",
-      10: "Gate 10: Worksite Stewardship"
+    // Map forensic 0-10 gates to canonical 9-gate named milestones (Lights-aware & passive Silicone)
+    const forensicToCanonicalMap = {
+      1: 1, // Foundation and site readiness
+      2: 2, // Steel frame up
+      3: 3, // Side mesh and upper mesh up
+      4: 3, // Side mesh and upper mesh up
+      5: 4, // Glass installed
+      6: 5, // Silicone applied (passive)
+      7: 7, // Turf installed and sand is in
+      8: 7, // Turf installed and sand is in
+      9: 8, // Net posts and net are up
+      10: 9 // Site is clean and ready for play!
     };
 
-    const latestMilestoneTitle = verifiedGates.length > 0 ? gateMilestoneMap[highestGate] : `Gate ${highestGate}`;
+    const canonicalGates = [...new Set(
+      verifiedGates
+        .map(g => forensicToCanonicalMap[g])
+        .filter(Boolean)
+    )];
+    if (isInstallationComplete && !canonicalGates.includes(9)) {
+      canonicalGates.push(9);
+    }
+
+    const canonicalProgress = (typeof config.computeSiteGateProgress === 'function' && canonicalGates.length > 0)
+      ? config.computeSiteGateProgress(site, canonicalGates)
+      : null;
+
+    const progressBar = canonicalProgress
+      ? `[${'█'.repeat(Math.round(canonicalProgress.ratio * 10))}${'░'.repeat(10 - Math.round(canonicalProgress.ratio * 10))}] ${canonicalProgress.percentInt}%`
+      : generateProgressBar(verifiedGates.length);
+
+    const fallbackMilestoneMap = {
+      0: 'Pre-Flight Delivery Audit',
+      1: 'Foundation and site readiness',
+      2: 'Steel frame up',
+      3: 'Side mesh and upper mesh up',
+      4: 'Side mesh and upper mesh up',
+      5: 'Glass installed',
+      6: 'Silicone applied',
+      7: 'Turf installed and sand is in',
+      8: 'Turf installed and sand is in',
+      9: 'Net posts and net are up',
+      10: 'Site is clean and ready for play!'
+    };
+
+    const latestMilestoneTitle = canonicalProgress
+      ? canonicalProgress.milestoneTitleEn
+      : (verifiedGates.length > 0 ? (fallbackMilestoneMap[highestGate] || `Milestone ${highestGate}`) : 'Pre-Flight Delivery Audit');
+
     const gateLabel = workflowMode === 'MAINTENANCE'
       ? 'Maintenance Sweep'
-      : (isInstallationComplete ? 'Gate 10: Worksite Stewardship Complete (11/11 Verified)' : `${latestMilestoneTitle} (${verifiedGates.length}/11 Verified)`);
+      : (canonicalProgress ? canonicalProgress.currentGateLabel : `${latestMilestoneTitle} (${verifiedGates.length}/11 Verified)`);
 
-    // Stage 3: Ledger Mutation (Sites & Reports 2) + Auto-Transition to Maintenance Mode
+    // Stage 3: Ledger Mutation (Sites & Reports 2) + Time-Slice Stamps + Auto-Transition to Maintenance Mode
     const auditNote = `[FORENSIC SWEEP] ${workerName}: ${gateLabel}. ${audit.summary || ''}${validLinks.length > 0 ? `\nVault: ${validLinks.join(', ')}` : ''}`;
 
     const sitePatch = {
@@ -1027,9 +1111,19 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       sitePatch['Latest Video Link'] = highestQualityImage;
     }
 
+    // Autonomous Build Time-Slice Stamps (Install Started -> Install Completed)
+    if (workflowMode === 'INSTALLATION') {
+      if (!site.fields['Install Started'] && verifiedGates.some(g => g >= 1)) {
+        sitePatch['Install Started'] = new Date().toISOString();
+      }
+    }
+
     if (isInstallationComplete) {
       sitePatch['Current Gate'] = gateLabel;
       sitePatch['Workflow Mode'] = 'MAINTENANCE';
+      if (!site.fields['Install Completed']) {
+        sitePatch['Install Completed'] = new Date().toISOString();
+      }
     } else if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
       sitePatch['Current Gate'] = gateLabel;
     }
@@ -1067,12 +1161,12 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       }
     }
 
-    // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + Joy Cannon)
+    // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + English Joy Cannon)
     const blockersBlock = (audit.blockers_detected && audit.blockers_detected.length > 0)
       ? `\n⚠️ *Pending Adjustments:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
       : '';
     const cleanWarning = (audit.cleanliness_passed === false)
-      ? `\n🧹 *Gate 10 Held:* Debris/tools visible on foot print. Manage site footprint to seal Gate 10.\n`
+      ? `\n🧹 *Worksite Stewardship Held:* Debris/tools visible on footprint. Manage site footprint to seal final cleanliness.\n`
       : '';
     const completionNotice = isInstallationComplete
       ? `\n🔄 *Lifecycle Transition:* Court automatically flipped to *Maintenance Mode*.\n`
@@ -1082,6 +1176,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       `──────────────────────────────\n` +
       `🏟️ *Court:* ${siteName}\n` +
       `👤 *Tech:* ${workerName}\n` +
+      `🏁 *Milestone:* ${latestMilestoneTitle}\n` +
       `📊 *Build Progress:* ${progressBar}\n` +
       `──────────────────────────────\n` +
       `${audit.summary || 'Progress logged to digital twin.'}` +
@@ -1089,16 +1184,20 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 
     await sendWhatsAppMessage(config, dispatchTarget, punchCard);
 
-    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST WITH NATIVE API TEMPLATE
+    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST WITH NATIVE API TEMPLATE (ALWAYS ENGLISH)
     const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
     if (subscriberPhones && workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
+      const englishJoySummary = await translateSummaryToEnglishForClient(
+        config,
+        audit.summary || 'Construction progressing on schedule.'
+      );
       const templateVars = {
         projectName: siteName,
         milestoneTitle: latestMilestoneTitle,
         progressStr: progressBar,
-        summary: audit.summary || 'Construction progressing on schedule.'
+        summary: englishJoySummary
       };
-      
+
       await fanOutToSubscribers(config, subscriberPhones, templateVars, highestQualityImage);
     }
   } catch (err) {
@@ -1225,14 +1324,14 @@ Return STRICTLY JSON:
     for (const phone of targetPhones) {
       await sendWhatsAppButtons(config, phone, formattedDispatch, buttons);
     }
-    
+
     // Autonomous Daily Assignment Creation for Commercial Leads
     if (triage.category === 'COMMERCIAL_LEAD') {
       try {
         const airtableEndpoint = config.airtable?.endpoint || 'https://api.airtable.com/v0';
         const airtableBaseId = config.airtable?.baseId;
         const airtableApiKey = config.airtable?.apiKey;
-        
+
         if (airtableApiKey && airtableBaseId) {
           const assignmentPayload = {
             fields: {
