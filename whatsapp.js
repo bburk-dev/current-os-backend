@@ -1,5 +1,5 @@
 /**
-- TITAN OS V6.0.36 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+- TITAN OS V6.0.37 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
 - Module: whatsapp.js
 - Purpose: Webhooks, Debouncing, NLP Intent Routing, 10-Gate Forensic Vision,
 -          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
@@ -310,7 +310,6 @@ async function fanOutToSubscribers(config, phoneNumbersData, variablesObj, image
 
   console.log(`[Joy Cannon] Broadcasting template to ${uniqueTargets.length} subscribers...`);
 
-  // Hard fallback image if the evaluation didn't extract a valid video/image URL
   const headerMedia = imageUrl || 'https://images.unsplash.com/photo-1698246479704-aebc2fdfbc02?q=80&w=600&auto=format&fit=crop';
 
   for (const target of uniqueTargets) {
@@ -978,7 +977,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 
     const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
     const validLinks = signedUrls.filter(Boolean);
-    const highestQualityImage = validLinks.find(url => /\.(jpg|jpeg|png)$/i.test(url)) || validLinks[0];
+    const highestQualityImage = validLinks.find(url => /\.(jpg|jpeg|png|mp4)$/i.test(url)) || validLinks[0];
 
     // Enforce Gate 10 Non-Monotonic Cleanliness Guardrail and clamp to 0-10
     let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates].filter(g => g >= 0 && g <= 10) : [];
@@ -1023,6 +1022,11 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
         ? 'INSTALLATION_COMPLETE_MAINTENANCE_FLIP'
         : (workflowMode === 'MAINTENANCE' ? 'MAINTENANCE_SWEEP' : 'FORENSIC_GATE_AUDIT')
     };
+
+    if (highestQualityImage) {
+      sitePatch['Latest Video Link'] = highestQualityImage;
+    }
+
     if (isInstallationComplete) {
       sitePatch['Current Gate'] = gateLabel;
       sitePatch['Workflow Mode'] = 'MAINTENANCE';
