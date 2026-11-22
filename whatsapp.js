@@ -1,9 +1,9 @@
 /**
-- TITAN OS V6.0.34 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+- TITAN OS V6.0.36 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
 - Module: whatsapp.js
 - Purpose: Webhooks, Debouncing, NLP Intent Routing, 10-Gate Forensic Vision,
 -          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
--          and Executive UI Formatting
+-          Executive UI Formatting, and Native Joy Cannon Templates
  */
 
 const crypto = require('crypto');
@@ -219,7 +219,71 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   }
 }
 
-async function fanOutToSubscribers(config, phoneNumbersData, messageBody, imageUrl = null) {
+async function sendWhatsAppTemplate(config, toTarget, templateName, variablesObj, headerImageUrl = null) {
+  if (!toTarget || !config.meta.phoneNumberId) return false;
+
+  let cleanDestination = String(toTarget).replace(/\D/g, '');
+  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+
+  const bodyParameters = [
+    { type: 'text', text: String(variablesObj.projectName || 'Active Court').slice(0, 1024) },
+    { type: 'text', text: String(variablesObj.milestoneTitle || 'Milestone Reached').slice(0, 1024) },
+    { type: 'text', text: String(variablesObj.progressStr || '[████░░░░░░] 40%').slice(0, 1024) },
+    { type: 'text', text: String(variablesObj.summary || 'Construction progressing on schedule.').slice(0, 1024) }
+  ];
+
+  const components = [];
+  
+  if (headerImageUrl) {
+    components.push({
+      type: 'header',
+      parameters: [{ type: 'image', image: { link: headerImageUrl } }]
+    });
+  }
+  
+  components.push({
+    type: 'body',
+    parameters: bodyParameters
+  });
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: cleanDestination,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: 'en' },
+      components: components
+    }
+  };
+
+  const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
+
+  try {
+    const res = await fetchWithExponentialBackoff(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.meta.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    }, 2);
+
+    if (!res || !res.ok) {
+      const errData = res ? await res.text() : 'Network failure';
+      console.error(`[Joy Cannon] Template dispatch failed to ${cleanDestination}: ${errData}`);
+      return false;
+    }
+    console.log(`[Joy Cannon] Successfully fired Meta template to ${cleanDestination}.`);
+    return true;
+  } catch (err) {
+    console.error(`[Joy Cannon] Template exception to ${cleanDestination}:`, err.message);
+    return false;
+  }
+}
+
+async function fanOutToSubscribers(config, phoneNumbersData, variablesObj, imageUrl = null) {
   if (!phoneNumbersData) return;
   
   let rawNumbers = [];
@@ -244,14 +308,12 @@ async function fanOutToSubscribers(config, phoneNumbersData, messageBody, imageU
       return;
   }
 
-  console.log(`[Joy Cannon] Broadcasting to ${uniqueTargets.length} subscribers (Image: ${Boolean(imageUrl)})...`);
+  console.log(`[Joy Cannon] Broadcasting template to ${uniqueTargets.length} subscribers...`);
+
+  const headerMedia = imageUrl || 'https://images.unsplash.com/photo-1698246479704-aebc2fdfbc02?q=80&w=600&auto=format&fit=crop';
 
   for (const target of uniqueTargets) {
-    if (imageUrl) {
-      await sendWhatsAppImage(config, target, imageUrl, messageBody);
-    } else {
-      await sendWhatsAppMessage(config, target, messageBody);
-    }
+    await sendWhatsAppTemplate(config, target, 'joy_cannon_update', variablesObj, headerMedia);
   }
 }
 
@@ -1021,21 +1083,17 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 
     await sendWhatsAppMessage(config, dispatchTarget, punchCard);
 
-    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST WITH NATIVE IMAGE EMBEDDING
+    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST WITH NATIVE API TEMPLATE
     const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
     if (subscriberPhones && workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
-      const joyHeader = isInstallationComplete
-        ? `🏆 *BOUNCE PADEL | COURT BUILD COMPLETE*`
-        : `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`;
+      const templateVars = {
+        projectName: siteName,
+        milestoneTitle: latestMilestoneTitle,
+        progressStr: progressBar,
+        summary: audit.summary || 'Construction progressing on schedule.'
+      };
       
-      const joyMsg = `${joyHeader}\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `🏟️ *Project:* ${siteName}\n` +
-        `📊 *Progress:* ${progressBar}\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `${audit.summary || 'Construction progressing on schedule.'}`;
-
-      await fanOutToSubscribers(config, subscriberPhones, joyMsg, highestQualityImage);
+      await fanOutToSubscribers(config, subscriberPhones, templateVars, highestQualityImage);
     }
   } catch (err) {
     console.error('[processMediaBatch Runtime Error]:', err.message);
@@ -1162,7 +1220,7 @@ Return STRICTLY JSON:
       await sendWhatsAppButtons(config, phone, formattedDispatch, buttons);
     }
     
-    // NEW: Autonomous Daily Assignment Creation for Commercial Leads
+    // Autonomous Daily Assignment Creation for Commercial Leads
     if (triage.category === 'COMMERCIAL_LEAD') {
       try {
         const airtableEndpoint = config.airtable?.endpoint || 'https://api.airtable.com/v0';
