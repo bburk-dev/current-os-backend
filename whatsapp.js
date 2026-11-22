@@ -1,13 +1,18 @@
 /**
-- TITAN OS V6.0.42 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+- TITAN OS V6.0.43 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
 - Module: whatsapp.js
 - Purpose: Webhooks, Debouncing, NLP Intent Routing (Swarm & Fabrication),
--          10-Gate Forensic Vision, Named Milestone Alignment, Time-Slice
--          Stamping (Install Started/Completed), Supabase Private Vault
--          Storage, BOM Triggers, Semantic Email Triage, and Joy Cannon
+-          10-Gate Forensic Vision, AI-Guided Video Keyframe Splicing for Joy
+-          Cannon, Named Milestone Alignment, Time-Slice Stamping (Install
+-          Started/Completed), Supabase Private Vault Storage, BOM Triggers,
+-          Semantic Email Triage, and Native Joy Cannon Templates
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFile } = require('child_process');
 
 // ====================================================================
 // 0. GLOBAL UTILITIES (EXPONENTIAL BACKOFF)
@@ -321,7 +326,11 @@ async function fanOutToSubscribers(config, phoneNumbersData, variablesObjOrText,
 
   console.log(`[Joy Cannon] Broadcasting template to ${uniqueTargets.length} subscribers...`);
 
-  const headerMedia = imageUrl || 'https://images.unsplash.com/photo-1698246479704-aebc2fdfbc02?q=80&w=600&auto=format&fit=crop';
+  // Guard against non-image URLs (e.g. .mp4) in Meta's IMAGE template header
+  const isSafeImageUrl = typeof imageUrl === 'string' && /^https?:\/\//i.test(imageUrl) && !/\.mp4(\?|$)/i.test(imageUrl);
+  const headerMedia = isSafeImageUrl
+    ? imageUrl
+    : 'https://images.unsplash.com/photo-1698246479704-aebc2fdfbc02?q=80&w=600&auto=format&fit=crop';
 
   for (const target of uniqueTargets) {
     await sendWhatsAppTemplate(config, target, 'joy_cannon_update', variablesObjOrText, headerMedia);
@@ -715,7 +724,7 @@ Rules:
 }
 
 // ====================================================================
-// 6. BLIND VISUAL FORENSICS, SUPABASE VAULT, & 10-GATE BATCH PIPELINE
+// 6. BLIND VISUAL FORENSICS, VIDEO KEYFRAME SPLICER & 10-GATE PIPELINE
 // ====================================================================
 
 const INDUSTRIAL_10_GATE_PROMPT = `You are the Lead Forensic Construction Auditor for Bounce Padel.
@@ -738,11 +747,13 @@ CRITICAL RULES:
 2. GATE 0 CONDITIONAL REQUIREMENT: Gate 0 must be rigorously verified before higher structural gates are credited.
 3. VISUAL TRUTH OVERRIDES AUDIO: If the provided captions or audio claim the court is clean, finished, or ready, you MUST ignore those claims and rely STRICTLY on the visual pixel evidence. Do not let user dictation override visual reality.
 4. NO HALLUCINATION: There are exactly 11 gates (0 through 10). DO NOT output gates 11, 12, or higher under any circumstances.
-5. Return STRICTLY JSON:
+5. CLIENT KEYFRAME SELECTION: If a video is attached, identify "best_frame_timestamp_sec" (integer seconds) representing the sharpest, widest, best-lit view of the court progress suitable for a client milestone photo.
+6. Return STRICTLY JSON:
 {
   "highest_gate": number (0 to 10),
   "verified_gates": [number] (ONLY integers between 0 and 10),
   "cleanliness_passed": boolean,
+  "best_frame_timestamp_sec": number (seconds into video for best still photo, default 1),
   "blockers_detected": ["string"],
   "field_observations": "string (concise material/hardware/friction notes for Dark Matter log)",
   "summary": "string (concise, encouraging 2-sentence field summary describing the specific milestone achieved in target language)"
@@ -756,6 +767,7 @@ Return STRICTLY JSON:
   "highest_gate": 10,
   "verified_gates": [10],
   "cleanliness_passed": boolean,
+  "best_frame_timestamp_sec": number (seconds into video for best still photo, default 1),
   "blockers_detected": ["string (any maintenance defects or left-behind tools found)"],
   "field_observations": "string (concise asset health notes)",
   "summary": "string (concise 2-sentence maintenance report in target language)"
@@ -829,6 +841,81 @@ async function uploadMediaToSupabaseVault(config, item) {
   } catch (err) {
     console.warn('[Supabase Vault] Exception:', err.message);
     return null;
+  }
+}
+
+function runFfmpegFrameExtract(ffmpegBin, seekSec, inputPath, outputPath) {
+  return new Promise((resolve) => {
+    const args = [
+      '-ss', String(Math.max(0, Number(seekSec) || 0)),
+      '-i', inputPath,
+      '-vframes', '1',
+      '-q:v', '2',
+      '-vf', "scale='min(1280,iw)':-2",
+      '-y',
+      outputPath
+    ];
+    execFile(ffmpegBin, args, { timeout: 15000 }, (err) => {
+      if (err) return resolve(false);
+      try {
+        const stat = fs.statSync(outputPath);
+        resolve(stat.isFile() && stat.size > 1024);
+      } catch (e) {
+        resolve(false);
+      }
+    });
+  });
+}
+
+async function spliceKeyFrameFromVideo(config, videoItem, preferredTimestampSec = 1.5) {
+  if (!videoItem || !videoItem.buffer) return null;
+
+  let ffmpegBin = 'ffmpeg';
+  try {
+    const staticBin = require('ffmpeg-static');
+    if (staticBin) ffmpegBin = staticBin;
+  } catch (e) {}
+
+  const id = crypto.randomUUID();
+  const tmpDir = os.tmpdir();
+  const tmpVideoPath = path.join(tmpDir, `titan_vid_${id}.mp4`);
+  const tmpJpgPath = path.join(tmpDir, `titan_frame_${id}.jpg`);
+
+  try {
+    await fs.promises.writeFile(tmpVideoPath, videoItem.buffer);
+
+    const targetSec = Math.min(Math.max(0, Number(preferredTimestampSec) || 1.5), 120);
+    let extracted = await runFfmpegFrameExtract(ffmpegBin, targetSec, tmpVideoPath, tmpJpgPath);
+
+    // Fallback to early frame (0.5s then 0s) if preferred timestamp exceeded video duration
+    if (!extracted && targetSec > 0.5) {
+      extracted = await runFfmpegFrameExtract(ffmpegBin, 0.5, tmpVideoPath, tmpJpgPath);
+    }
+    if (!extracted) {
+      extracted = await runFfmpegFrameExtract(ffmpegBin, 0, tmpVideoPath, tmpJpgPath);
+    }
+
+    if (!extracted) {
+      console.warn('[Joy Cannon Splicer] ffmpeg could not extract a frame from video.');
+      return null;
+    }
+
+    const jpgBuffer = await fs.promises.readFile(tmpJpgPath);
+    const signedJpgUrl = await uploadMediaToSupabaseVault(config, {
+      buffer: jpgBuffer,
+      mimeType: 'image/jpeg'
+    });
+
+    if (signedJpgUrl) {
+      console.log(`[Joy Cannon Splicer] Extracted & archived keyframe (${Math.round(jpgBuffer.length / 1024)} KB) at ${targetSec}s.`);
+    }
+    return signedJpgUrl;
+  } catch (err) {
+    console.warn('[Joy Cannon Splicer] Exception:', err.message);
+    return null;
+  } finally {
+    fs.promises.unlink(tmpVideoPath).catch(() => {});
+    fs.promises.unlink(tmpJpgPath).catch(() => {});
   }
 }
 
@@ -1017,7 +1104,10 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     }
 
     // Stage 2: Parallel Supabase Vault Archival + 10-Gate Forensic Evaluation
-    const uploadPromises = items.map(item => uploadMediaToSupabaseVault(config, item));
+    const uploadPromises = items.map(async (item) => {
+      const signedUrl = await uploadMediaToSupabaseVault(config, item);
+      return { type: item.type, mimeType: item.mimeType, signedUrl, item };
+    });
     const evalPromise = evaluateCourtMediaBatch(config, items, {
       siteName,
       workflowMode,
@@ -1028,9 +1118,25 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       captions: combinedCaptions
     });
 
-    const [signedUrls, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
-    const validLinks = signedUrls.filter(Boolean);
-    const highestQualityImage = validLinks.find(url => /\.(jpg|jpeg|png|mp4)$/i.test(url)) || validLinks[0];
+    const [uploadedAssets, audit] = await Promise.all([Promise.all(uploadPromises), evalPromise]);
+    const validAssets = uploadedAssets.filter(a => Boolean(a.signedUrl));
+    const validLinks = validAssets.map(a => a.signedUrl);
+
+    // Primary media link for Sites ('Latest Video Link'): prefer video if uploaded, otherwise first valid asset
+    const primarySiteMediaUrl = validAssets.find(a => a.type === 'video')?.signedUrl || validLinks[0] || null;
+
+    // Joy Cannon & Reports 2 still image: prefer an uploaded photo; if video-only, splice best JPEG keyframe via ffmpeg
+    let joyCannonStillImageUrl = validAssets.find(a => a.type === 'image')?.signedUrl || null;
+    if (!joyCannonStillImageUrl) {
+      const videoEntry = uploadedAssets.find(a => a.type === 'video');
+      if (videoEntry) {
+        const bestSec = Number(audit.best_frame_timestamp_sec) || 1.5;
+        joyCannonStillImageUrl = await spliceKeyFrameFromVideo(config, videoEntry.item, bestSec);
+        if (joyCannonStillImageUrl) {
+          validLinks.unshift(joyCannonStillImageUrl);
+        }
+      }
+    }
 
     // Enforce Gate 10 Non-Monotonic Cleanliness Guardrail and clamp to 0-10
     let verifiedGates = Array.isArray(audit.verified_gates) ? [...audit.verified_gates].filter(g => g >= 0 && g <= 10) : [];
@@ -1107,8 +1213,8 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
         : (workflowMode === 'MAINTENANCE' ? 'MAINTENANCE_SWEEP' : 'FORENSIC_GATE_AUDIT')
     };
 
-    if (highestQualityImage) {
-      sitePatch['Latest Video Link'] = highestQualityImage;
+    if (primarySiteMediaUrl) {
+      sitePatch['Latest Video Link'] = primarySiteMediaUrl;
     }
 
     // Autonomous Build Time-Slice Stamps (Install Started -> Install Completed)
@@ -1161,7 +1267,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       }
     }
 
-    // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + English Joy Cannon)
+    // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + English Joy Cannon with Spliced Image)
     const blockersBlock = (audit.blockers_detected && audit.blockers_detected.length > 0)
       ? `\n⚠️ *Pending Adjustments:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
       : '';
@@ -1184,7 +1290,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
 
     await sendWhatsAppMessage(config, dispatchTarget, punchCard);
 
-    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST WITH NATIVE API TEMPLATE (ALWAYS ENGLISH)
+    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST WITH NATIVE API TEMPLATE (ALWAYS ENGLISH + JPEG HEADER)
     const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
     if (subscriberPhones && workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
       const englishJoySummary = await translateSummaryToEnglishForClient(
@@ -1198,7 +1304,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
         summary: englishJoySummary
       };
 
-      await fanOutToSubscribers(config, subscriberPhones, templateVars, highestQualityImage);
+      await fanOutToSubscribers(config, subscriberPhones, templateVars, joyCannonStillImageUrl);
     }
   } catch (err) {
     console.error('[processMediaBatch Runtime Error]:', err.message);
@@ -1424,6 +1530,7 @@ module.exports = {
   bindSiteContext,
   triageSpokenOrTextNLP,
   inspectBlindVisualGroundTruth,
+  spliceKeyFrameFromVideo,
   evaluateCourtMediaBatch,
   processMediaBatch,
   handleInboundEmail,
