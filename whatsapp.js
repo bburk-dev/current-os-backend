@@ -1,9 +1,10 @@
 /**
-- TITAN OS V6.0.43 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+- TITAN OS V6.0.44 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
 - Module: whatsapp.js
 - Purpose: Webhooks, Debouncing, NLP Intent Routing (Swarm & Fabrication),
 -          10-Gate Forensic Vision, AI-Guided Video Keyframe Splicing for Joy
--          Cannon, Named Milestone Alignment, Time-Slice Stamping (Install
+-          Cannon, International E.164 Phone Normalization (North America +
+-          Europe), Named Milestone Alignment, Time-Slice Stamping (Install
 -          Started/Completed), Supabase Private Vault Storage, BOM Triggers,
 -          Semantic Email Triage, and Native Joy Cannon Templates
  */
@@ -15,7 +16,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 // ====================================================================
-// 0. GLOBAL UTILITIES (EXPONENTIAL BACKOFF)
+// 0. GLOBAL UTILITIES (EXPONENTIAL BACKOFF & E.164 NORMALIZER)
 // ====================================================================
 
 async function fetchWithExponentialBackoff(url, options = {}, retries = 2) {
@@ -41,6 +42,34 @@ async function fetchWithExponentialBackoff(url, options = {}, retries = 2) {
   }
 }
 
+function normalizeE164Phone(raw) {
+  if (raw === null || raw === undefined) return '';
+  const str = String(raw).trim();
+  if (!str) return '';
+
+  const hasExplicitPlus = str.startsWith('+');
+  const hasDoubleZeroPrefix = !hasExplicitPlus && str.startsWith('00');
+
+  let digits = str.replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Strip international '00' exit prefix (e.g., 0034 612 345 678 -> 34612345678)
+  if (hasDoubleZeroPrefix && digits.startsWith('00')) {
+    digits = digits.slice(2);
+  }
+
+  // Strip domestic trunk '0' accidentally retained after European country codes (e.g., +44 (0) 7700... -> 447700...)
+  digits = digits.replace(/^(44|33|49|31|32|41|43|46|48|351|353|358)0(\d{7,11})$/, '$1$2');
+
+  // Prepend North American '1' ONLY when 10 digits AND no explicit '+' or '00' international prefix was provided
+  // (Protects 10-digit European E.164 numbers such as Denmark +45XXXXXXXX and Norway +47XXXXXXXX)
+  if (!hasExplicitPlus && !hasDoubleZeroPrefix && digits.length === 10) {
+    digits = '1' + digits;
+  }
+
+  return digits;
+}
+
 // ====================================================================
 // 1. IN-MEMORY DEBOUNCERS & GEOSPATIAL CACHES
 // ====================================================================
@@ -56,8 +85,8 @@ const dailyEasterEggTracker = new Map();
 
 async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') {
   if (!toTarget || !messageId || !config.meta.phoneNumberId) return false;
-  let cleanDestination = String(toTarget).replace(/\D/g, '');
-  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+  const cleanDestination = normalizeE164Phone(toTarget);
+  if (!cleanDestination) return false;
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -88,8 +117,8 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
     return false;
   }
 
-  let cleanDestination = String(toTarget).replace(/\D/g, '');
-  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+  const cleanDestination = normalizeE164Phone(toTarget);
+  if (!cleanDestination) return false;
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -129,8 +158,8 @@ async function sendWhatsAppImage(config, toTarget, imageUrl, captionText = '', r
     return false;
   }
 
-  let cleanDestination = String(toTarget).replace(/\D/g, '');
-  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+  const cleanDestination = normalizeE164Phone(toTarget);
+  if (!cleanDestination) return false;
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -172,8 +201,8 @@ async function sendWhatsAppImage(config, toTarget, imageUrl, captionText = '', r
 async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
   if (!toTarget || !buttons || buttons.length === 0 || !config.meta.phoneNumberId) return false;
 
-  let cleanDestination = String(toTarget).replace(/\D/g, '');
-  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+  const cleanDestination = normalizeE164Phone(toTarget);
+  if (!cleanDestination) return false;
 
   const safeBodyText = String(textBody || '').slice(0, 1020);
 
@@ -230,8 +259,8 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
 async function sendWhatsAppTemplate(config, toTarget, templateName, variablesObj, headerImageUrl = null) {
   if (!toTarget || !config.meta.phoneNumberId) return false;
 
-  let cleanDestination = String(toTarget).replace(/\D/g, '');
-  if (cleanDestination.length === 10) cleanDestination = '1' + cleanDestination;
+  const cleanDestination = normalizeE164Phone(toTarget);
+  if (!cleanDestination) return false;
 
   const bodyParameters = [
     { type: 'text', text: String(variablesObj.projectName || 'Active Court').slice(0, 1024) },
@@ -298,16 +327,14 @@ async function fanOutToSubscribers(config, phoneNumbersData, variablesObjOrText,
   if (Array.isArray(phoneNumbersData)) {
     rawNumbers = phoneNumbersData;
   } else if (typeof phoneNumbersData === 'string') {
-    rawNumbers = phoneNumbersData.split(',');
+    rawNumbers = phoneNumbersData.split(/[,;\n]+/);
   } else {
     return;
   }
 
-  const cleanNumbers = rawNumbers.map(n => {
-    let num = String(n).replace(/\D/g, '').trim();
-    if (num.length === 10) num = '1' + num;
-    return num;
-  }).filter(n => n.length >= 10);
+  const cleanNumbers = rawNumbers
+    .map(n => normalizeE164Phone(n))
+    .filter(n => n.length >= 10 && n.length <= 15);
 
   const uniqueTargets = [...new Set(cleanNumbers)];
 
@@ -324,7 +351,7 @@ async function fanOutToSubscribers(config, phoneNumbersData, variablesObjOrText,
     return;
   }
 
-  console.log(`[Joy Cannon] Broadcasting template to ${uniqueTargets.length} subscribers...`);
+  console.log(`[Joy Cannon] Broadcasting template to ${uniqueTargets.length} subscribers: [${uniqueTargets.join(', ')}]`);
 
   // Guard against non-image URLs (e.g. .mp4) in Meta's IMAGE template header
   const isSafeImageUrl = typeof imageUrl === 'string' && /^https?:\/\//i.test(imageUrl) && !/\.mp4(\?|$)/i.test(imageUrl);
@@ -584,11 +611,12 @@ async function resolveCoordinates(config, memoryCache, rawLocationOrSite, airtab
 
 async function bindSiteContext(config, site, worker, callerIdentity, dispatchTarget, fromPhone, distanceMeters, userLat, userLon, airtableWriteWithAutoDrop, generateMorningEasterEgg, overriddenWeatherStr = '') {
   const workerName = worker?.fields?.['Full Name'] || callerIdentity.name || 'Tech';
-  const cleanDigits = String(fromPhone || '').replace(/\D/g, '');
+  const cleanDigits = normalizeE164Phone(fromPhone);
   if (cleanDigits) {
     userActiveSiteMap.set(cleanDigits, site.id);
-    if (cleanDigits.length === 10) userActiveSiteMap.set('1' + cleanDigits, site.id);
-    else if (cleanDigits.length === 11 && cleanDigits.startsWith('1')) userActiveSiteMap.set(cleanDigits.slice(1), site.id);
+    if (cleanDigits.length === 11 && cleanDigits.startsWith('1')) {
+      userActiveSiteMap.set(cleanDigits.slice(1), site.id);
+    }
   }
 
   if (worker && worker.id) {
@@ -636,12 +664,9 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
 
 function getUserBoundSiteId(fromPhone) {
   if (!fromPhone) return null;
-  const cleanDigits = String(fromPhone).replace(/\D/g, '');
+  const cleanDigits = normalizeE164Phone(fromPhone);
   if (!cleanDigits) return null;
   if (userActiveSiteMap.has(cleanDigits)) return userActiveSiteMap.get(cleanDigits);
-  if (cleanDigits.length === 10 && userActiveSiteMap.has('1' + cleanDigits)) {
-    return userActiveSiteMap.get('1' + cleanDigits);
-  }
   if (cleanDigits.length === 11 && cleanDigits.startsWith('1') && userActiveSiteMap.has(cleanDigits.slice(1))) {
     return userActiveSiteMap.get(cleanDigits.slice(1));
   }
@@ -1511,6 +1536,7 @@ function normalizeSitePayload(rawPayload, cachedSiteRecord) {
 }
 
 module.exports = {
+  normalizeE164Phone,
   mediaDebounceQueues,
   lastDroppedCoordinates,
   userActiveSiteMap,
