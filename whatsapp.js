@@ -310,6 +310,7 @@ async function fanOutToSubscribers(config, phoneNumbersData, variablesObj, image
 
   console.log(`[Joy Cannon] Broadcasting template to ${uniqueTargets.length} subscribers...`);
 
+  // Hard fallback image if the evaluation didn't extract a valid video/image URL
   const headerMedia = imageUrl || 'https://images.unsplash.com/photo-1698246479704-aebc2fdfbc02?q=80&w=600&auto=format&fit=crop';
 
   for (const target of uniqueTargets) {
@@ -642,6 +643,7 @@ Respond STRICTLY with JSON:
 }
 
 Rules:
+- If the user sends a command without explicit update data, DO NOT extract null values. Return an empty JSON object {} for the payload.
 - If the user asks about a specific site's court details, configuration, specifications, lights, turf color, steel color, glass, manufacturer, gate, status, or address (e.g., "Can I have the court details for 10 Highland Road", "Does Wise have lights?", "What turf does RCOR have?"), classify as COURT_SPECS_QUERY and extract the site name or street address into referenced_site_name.
 - If the user asks for directions, a map, pin, or address to drive to a site (e.g., "Can I have directions to Padel Park"), classify as NAVIGATION_QUERY.
 - If the user asks analytical questions across the fleet or database (e.g., "How many courts are scheduled?", "What is our capacity?"), classify as LEDGER_QUERY.
