@@ -1,5 +1,5 @@
 /**
-- TITAN OS V6.0.41 — HEADLESS ERP ORCHESTRATOR
+- TITAN OS V6.0.42 — HEADLESS ERP ORCHESTRATOR
 - Module: server.js
 - Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
 -          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
@@ -11,7 +11,8 @@
 -          Binding Buffer, QBO Finance Copilot, Atomic Message Deduplication,
 -          Voice Estimates, Full-Ledger Analytics, Court Configuration Inspector,
 -          IoT Telemetry, RBAC Bouncer, Zero-UI Site Provisioning, Virtual
--          Readiness, and Executive Drafting Mode + Native Gmail Dispatch.
+-          Readiness, Executive Drafting Mode + Native Gmail Dispatch, and
+-          Swarm Logistics Push Dispatch (Fabrication + Pinned Agents).
  */
 
 // ====================================================================
@@ -562,6 +563,13 @@ async function getCachedSites(forceRefresh = false) {
         memoryCache.sites = fresh;
         memoryCache.sitesLastFetched = Date.now();
         console.log(`[Cache Engine] Refreshed ${memoryCache.sites.length} Sites from Airtable into RAM`);
+
+        // NEW: Autonomous Geocoding Background Check
+        setTimeout(async () => {
+          for (const s of memoryCache.sites) {
+            try { await whatsapp.resolveCoordinates(CONFIG, memoryCache, s, airtableWriteWithAutoDrop); } catch (e) {}
+          }
+        }, 1000);
       }
     } catch (err) {
       console.warn('[Cache Engine] Sites fetch failed (preserving existing cache):', err.message);
@@ -1952,7 +1960,6 @@ app.get('/webhook', (req, res) => {
   }
   return res.sendStatus(403);
 });
-
 // Single-Threaded Atomic Deduplication Flow
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
@@ -2100,6 +2107,60 @@ app.post('/webhook', async (req, res) => {
           }
         } else {
           await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Drafting session expired or target email missing.`);
+        }
+        return;
+      }
+
+      // SWARM LOGISTICS PUSH & CLAIM / COMPLETION HANDLER
+      if (interactiveButtonId.startsWith('CLAIM_LOG_') || interactiveButtonId.startsWith('DONE_LOG_')) {
+        const ticketId = interactiveButtonId.split('_').pop();
+        const btnTitle = message.interactive?.button_reply?.title || 'Updated Status';
+        const isDone = interactiveButtonId.startsWith('DONE_LOG_');
+        const statusUpdate = isDone ? 'Complete' : 'In Progress';
+
+        try {
+          let existingNotes = '';
+          let directionsStr = '';
+          let targetSiteName = 'the site';
+          const openAssignments = await fetchAllAirtableRecords(airtableSchemaCache.assignmentsTable, `RECORD_ID()='${ticketId}'`);
+
+          if (openAssignments.length > 0) {
+            existingNotes = String(openAssignments[0].fields['Notes'] || '');
+            const siteArr = openAssignments[0].fields['Sites'] || openAssignments[0].fields['Site'];
+            if (Array.isArray(siteArr) && siteArr.length > 0) {
+              const boundSite = allSites.find(s => s.id === siteArr[0]);
+              if (boundSite) {
+                targetSiteName = getSiteDisplayName(boundSite);
+                const coords = await whatsapp.resolveCoordinates(CONFIG, memoryCache, boundSite, airtableWriteWithAutoDrop);
+                if (coords) {
+                  directionsStr = `\n\n🚗 *Tap to Navigate:*\nhttps://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lon}&dir_action=navigate`;
+                }
+              }
+            }
+          }
+
+          const stampLine = `[${new Date().toISOString()}] ${callerIdentity.name} clicked: ${btnTitle}`;
+          const updatedNotes = existingNotes ? `${existingNotes}\n${stampLine}` : stampLine;
+
+          const patchFields = {
+            'Status': statusUpdate,
+            'Notes': updatedNotes
+          };
+          if (worker && worker.id) {
+            patchFields['Worker'] = [worker.id];
+            patchFields['Worker Claim'] = [worker.id];
+          }
+
+          await airtableWriteWithAutoDrop('Daily Assignments', patchFields, ticketId);
+
+          const updateMsg = isDone
+            ? `✅ *Dispatch Completed*\nTicket for *${targetSiteName}* sealed as Complete by ${callerIdentity.name}. Great job.`
+            : `✅ *Dispatch Claimed*\n${callerIdentity.name} is now assigned to the run for *${targetSiteName}*. Drive safe.${directionsStr}`;
+
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, updateMsg);
+        } catch (e) {
+          console.warn('[Swarm Logistics Claim Error]', e.message);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to update logistics ticket status on the ledger.`);
         }
         return;
       }
@@ -2352,19 +2413,6 @@ app.post('/webhook', async (req, res) => {
       if (userLat && userLon) {
         whatsapp.lastDroppedCoordinates.set(speakerPhone, { lat: userLat, lon: userLon, timestamp: Date.now() });
 
-        let weatherStr = '';
-        try {
-          const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
-          if (!weatherCheck.safe) {
-            weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`;
-            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, weatherStr);
-          } else if (weatherCheck.telemetry) {
-            weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
-          }
-        } catch (weatherError) {
-          console.warn(`[Meteorology Error] Failed to evaluate weather for ${speakerPhone}:`, weatherError.message);
-        }
-
         let currentSites = [];
         try {
           currentSites = await getCachedSites(true);
@@ -2390,6 +2438,19 @@ app.post('/webhook', async (req, res) => {
 
         if (nearby.length === 1) {
           console.log(`[Location Triage] Single site found (${getSiteDisplayName(nearby[0].site)}). Binding context.`);
+
+          let weatherStr = '';
+          try {
+            const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
+            if (!weatherCheck.safe) {
+              weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`;
+            } else if (weatherCheck.telemetry) {
+              weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
+            }
+          } catch (weatherError) {
+            console.warn(`[Meteorology Error] Failed to evaluate weather for ${speakerPhone}:`, weatherError.message);
+          }
+
           try {
             await whatsapp.bindSiteContext(CONFIG, nearby[0].site, worker, callerIdentity, dispatchTarget, speakerPhone, nearby[0].distance, userLat, userLon, airtableWriteWithAutoDrop, fetchDadJoke, weatherStr);
             await replayPendingUnboundMediaBatch(speakerPhone, nearby[0].site, dispatchTarget);
@@ -2521,8 +2582,8 @@ app.post('/webhook', async (req, res) => {
 
                 if (isScreenshot) {
                   draftingSessions.set(speakerPhone, { active: false, context: parsedCheck.ocr_text });
-                  
-                  // NEW: Autonomously create a Daily Assignment for the Sales Lead
+
+                  // Autonomously create a Daily Assignment for the Sales Lead
                   try {
                     const assignmentPayload = {
                       'Assignment Type': 'Sales',
@@ -2530,7 +2591,7 @@ app.post('/webhook', async (req, res) => {
                       'Priority': 'High',
                       'Notes': `[COMMERCIAL LEAD - SCREENSHOT INGESTION] Follow up required.\n\nExtracted Text:\n${String(parsedCheck.ocr_text || '').slice(0, 500)}...`
                     };
-                    
+
                     if (worker && worker.id) {
                       assignmentPayload['Worker'] = [worker.id];
                     }
@@ -2665,51 +2726,66 @@ app.post('/webhook', async (req, res) => {
             return await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, getActiveOracleURIs(), dM, dB, callerIdentity);
           }
 
+          // VOICE NLP SWARM BROADCASTER
           if (spokenTriage.intent === 'LOGISTICS_DISPATCH') {
-            const requestedItem = spokenTriage.structured_payload?.item || transcript || 'Logistics Items';
+            const requestedItem = spokenTriage.structured_payload?.item || spokenTriage.transcript_en || transcript || 'Logistics Items';
             const siteId = activeBoundSite ? activeBoundSite.id : null;
             const targetSiteName = activeBoundSite ? getSiteDisplayName(activeBoundSite) : 'Unknown Field Site';
 
             const assignment = await airtableWriteWithAutoDrop('Daily Assignments', {
-              'Assignment Type': 'Service',
+              'Assignment Type': 'Logistics',
               'Status': 'Open',
               'Priority': 'High',
               'Sites': siteId ? [siteId] : [],
-              'Notes': `[LOGISTICS REQUEST] ${callerIdentity.name} needs: ${requestedItem}`
+              'Notes': `[FIELD REQUEST] ${callerIdentity.name} at ${targetSiteName}: ${requestedItem}`
             });
 
-            if (!assignment.success) return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
+            if (!assignment.success || !assignment.record?.id) {
+              return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
+            }
             if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
-            const dispatchTargets = [];
-            allWorkers.forEach(w => {
-              if (w.fields['Active'] === false) return;
-              let r = w.fields['Role'] || [];
-              if (!Array.isArray(r)) r = [r];
-              const rLower = r.map(role => String(role).toLowerCase());
+            const ticketId = assignment.record.id;
+            await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged. Dispatching to local swarm and production team...`);
 
-              if (rLower.includes('delivery') || rLower.includes('admin') || rLower.includes('supervisor') || rLower.includes('logistics and freight')) {
-                const phoneNum = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
-                let e164 = phoneNum;
-                if (e164.length === 10) e164 = '1' + e164;
-                if (e164 && e164 !== speakerPhone && e164 !== displayBotPhone) dispatchTargets.push(e164);
-              }
+            const runnerRoles = ['delivery', 'logistics', 'supervisor', 'fabrication', 'production'];
+            const swarmRunners = allWorkers.filter(w => {
+              if (w.fields['Active'] === false) return false;
+              const wPhone = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
+              const e164 = wPhone.length === 10 ? '1' + wPhone : wPhone;
+              const wRole = String(w.fields['Role'] || '').toLowerCase();
+
+              const isRunner = runnerRoles.some(r => wRole.includes(r));
+              const isPinnedToSite = Boolean(siteId && whatsapp.getUserBoundSiteId && (whatsapp.getUserBoundSiteId(e164) === siteId || whatsapp.getUserBoundSiteId(wPhone) === siteId));
+              const isNotRequester = Boolean(e164 && e164 !== speakerPhone && e164 !== displayBotPhone);
+
+              return (isRunner || isPinnedToSite) && isNotRequester;
             });
 
-            const uniqueTargets = [...new Set(dispatchTargets)];
-            const alertCard = `🚨 *TITAN OS | FIELD LOGISTICS REQUEST*\n` +
-                              `━━━━━━━━━━━━━━━━━━━━\n` +
-                              `📍 *Site:* ${targetSiteName}\n` +
-                              `👷 *Requested By:* ${callerIdentity.name}\n` +
-                              `📦 *Needed:* "${requestedItem}"\n` +
-                              `━━━━━━━━━━━━━━━━━━━━\n` +
-                              `Tap below to claim this dispatch.`;
-
-            const buttons = [{ id: `CLAIM_DISPATCH_${assignment.record.id}_${speakerPhone}`, title: "Accept Dispatch" }];
-            for (const target of uniqueTargets) {
-              await whatsapp.sendWhatsAppButtons(CONFIG, target, alertCard, buttons);
+            let mapLink = 'Coordinates pending';
+            if (activeBoundSite) {
+              try {
+                const c = await whatsapp.resolveCoordinates(CONFIG, memoryCache, activeBoundSite, airtableWriteWithAutoDrop);
+                if (c) mapLink = `https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lon}`;
+              } catch (e) {}
             }
-            return await dM(dispatchTarget, `✅ Logistics request logged as Service Ticket and broadcasted to the fleet.`);
+
+            const broadcastMsg = `🚚 *LOCAL LOGISTICS DISPATCH*\n━━━━━━━━━━━━━━━━━━━━\n📍 *Site:* ${targetSiteName}\n🗺️ *Routing:* ${mapLink}\n\n🗣️ *Requested By:* ${callerIdentity.name}\n📦 *Items:* "${requestedItem}"\n━━━━━━━━━━━━━━━━━━━━\nTap below to claim this run:`;
+
+            const buttons = [
+              { id: `CLAIM_LOG_${ticketId}`, title: 'Claim Run' },
+              { id: `DONE_LOG_${ticketId}`, title: 'Mark Completed' }
+            ];
+
+            const uniqueTargets = [...new Set(swarmRunners.map(r => {
+              const p = String(r.fields['WhatsApp Number'] || r.fields['Phone E164'] || r.fields['Phone'] || r.fields['Mobile'] || '').replace(/\D/g, '');
+              return p.length === 10 ? '1' + p : p;
+            }).filter(Boolean))];
+
+            for (const runnerPhone of uniqueTargets) {
+              await whatsapp.sendWhatsAppButtons(CONFIG, runnerPhone, broadcastMsg, buttons);
+            }
+            return;
           }
 
           if (spokenTriage.intent === 'AR_LOOKUP') {
@@ -3093,51 +3169,66 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           return await finance.handleConversationalChangeOrder(CONFIG, triage, dispatchTarget, getActiveOracleURIs(), dM, dB, callerIdentity);
         }
 
+        // TEXT NLP SWARM BROADCASTER
         if (triage.intent === 'LOGISTICS_DISPATCH') {
           const requestedItem = triage.structured_payload?.item || triage.transcript_en || txt || 'Logistics Items';
           const siteId = boundSite ? boundSite.id : null;
           const targetSiteName = boundSite ? getSiteDisplayName(boundSite) : 'Unknown Field Site';
 
           const assignment = await airtableWriteWithAutoDrop('Daily Assignments', {
-            'Assignment Type': 'Service',
+            'Assignment Type': 'Logistics',
             'Status': 'Open',
             'Priority': 'High',
             'Sites': siteId ? [siteId] : [],
-            'Notes': `[LOGISTICS REQUEST] ${callerIdentity.name} needs: ${requestedItem}`
+            'Notes': `[FIELD REQUEST] ${callerIdentity.name} at ${targetSiteName}: ${requestedItem}`
           });
 
-          if (!assignment.success) return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
+          if (!assignment.success || !assignment.record?.id) {
+            return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
+          }
           if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
-          const dispatchTargets = [];
-          allWorkers.forEach(w => {
-            if (w.fields['Active'] === false) return;
-            let r = w.fields['Role'] || [];
-            if (!Array.isArray(r)) r = [r];
-            const rLower = r.map(role => String(role).toLowerCase());
+          const ticketId = assignment.record.id;
+          await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged. Dispatching to local swarm and production team...`);
 
-            if (rLower.includes('delivery') || rLower.includes('admin') || rLower.includes('supervisor') || rLower.includes('logistics and freight')) {
-              const phoneNum = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
-              let e164 = phoneNum;
-              if (e164.length === 10) e164 = '1' + e164;
-              if (e164 && e164 !== speakerPhone && e164 !== displayBotPhone) dispatchTargets.push(e164);
-            }
+          const runnerRoles = ['delivery', 'logistics', 'supervisor', 'fabrication', 'production'];
+          const swarmRunners = allWorkers.filter(w => {
+            if (w.fields['Active'] === false) return false;
+            const wPhone = String(w.fields['WhatsApp Number'] || w.fields['Phone E164'] || w.fields['Phone'] || w.fields['Mobile'] || '').replace(/\D/g, '');
+            const e164 = wPhone.length === 10 ? '1' + wPhone : wPhone;
+            const wRole = String(w.fields['Role'] || '').toLowerCase();
+
+            const isRunner = runnerRoles.some(r => wRole.includes(r));
+            const isPinnedToSite = Boolean(siteId && whatsapp.getUserBoundSiteId && (whatsapp.getUserBoundSiteId(e164) === siteId || whatsapp.getUserBoundSiteId(wPhone) === siteId));
+            const isNotRequester = Boolean(e164 && e164 !== speakerPhone && e164 !== displayBotPhone);
+
+            return (isRunner || isPinnedToSite) && isNotRequester;
           });
 
-          const uniqueTargets = [...new Set(dispatchTargets)];
-          const alertCard = `🚨 *TITAN OS | FIELD LOGISTICS REQUEST*\n` +
-                            `━━━━━━━━━━━━━━━━━━━━\n` +
-                            `📍 *Site:* ${targetSiteName}\n` +
-                            `👷 *Requested By:* ${callerIdentity.name}\n` +
-                            `📦 *Needed:* "${requestedItem}"\n` +
-                            `━━━━━━━━━━━━━━━━━━━━\n` +
-                            `Tap below to claim this dispatch.`;
-
-          const buttons = [{ id: `CLAIM_DISPATCH_${assignment.record.id}_${speakerPhone}`, title: "Accept Dispatch" }];
-          for (const target of uniqueTargets) {
-            await whatsapp.sendWhatsAppButtons(CONFIG, target, alertCard, buttons);
+          let mapLink = 'Coordinates pending';
+          if (boundSite) {
+            try {
+              const c = await whatsapp.resolveCoordinates(CONFIG, memoryCache, boundSite, airtableWriteWithAutoDrop);
+              if (c) mapLink = `https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lon}`;
+            } catch (e) {}
           }
-          return await dM(dispatchTarget, `✅ Logistics request logged as Service Ticket and broadcasted to the fleet.`);
+
+          const broadcastMsg = `🚚 *LOCAL LOGISTICS DISPATCH*\n━━━━━━━━━━━━━━━━━━━━\n📍 *Site:* ${targetSiteName}\n🗺️ *Routing:* ${mapLink}\n\n🗣️ *Requested By:* ${callerIdentity.name}\n📦 *Items:* "${requestedItem}"\n━━━━━━━━━━━━━━━━━━━━\nTap below to claim this run:`;
+
+          const buttons = [
+            { id: `CLAIM_LOG_${ticketId}`, title: 'Claim Run' },
+            { id: `DONE_LOG_${ticketId}`, title: 'Mark Completed' }
+          ];
+
+          const uniqueTargets = [...new Set(swarmRunners.map(r => {
+            const p = String(r.fields['WhatsApp Number'] || r.fields['Phone E164'] || r.fields['Phone'] || r.fields['Mobile'] || '').replace(/\D/g, '');
+            return p.length === 10 ? '1' + p : p;
+          }).filter(Boolean))];
+
+          for (const runnerPhone of uniqueTargets) {
+            await whatsapp.sendWhatsAppButtons(CONFIG, runnerPhone, broadcastMsg, buttons);
+          }
+          return;
         }
 
         if (triage.intent === 'AR_LOOKUP') {
@@ -3426,7 +3517,7 @@ async function processInboundEmailWebhook(req, res) {
       try {
         const buttons = [{ id: `DRAFT_REPLY_${targetEmail}`, title: "Draft Reply" }];
         const leadCard = `📧 *TITAN OS | COMMERCIAL LEAD DETECTED*\n──────────────────────────────\n*From:* ${fromAddr}\n*Subject:* ${subjectLine}\n\n${cleanText.slice(0, 300)}...\n──────────────────────────────\nWould you like to draft a professional reply?`;
-        
+
         if (whatsapp && whatsapp.sendWhatsAppButtons) {
           await whatsapp.sendWhatsAppButtons(CONFIG, CONFIG.meta.targetVerifiedPhone, leadCard, buttons);
         }
@@ -3487,7 +3578,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.41',
+    version: '6.0.42',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
@@ -3538,7 +3629,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
     : 'MISSING';
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.41 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.0.42 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`🔑 Airtable Auth: ${keyFingerprint} | Base: ${CONFIG.airtable.baseId}`);
   console.log(`====================================================================`);
 
