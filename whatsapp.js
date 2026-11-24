@@ -1,5 +1,5 @@
 /**
-- TITAN OS V6.1.0 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+- TITAN OS V6.1.1 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
 - Module: whatsapp.js
 - Purpose: Webhooks, Debouncing, NLP Intent Routing (Swarm & Fabrication),
 -          10-Gate Forensic Vision, Large Video Gemini File API Support,
@@ -7,7 +7,8 @@
 -          E.164 Phone Normalization (North America + Europe), Named Milestone
 -          Alignment, Maintenance Service Mode & Two-Transition Joy Cannon
 -          Waterfall, Expanded Indoor Site Weather Guard, 24-Hour Meta Window
--          Template Fallback, Time-Slice Stamping (Install Started/Completed),
+-          Template Fallback, Self-Healing Meta Template Locale Resolver
+-          (132001 Auto-Fallback), Time-Slice Stamping (Install Started/Completed),
 -          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
 -          and Native Joy Cannon Templates.
  */
@@ -74,13 +75,14 @@ function normalizeE164Phone(raw) {
 }
 
 // ====================================================================
-// 1. IN-MEMORY DEBOUNCERS & GEOSPATIAL CACHES
+// 1. IN-MEMORY DEBOUNCERS, TEMPLATE LOCALE CACHE & GEOSPATIAL CACHES
 // ====================================================================
 const mediaDebounceQueues = new Map();
 const DEBOUNCE_DELAY_MS = 3500;
 const lastDroppedCoordinates = new Map();
 const userActiveSiteMap = new Map();
 const dailyEasterEggTracker = new Map();
+const resolvedTemplateLangCache = new Map();
 
 // ====================================================================
 // 2. OUTBOUND MESSAGING (GRAPH API + 24H TEMPLATE FALLBACK)
@@ -332,41 +334,59 @@ async function sendWhatsAppTemplate(config, toTarget, templateName, variablesObj
     parameters: bodyParameters
   });
 
-  const payload = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: cleanDestination,
-    type: 'template',
-    template: {
-      name: templateName,
-      language: { code: 'en' },
-      components: components
-    }
-  };
+  // V6.1.1: Self-Healing Meta Template Locale Resolver (handles Error 132001 automatically)
+  const cachedLang = resolvedTemplateLangCache.get(templateName);
+  const langCandidates = cachedLang
+    ? [cachedLang, ...['en_US', 'en_CA', 'en_GB', 'en'].filter(l => l !== cachedLang)]
+    : ['en_US', 'en_CA', 'en_GB', 'en'];
 
   const url = `${config.meta.graphApiUrl}/${config.meta.phoneNumberId}/messages`;
 
-  try {
-    const res = await fetchWithExponentialBackoff(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.meta.accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    }, 2);
+  for (const langCode of langCandidates) {
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanDestination,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: langCode },
+        components: components
+      }
+    };
 
-    if (!res || !res.ok) {
+    try {
+      const res = await fetchWithExponentialBackoff(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.meta.accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      }, 2);
+
+      if (res && res.ok) {
+        resolvedTemplateLangCache.set(templateName, langCode);
+        console.log(`[Joy Cannon] Successfully fired Meta template (${templateName} [${langCode}]) to ${cleanDestination}.`);
+        return true;
+      }
+
       const errData = res ? await res.text() : 'Network failure';
-      console.error(`[Joy Cannon] Template dispatch failed to ${cleanDestination}: ${errData}`);
+      if (errData.includes('132001')) {
+        console.warn(`[Joy Cannon] Template "${templateName}" not found in "${langCode}". Trying next locale...`);
+        continue;
+      }
+
+      console.error(`[Joy Cannon] Template dispatch failed to ${cleanDestination} (${langCode}): ${errData}`);
+      return false;
+    } catch (err) {
+      console.error(`[Joy Cannon] Template exception to ${cleanDestination} (${langCode}):`, err.message);
       return false;
     }
-    console.log(`[Joy Cannon] Successfully fired Meta template to ${cleanDestination}.`);
-    return true;
-  } catch (err) {
-    console.error(`[Joy Cannon] Template exception to ${cleanDestination}:`, err.message);
-    return false;
   }
+
+  console.error(`[Joy Cannon] Exhausted all locale fallbacks for template "${templateName}" to ${cleanDestination}.`);
+  return false;
 }
 
 async function fanOutToSubscribers(config, phoneNumbersData, variablesObjOrText, imageUrl = null) {
