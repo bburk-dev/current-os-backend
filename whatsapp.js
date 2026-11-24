@@ -1,12 +1,15 @@
 /**
-- TITAN OS V6.0.44 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
+- TITAN OS V6.1.0 — META WHATSAPP TRANSPORT & MULTIMODAL INGRESS
 - Module: whatsapp.js
 - Purpose: Webhooks, Debouncing, NLP Intent Routing (Swarm & Fabrication),
--          10-Gate Forensic Vision, AI-Guided Video Keyframe Splicing for Joy
--          Cannon, International E.164 Phone Normalization (North America +
--          Europe), Named Milestone Alignment, Time-Slice Stamping (Install
--          Started/Completed), Supabase Private Vault Storage, BOM Triggers,
--          Semantic Email Triage, and Native Joy Cannon Templates
+-          10-Gate Forensic Vision, Large Video Gemini File API Support,
+-          AI-Guided Video Keyframe Splicing for Joy Cannon, International
+-          E.164 Phone Normalization (North America + Europe), Named Milestone
+-          Alignment, Maintenance Service Mode & Two-Transition Joy Cannon
+-          Waterfall, Expanded Indoor Site Weather Guard, 24-Hour Meta Window
+-          Template Fallback, Time-Slice Stamping (Install Started/Completed),
+-          Supabase Private Vault Storage, BOM Triggers, Semantic Email Triage,
+-          and Native Joy Cannon Templates.
  */
 
 const crypto = require('crypto');
@@ -80,7 +83,7 @@ const userActiveSiteMap = new Map();
 const dailyEasterEggTracker = new Map();
 
 // ====================================================================
-// 2. OUTBOUND MESSAGING (GRAPH API)
+// 2. OUTBOUND MESSAGING (GRAPH API + 24H TEMPLATE FALLBACK)
 // ====================================================================
 
 async function sendWhatsAppReaction(config, toTarget, messageId, emoji = '⚡') {
@@ -142,6 +145,25 @@ async function sendWhatsAppMessage(config, toTarget, messageBody, retries = 2) {
 
     if (!res || !res.ok) {
       const errData = res ? await res.text() : 'Network failure';
+
+      // V6.1.0: 24-Hour Customer Service Window Fallback (Meta Error 131047)
+      if (errData.includes('131047')) {
+        console.warn(`[Meta 24h Guard] Window closed for ${cleanDestination}. Falling back to joy_cannon_update template.`);
+        const flatSummary = String(messageBody || '').replace(/\n+/g, ' | ').slice(0, 950);
+        return await sendWhatsAppTemplate(
+          config,
+          cleanDestination,
+          'joy_cannon_update',
+          {
+            projectName: 'Titan OS Alert',
+            milestoneTitle: 'Priority Notification',
+            progressStr: '[██████████] Active',
+            summary: flatSummary
+          },
+          'https://images.unsplash.com/photo-1698246479704-aebc2fdfbc02?q=80&w=600&auto=format&fit=crop'
+        );
+      }
+
       console.error(`WhatsApp dispatch failed to ${cleanDestination}: ${errData}`);
       return false;
     }
@@ -245,6 +267,25 @@ async function sendWhatsAppButtons(config, toTarget, textBody, buttons = []) {
 
     if (!res || !res.ok) {
       const errTxt = res ? await res.text() : 'Network failure';
+
+      // V6.1.0: 24-Hour Customer Service Window Fallback (Meta Error 131047)
+      if (errTxt.includes('131047')) {
+        console.warn(`[Meta 24h Guard] Window closed for ${cleanDestination}. Falling back to joy_cannon_update template.`);
+        const flatSummary = `${safeBodyText} (Reply to reopen session)`.replace(/\n+/g, ' | ').slice(0, 950);
+        return await sendWhatsAppTemplate(
+          config,
+          cleanDestination,
+          'joy_cannon_update',
+          {
+            projectName: 'Titan OS Action Required',
+            milestoneTitle: 'Priority Alert',
+            progressStr: '[██████████] Active',
+            summary: flatSummary
+          },
+          'https://images.unsplash.com/photo-1698246479704-aebc2fdfbc02?q=80&w=600&auto=format&fit=crop'
+        );
+      }
+
       console.warn(`[Meta Buttons] Rejected: ${errTxt}. Falling back to text.`);
       const fallbackText = `${safeBodyText}\n\n` + buttons.map(b => `👉 ${b.title}`).join('\n');
       return await sendWhatsAppMessage(config, cleanDestination, fallbackText);
@@ -262,11 +303,19 @@ async function sendWhatsAppTemplate(config, toTarget, templateName, variablesObj
   const cleanDestination = normalizeE164Phone(toTarget);
   if (!cleanDestination) return false;
 
+  // Meta template body parameters reject newlines/tabs and consecutive spaces (>4)
+  const sanitizeParam = (val, fallback) =>
+    String(val || fallback)
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s{4,}/g, ' ')
+      .trim()
+      .slice(0, 1024);
+
   const bodyParameters = [
-    { type: 'text', text: String(variablesObj.projectName || 'Active Court').slice(0, 1024) },
-    { type: 'text', text: String(variablesObj.milestoneTitle || 'Milestone Reached').slice(0, 1024) },
-    { type: 'text', text: String(variablesObj.progressStr || '[████░░░░░░] 40%').slice(0, 1024) },
-    { type: 'text', text: String(variablesObj.summary || 'Construction progressing on schedule.').slice(0, 1024) }
+    { type: 'text', text: sanitizeParam(variablesObj.projectName, 'Active Court') },
+    { type: 'text', text: sanitizeParam(variablesObj.milestoneTitle, 'Milestone Reached') },
+    { type: 'text', text: sanitizeParam(variablesObj.progressStr, '[████░░░░░░] 40%') },
+    { type: 'text', text: sanitizeParam(variablesObj.summary, 'Construction progressing on schedule.') }
   ];
 
   const components = [];
@@ -371,10 +420,18 @@ async function fanOutToSubscribers(config, phoneNumbersData, variablesObjOrText,
 function isIndoorSite(site) {
   if (!site) return false;
   const fields = site.fields || site;
-  const env = (fields['Environment'] || fields['Site Type'] || fields['Type'] || fields['Foundation Type'] || '').toLowerCase();
-  const name = (fields['Site Name'] || '').toLowerCase();
-  const notes = (fields['Last Note'] || '').toLowerCase();
-  return env.includes('indoor') || name.includes('indoor') || notes.includes('indoor');
+  const candidates = [
+    fields['Indoor / Outdoor'],
+    fields['Indoor/Outdoor'],
+    fields['Environment'],
+    fields['Court Classification'],
+    fields['Site Type'],
+    fields['Type'],
+    fields['Foundation Type'],
+    fields['Site Name'],
+    fields['Last Note']
+  ];
+  return candidates.some(v => String(v || '').toLowerCase().includes('indoor'));
 }
 
 async function geocodeAddressWithGoogle(config, addressString) {
@@ -633,12 +690,17 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
   }, site.id).catch(() => {});
 
   const indoor = isIndoorSite(site);
-  let arrivalWeather = overriddenWeatherStr;
+  let arrivalWeather = indoor ? '' : overriddenWeatherStr;
 
   if (!indoor && userLat && userLon && !arrivalWeather) {
     const weather = await getHyperlocalWeather(userLat, userLon);
     if (weather) arrivalWeather = evaluateWeatherTripwires(weather).summaryText;
   }
+
+  const isMaintenance = site.fields['Workflow Mode'] === 'MAINTENANCE';
+  const statusLine = isMaintenance
+    ? `🛠️ *Mode:* Maintenance`
+    : `📊 *Gate Status:* ${site.fields['Current Gate'] || 'Active'}`;
 
   let checkinCard = `📍 *TITAN OS | SITE CONTEXT BOUND*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -646,8 +708,8 @@ async function bindSiteContext(config, site, worker, callerIdentity, dispatchTar
     `👤 *Technician:* ${workerName}\n` +
     `📏 *Distance:* ${Math.round(distanceMeters)}m from court pin\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📊 *Gate Status:* ${site.fields['Current Gate'] || 'Active'}\n` +
-    (arrivalWeather ? `\n🌤️ *Site Telemetry:*${arrivalWeather}\n` : '') +
+    `${statusLine}\n` +
+    (arrivalWeather ? `\n🌤️ *Site Telemetry:*\n${arrivalWeather}\n` : '') +
     `\n👉 Ready for pre-work sweep, punch list updates, or supply requests.`;
 
   const prefLang = worker?.fields?.['Language'] || 'English';
@@ -706,6 +768,7 @@ Rules:
 - If the user asks about a specific site's court details, configuration, specifications, lights, turf color, steel color, glass, manufacturer, gate, status, or address (e.g., "Can I have the court details for 10 Highland Road", "Does Wise have lights?", "What turf does RCOR have?"), classify as COURT_SPECS_QUERY and extract the site name or street address into referenced_site_name.
 - If the user asks for directions, a map, pin, or address to drive to a site (e.g., "Can I have directions to Padel Park"), classify as NAVIGATION_QUERY.
 - If the user asks analytical questions across the fleet or database (e.g., "How many courts are scheduled?", "What is our capacity?"), classify as LEDGER_QUERY.
+- If the user asks to update site fields or set maintenance subscribers (e.g., "Set maintenance subscribers for Padel Park to 416-555-1234"), classify as DYNAMIC_SITE_UPDATE.
 - If the user states they are missing parts, need a delivery, require materials brought to the site, or report a fabrication/production mismatch (e.g., "We need two bags of sand", "You sent two right entrances, pick up the right and bring a left entrance", "The tabs are in the wrong place", "Missing an entrance plate", "Missing a piece of steel", or any steel, glass, light post, or turf supply/swap need), MUST classify as LOGISTICS_DISPATCH.
 - Only classify as READINESS_QUERY if they explicitly ask if a site is ready to mobilize or build.`;
 
@@ -713,12 +776,16 @@ Rules:
 
   if (isAudio && audioItems.length > 0) {
     for (const item of audioItems) {
-      contentParts.push({
-        inline_data: {
-          mime_type: item.mimeType,
-          data: item.buffer.toString('base64')
-        }
-      });
+      if (item.uri) {
+        contentParts.push({ file_data: { mime_type: item.mimeType, file_uri: item.uri } });
+      } else if (item.buffer) {
+        contentParts.push({
+          inline_data: {
+            mime_type: item.mimeType,
+            data: item.buffer.toString('base64')
+          }
+        });
+      }
     }
   }
 
@@ -784,18 +851,25 @@ CRITICAL RULES:
   "summary": "string (concise, encouraging 2-sentence field summary describing the specific milestone achieved in target language)"
 }`;
 
+// V6.1.0: Maintenance-only nomenclature ("maintenance" instead of "repair") & active staging tolerance
 const MAINTENANCE_TRIAGE_PROMPT = `You are the Lead Maintenance Inspector for Bounce Padel.
-Inspect the attached court photos/videos for turf wear, sand compaction, glass alignment, net tension, lighting outages, rust, debris, or drainage issues.
-CRITICAL RULE: VISUAL TRUTH OVERRIDES AUDIO. If the user claims the court is clean or perfect, ignore it and rely STRICTLY on visual pixel evidence. Account for shared site environments when evaluating worksite stewardship.
+Inspect the attached court photos/videos for active maintenance work, turf seam conditioning, sand grooming, glass alignment, net tension, lighting, rust, debris, or drainage issues.
+
+CRITICAL RULES:
+1. VISUAL TRUTH OVERRIDES AUDIO: If the user claims the court is clean or ready, ignore it and rely STRICTLY on visual pixel evidence.
+2. NOMENCLATURE: Always use "maintenance" (never use the word "repair") in your summary and observations.
+3. ACTIVE MAINTENANCE STAGING: If active maintenance is visibly underway (e.g., turf seam tape, adhesive, 2x4 timber weights, sandbags, vacuums, blowers, or tools actively staged on the court), recognize this as normal "Maintenance in Progress"—do NOT scold the crew for forgotten debris. However, set "cleanliness_passed": false until the work is finished and all tools, cords, weights, and excess sand are physically cleared so the court is ready for play.
+4. CLIENT KEYFRAME SELECTION: If a video is attached, identify "best_frame_timestamp_sec" (integer seconds) representing the clearest, best-lit view of the court suitable for a client maintenance update photo.
+
 Return STRICTLY JSON:
 {
   "highest_gate": 10,
   "verified_gates": [10],
   "cleanliness_passed": boolean,
   "best_frame_timestamp_sec": number (seconds into video for best still photo, default 1),
-  "blockers_detected": ["string (any maintenance defects or left-behind tools found)"],
-  "field_observations": "string (concise asset health notes)",
-  "summary": "string (concise 2-sentence maintenance report in target language)"
+  "blockers_detected": ["string (concise items still in progress or pending final cleanup before play)"],
+  "field_observations": "string (concise asset health and maintenance notes)",
+  "summary": "string (concise, professional 2-sentence maintenance update in target language using 'maintenance' rather than 'repair')"
 }`;
 
 async function translateSummaryToEnglishForClient(config, text) {
@@ -805,7 +879,7 @@ async function translateSummaryToEnglishForClient(config, text) {
   if (!looksSpanish) return raw;
 
   try {
-    const prompt = `Translate the following padel court construction update into clear, warm, professional English for an executive client milestone notification. Preserve technical accuracy and output ONLY the translated English text:\n\n${raw}`;
+    const prompt = `Translate the following padel court update into clear, warm, professional English for an executive client notification. Preserve technical accuracy and output ONLY the translated English text:\n\n${raw}`;
     const res = await fetchWithExponentialBackoff(`${config.gemini.endpoint}?key=${config.gemini.apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -826,7 +900,7 @@ async function translateSummaryToEnglishForClient(config, text) {
 }
 
 async function uploadMediaToSupabaseVault(config, item) {
-  if (!config?.supabase?.url || !config?.supabase?.serviceRoleKey) return null;
+  if (!config?.supabase?.url || !config?.supabase?.serviceRoleKey || !item?.buffer) return null;
   try {
     const now = new Date();
     const yyyy = now.getUTCFullYear();
@@ -968,18 +1042,26 @@ async function logToDarkMatterVault(config, siteName, workerName, category, rawT
   }
 }
 
+function buildGeminiMediaPart(item) {
+  if (item?.uri) {
+    return { file_data: { mime_type: item.mimeType, file_uri: item.uri } };
+  }
+  if (item?.buffer) {
+    return { inline_data: { mime_type: item.mimeType, data: item.buffer.toString('base64') } };
+  }
+  return null;
+}
+
 async function inspectBlindVisualGroundTruth(config, mediaItem, batchText, dispatchTarget, targetedSiteOverride, site, airtableWriteWithAutoDrop) {
+  const mediaPart = buildGeminiMediaPart(mediaItem);
+  if (!mediaPart) return { is_padel_court: true, detected_scene: 'Bypassed on missing media part' };
+
   const payload = {
     system_instruction: { parts: [{ text: `Classify the physical environment. Is this a padel court? (CRITICAL: A bare concrete foundation slab, earthworks, or pre-existing tennis court being prepped for construction MUST be classified as a valid padel court environment for Gate 1). Output JSON {"is_padel_court": boolean, "detected_scene": string}` }] },
     contents: [
       {
         parts: [
-          {
-            inline_data: {
-              mime_type: mediaItem.mimeType,
-              data: mediaItem.buffer.toString('base64')
-            }
-          },
+          mediaPart,
           { text: "Examine ONLY visual frames. Disregard any audio. Is this physically inside or at the apron of a padel court? Remember, a plain concrete foundation is a valid padel court environment for Gate 1." }
         ]
       }
@@ -1054,12 +1136,8 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
 
   for (const item of items) {
     if (item.type === 'video' || item.type === 'image') {
-      contentParts.push({
-        inline_data: {
-          mime_type: item.mimeType,
-          data: item.buffer.toString('base64')
-        }
-      });
+      const part = buildGeminiMediaPart(item);
+      if (part) contentParts.push(part);
     }
   }
 
@@ -1096,6 +1174,34 @@ async function evaluateCourtMediaBatch(config, items, cumulativeContext, mainten
   }
 }
 
+// Helper: Extract requester phone from a Maintenance ticket via Contacts match (without altering permanent site subscribers)
+async function resolveTicketRequesterPhone(config, ticketRecord) {
+  if (!ticketRecord || !ticketRecord.fields) return null;
+  const notes = String(ticketRecord.fields['Notes'] || '');
+
+  const directPhoneMatch = notes.match(/\b(\+?\d{10,15})\b/);
+  if (directPhoneMatch) {
+    const normalized = normalizeE164Phone(directPhoneMatch[1]);
+    if (normalized.length >= 10 && normalized.length <= 15) return normalized;
+  }
+
+  const emailMatch = notes.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
+  if (emailMatch && typeof config.getCachedContacts === 'function') {
+    try {
+      const contacts = await config.getCachedContacts();
+      const targetEmail = emailMatch[1].toLowerCase().trim();
+      const contact = contacts.find(c => String(c.fields?.['Email'] || '').toLowerCase().trim() === targetEmail);
+      if (contact) {
+        const rawPhone = contact.fields['WhatsApp Number'] || contact.fields['Phone'] || contact.fields['Mobile'] || contact.fields['Phone E164'];
+        const normalized = normalizeE164Phone(rawPhone);
+        if (normalized.length >= 10 && normalized.length <= 15) return normalized;
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
 async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop, oracleFileURIs) {
   const { items, site, worker, dispatchTarget, callerIdentity } = currentBatch;
   const workerName = worker?.fields?.['Full Name'] || callerIdentity?.name || 'Field Tech';
@@ -1128,7 +1234,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       }
     }
 
-    // Stage 2: Parallel Supabase Vault Archival + 10-Gate Forensic Evaluation
+    // Stage 2: Parallel Supabase Vault Archival + Forensic Evaluation
     const uploadPromises = items.map(async (item) => {
       const signedUrl = await uploadMediaToSupabaseVault(config, item);
       return { type: item.type, mimeType: item.mimeType, signedUrl, item };
@@ -1154,7 +1260,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
     let joyCannonStillImageUrl = validAssets.find(a => a.type === 'image')?.signedUrl || null;
     if (!joyCannonStillImageUrl) {
       const videoEntry = uploadedAssets.find(a => a.type === 'video');
-      if (videoEntry) {
+      if (videoEntry && videoEntry.item?.buffer) {
         const bestSec = Number(audit.best_frame_timestamp_sec) || 1.5;
         joyCannonStillImageUrl = await spliceKeyFrameFromVideo(config, videoEntry.item, bestSec);
         if (joyCannonStillImageUrl) {
@@ -1225,7 +1331,7 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       : (verifiedGates.length > 0 ? (fallbackMilestoneMap[highestGate] || `Milestone ${highestGate}`) : 'Pre-Flight Delivery Audit');
 
     const gateLabel = workflowMode === 'MAINTENANCE'
-      ? 'Maintenance Sweep'
+      ? (audit.cleanliness_passed ? 'Maintenance Complete' : 'Maintenance in Progress')
       : (canonicalProgress ? canonicalProgress.currentGateLabel : `${latestMilestoneTitle} (${verifiedGates.length}/11 Verified)`);
 
     // Stage 3: Ledger Mutation (Sites & Reports 2) + Time-Slice Stamps + Auto-Transition to Maintenance Mode
@@ -1247,19 +1353,60 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       if (!site.fields['Install Started'] && verifiedGates.some(g => g >= 1)) {
         sitePatch['Install Started'] = new Date().toISOString();
       }
-    }
-
-    if (isInstallationComplete) {
-      sitePatch['Current Gate'] = gateLabel;
-      sitePatch['Workflow Mode'] = 'MAINTENANCE';
-      if (!site.fields['Install Completed']) {
-        sitePatch['Install Completed'] = new Date().toISOString();
+      if (isInstallationComplete) {
+        sitePatch['Current Gate'] = gateLabel;
+        sitePatch['Workflow Mode'] = 'MAINTENANCE';
+        if (!site.fields['Install Completed']) {
+          sitePatch['Install Completed'] = new Date().toISOString();
+        }
+      } else if (verifiedGates.length > 0) {
+        sitePatch['Current Gate'] = gateLabel;
       }
-    } else if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
-      sitePatch['Current Gate'] = gateLabel;
     }
 
     await airtableWriteWithAutoDrop('Sites', sitePatch, site.id);
+
+    // Stage 3B: V6.1.0 Maintenance Ticket Sync & Two-Transition Joy Cannon Trigger Detection
+    let maintenanceTransition = null; // 'STARTED' | 'COMPLETED' | null
+    let matchedMaintenanceTicket = null;
+
+    if (workflowMode === 'MAINTENANCE' && typeof config.getCachedOpenAssignments === 'function') {
+      try {
+        const openTickets = await config.getCachedOpenAssignments(true);
+        matchedMaintenanceTicket = openTickets.find(t => {
+          const typeStr = String(t.fields?.['Assignment Type'] || '').toLowerCase();
+          const catStr = String(t.fields?.['Task Category'] || '').toLowerCase();
+          const isServiceOrMaint = (typeStr === 'service' || typeStr === 'maintenance' || catStr === 'maintenance') && catStr !== 'logistics';
+          const sIds = t.fields?.['Sites'] || t.fields?.['Site'] || [];
+          return isServiceOrMaint && Array.isArray(sIds) && sIds.includes(site.id);
+        });
+
+        const nowIso = new Date().toISOString();
+        if (matchedMaintenanceTicket) {
+          const currentTicketStatus = String(matchedMaintenanceTicket.fields?.['Status'] || 'Open').trim();
+          const existingNotes = String(matchedMaintenanceTicket.fields?.['Notes'] || '');
+          const ticketPatch = {
+            'Notes': existingNotes ? `${existingNotes}\n\n${auditNote}` : auditNote
+          };
+          if (worker?.id) ticketPatch['Worker'] = [worker.id];
+
+          if (currentTicketStatus === 'Open' && audit.cleanliness_passed === false) {
+            ticketPatch['Status'] = 'In Progress';
+            if (!matchedMaintenanceTicket.fields?.['Start Time']) ticketPatch['Start Time'] = nowIso;
+            maintenanceTransition = 'STARTED';
+          } else if ((currentTicketStatus === 'In Progress' || currentTicketStatus === 'Open') && audit.cleanliness_passed === true) {
+            ticketPatch['Status'] = 'Complete';
+            if (!matchedMaintenanceTicket.fields?.['Start Time']) ticketPatch['Start Time'] = nowIso;
+            ticketPatch['End Time'] = nowIso;
+            maintenanceTransition = 'COMPLETED';
+          }
+
+          await airtableWriteWithAutoDrop('Daily Assignments', ticketPatch, matchedMaintenanceTicket.id);
+        }
+      } catch (ticketErr) {
+        console.warn('[Maintenance Ticket Sync Warning]:', ticketErr.message);
+      }
+    }
 
     const reportPatch = {
       'Workflow Mode': isInstallationComplete ? 'MAINTENANCE' : workflowMode,
@@ -1292,44 +1439,97 @@ async function processMediaBatch(config, currentBatch, airtableWriteWithAutoDrop
       }
     }
 
-    // Stage 5: Asymmetric Stakeholder Output (Field Punch Card + English Joy Cannon with Spliced Image)
+    // Stage 5: Asymmetric Stakeholder Output (Field Card + English Joy Cannon with Spliced Image)
     const blockersBlock = (audit.blockers_detected && audit.blockers_detected.length > 0)
       ? `\n⚠️ *Pending Adjustments:*\n${audit.blockers_detected.map(b => `• ${b}`).join('\n')}\n`
       : '';
     const cleanWarning = (audit.cleanliness_passed === false)
-      ? `\n🧹 *Worksite Stewardship Held:* Debris/tools visible on footprint. Manage site footprint to seal final cleanliness.\n`
+      ? `\n🧹 *Final Cleanup Pending:* Tools, cords, or materials still visible on court.\n`
       : '';
     const completionNotice = isInstallationComplete
       ? `\n🔄 *Lifecycle Transition:* Court automatically flipped to *Maintenance Mode*.\n`
       : '';
 
-    const punchCard = `🎾 *TITAN OS | PROGRESS CONFIRMED*\n` +
-      `──────────────────────────────\n` +
-      `🏟️ *Court:* ${siteName}\n` +
-      `👤 *Tech:* ${workerName}\n` +
-      `🏁 *Milestone:* ${latestMilestoneTitle}\n` +
-      `📊 *Build Progress:* ${progressBar}\n` +
-      `──────────────────────────────\n` +
-      `${audit.summary || 'Progress logged to digital twin.'}` +
-      `${blockersBlock}${cleanWarning}${completionNotice}`;
+    let punchCard = '';
+    if (workflowMode === 'MAINTENANCE') {
+      const maintStatus = audit.cleanliness_passed ? '🟢 Maintenance Complete' : '🔧 Maintenance in Progress';
+      const maintBar = audit.cleanliness_passed ? '[██████████] Ready for Play' : '[█████░░░░░] Active';
+
+      punchCard = `🛠️ *TITAN OS | MAINTENANCE UPDATE*\n` +
+        `──────────────────────────────\n` +
+        `🏟️ *Court:* ${siteName}\n` +
+        `👤 *Tech:* ${workerName}\n` +
+        `🔧 *Status:* ${maintStatus}\n` +
+        `📊 *Readiness:* ${maintBar}\n` +
+        `──────────────────────────────\n` +
+        `${audit.summary || 'Maintenance sweep logged to digital twin.'}` +
+        `${blockersBlock}${cleanWarning}`;
+    } else {
+      punchCard = `🎾 *TITAN OS | PROGRESS CONFIRMED*\n` +
+        `──────────────────────────────\n` +
+        `🏟️ *Court:* ${siteName}\n` +
+        `👤 *Tech:* ${workerName}\n` +
+        `🏁 *Milestone:* ${latestMilestoneTitle}\n` +
+        `📊 *Build Progress:* ${progressBar}\n` +
+        `──────────────────────────────\n` +
+        `${audit.summary || 'Progress logged to digital twin.'}` +
+        `${blockersBlock}${cleanWarning}${completionNotice}`;
+    }
 
     await sendWhatsAppMessage(config, dispatchTarget, punchCard);
 
-    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST WITH NATIVE API TEMPLATE (ALWAYS ENGLISH + JPEG HEADER)
-    const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
-    if (subscriberPhones && workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
-      const englishJoySummary = await translateSummaryToEnglishForClient(
-        config,
-        audit.summary || 'Construction progressing on schedule.'
-      );
-      const templateVars = {
-        projectName: siteName,
-        milestoneTitle: latestMilestoneTitle,
-        progressStr: progressBar,
-        summary: englishJoySummary
-      };
+    // FORMAT 2: EXTERNAL JOY CANNON BROADCAST (CONSTRUCTION MILESTONES)
+    if (workflowMode === 'INSTALLATION' && verifiedGates.length > 0) {
+      const subscriberPhones = site.fields['Subscribed Phones'] || site.fields['Subscriber Phones'] || site.fields['Client Phone'];
+      if (subscriberPhones) {
+        const englishJoySummary = await translateSummaryToEnglishForClient(
+          config,
+          audit.summary || 'Construction progressing on schedule.'
+        );
+        const templateVars = {
+          projectName: siteName,
+          milestoneTitle: latestMilestoneTitle,
+          progressStr: progressBar,
+          summary: englishJoySummary
+        };
 
-      await fanOutToSubscribers(config, subscriberPhones, templateVars, joyCannonStillImageUrl);
+        await fanOutToSubscribers(config, subscriberPhones, templateVars, joyCannonStillImageUrl);
+      }
+    }
+
+    // FORMAT 3: EXTERNAL JOY CANNON BROADCAST (MAINTENANCE START / COMPLETE WATERFALL — OPTION A)
+    if (workflowMode === 'MAINTENANCE' && maintenanceTransition) {
+      const baseSubscribers =
+        site.fields['Maintenance Subscribers'] ||
+        site.fields['Subscribed Phones'] ||
+        site.fields['Subscriber Phones'] ||
+        site.fields['Client Phone'] ||
+        '';
+
+      const targetList = Array.isArray(baseSubscribers)
+        ? [...baseSubscribers]
+        : String(baseSubscribers).split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+
+      const requesterPhone = await resolveTicketRequesterPhone(config, matchedMaintenanceTicket);
+      if (requesterPhone) targetList.push(requesterPhone);
+
+      if (targetList.length > 0) {
+        const englishJoySummary = await translateSummaryToEnglishForClient(
+          config,
+          audit.summary || (maintenanceTransition === 'COMPLETED'
+            ? 'Scheduled court maintenance is complete and the court is ready for play.'
+            : 'Our team is on-site and court maintenance is now in progress.')
+        );
+
+        const templateVars = {
+          projectName: siteName,
+          milestoneTitle: maintenanceTransition === 'COMPLETED' ? 'Maintenance Complete' : 'Maintenance in Progress',
+          progressStr: maintenanceTransition === 'COMPLETED' ? '[██████████] Ready for Play' : '[█████░░░░░] Active',
+          summary: englishJoySummary
+        };
+
+        await fanOutToSubscribers(config, targetList, templateVars, joyCannonStillImageUrl);
+      }
     }
   } catch (err) {
     console.error('[processMediaBatch Runtime Error]:', err.message);
@@ -1384,7 +1584,7 @@ ${bodyText}
 
 Categories:
 - COMMERCIAL_LEAD: New padel court inquiry, pricing request, RFP, club build, or turf/canopy quote.
-- MAINTENANCE_REQUEST: Repair, glass replacement, turf grooming, lighting issue, or warranty service.
+- MAINTENANCE_REQUEST: Court maintenance, glass replacement, turf grooming, lighting issue, or warranty service.
 - PARTNER_INTRO: Warm introduction, general contractor, architect, or strategic partner outreach.
 - ACTIVE_PROJECT: Direct client, supplier, or logistics coordination on an active build.
 - NOISE_SPAM_RECEIPT: Newsletters, automated billing/SaaS receipts, cold marketing/SEO spam, calendar auto-replies, or internal system notifications.
@@ -1456,33 +1656,30 @@ Return STRICTLY JSON:
       await sendWhatsAppButtons(config, phone, formattedDispatch, buttons);
     }
 
-    // Autonomous Daily Assignment Creation for Commercial Leads
-    if (triage.category === 'COMMERCIAL_LEAD') {
+    // Autonomous Daily Assignment Creation for Commercial Leads & Maintenance Requests (Single-Pass)
+    if (triage.category === 'COMMERCIAL_LEAD' || triage.category === 'MAINTENANCE_REQUEST') {
       try {
-        const airtableEndpoint = config.airtable?.endpoint || 'https://api.airtable.com/v0';
-        const airtableBaseId = config.airtable?.baseId;
-        const airtableApiKey = config.airtable?.apiKey;
+        const assignmentFields = {
+          'Assignment Type': triage.category === 'MAINTENANCE_REQUEST' ? 'Service' : 'Sales',
+          'Status': 'Open',
+          'Priority': 'High',
+          'Notes': `[${triage.category} - EMAIL] Follow up required with ${senderDisplay}.\n\nSubject: ${emailPayload.subject}\n\n${bodyText.slice(0, 500)}...`
+        };
 
-        if (airtableApiKey && airtableBaseId) {
-          const assignmentPayload = {
-            fields: {
-              'Assignment Type': 'Sales',
-              'Status': 'Open',
-              'Priority': 'High',
-              'Notes': `[COMMERCIAL LEAD - EMAIL] Follow up required with ${senderDisplay}.\n\nSubject: ${emailPayload.subject}\n\n${bodyText.slice(0, 500)}...`
-            }
-          };
-
-          const writeUrl = `${airtableEndpoint}/${airtableBaseId}/Daily%20Assignments`;
+        if (typeof config.airtableWriteWithAutoDrop === 'function') {
+          await config.airtableWriteWithAutoDrop('Daily Assignments', assignmentFields);
+          console.log(`[Email Handler] Autonomous ${assignmentFields['Assignment Type']} Assignment created for ${senderEmails[0]}.`);
+        } else if (config.airtable?.apiKey && config.airtable?.baseId) {
+          const writeUrl = `${config.airtable.endpoint || 'https://api.airtable.com/v0'}/${config.airtable.baseId}/Daily%20Assignments`;
           await fetch(writeUrl, {
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${airtableApiKey}`,
+              'Authorization': `Bearer ${config.airtable.apiKey}`,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify(assignmentPayload)
+            body: JSON.stringify({ fields: assignmentFields })
           });
-          console.log(`[Email Handler] Autonomous Sales Assignment created for ${senderEmails[0]}.`);
+          console.log(`[Email Handler] Autonomous ${assignmentFields['Assignment Type']} Assignment created for ${senderEmails[0]}.`);
         }
       } catch (assignErr) {
         console.error('[Email Handler] Failed to create assignment:', assignErr.message);
@@ -1503,7 +1700,10 @@ function normalizeSitePayload(rawPayload, cachedSiteRecord) {
   if (!rawPayload || typeof rawPayload !== 'object') return {};
 
   const normalized = {};
-  const knownKeys = Object.keys(cachedSiteRecord.fields || {});
+  const knownKeys = [...new Set([
+    ...Object.keys(cachedSiteRecord.fields || {}),
+    'Maintenance Subscribers'
+  ])];
 
   for (let [key, value] of Object.entries(rawPayload)) {
     let actualKey = knownKeys.find(k => k.toLowerCase() === key.toLowerCase());
@@ -1525,6 +1725,8 @@ function normalizeSitePayload(rawPayload, cachedSiteRecord) {
       normalized[actualKey] = value ? 'Yes' : 'No';
     } else if (typeof value === 'string' && (value.toLowerCase() === 'true' || value.toLowerCase() === 'false')) {
       normalized[actualKey] = value.toLowerCase() === 'true' ? 'Yes' : 'No';
+    } else if (actualKey === 'Maintenance Subscribers') {
+      normalized[actualKey] = String(value || '').trim();
     } else if (typeof value === 'string' && value.length < 50) {
       normalized[actualKey] = value.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
     } else {
