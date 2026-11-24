@@ -1,19 +1,19 @@
 /**
-- TITAN OS V6.0.45 — HEADLESS ERP ORCHESTRATOR
+- TITAN OS V6.1.0 — HEADLESS ERP ORCHESTRATOR
 - Module: server.js
 - Purpose: Single-Threaded Atomic Boot, Native Meta Webhooks, Credential
 -          Sanitization, Rate-Limited Airtable Pacer & Linked-Record Resolver,
 -          Canonical 9-Gate Named Milestones (with Passive Gate 5 Silicone &
--          Conditional Gate 6 Lights Y/N Logic), Schema-Exact Reports 2 &
--          Sites Sync (Verified Image, Client Milestone Title, Completion %,
--          Joy Cannon Update), Bilingual Forensic Pipeline (Native Worker Card
--          + English Joy Cannon & Ledger Notes), Retroactive "Be Water" Media
--          Binding Buffer, QBO Finance Copilot, Atomic Message Deduplication,
--          Voice Estimates, Full-Ledger Analytics, Court Configuration Inspector,
--          IoT Telemetry, RBAC Bouncer, Zero-UI Site Provisioning, Virtual
--          Readiness, Executive Drafting Mode + Native Gmail Dispatch, and
--          Swarm Logistics Push Dispatch (Cross-Restart Pin Recovery, Raw GPS
--          Fallback, Two-Way Requester Alerts, & Time-Slice Stamping).
+-          Conditional Gate 6 Lights Y/N Logic), Maintenance Service Mode Guard
+-          & Two-Transition Joy Cannon Support, Indoor Site Weather Guard,
+-          Schema-Exact Reports 2 & Sites Sync, Bilingual Forensic Pipeline,
+-          Large Video Gemini File API Ingestion (>12MB), Retroactive "Be Water"
+-          Media Binding Buffer, QBO Finance Copilot, Atomic Message
+-          Deduplication, Voice Estimates, Full-Ledger Analytics, Court
+-          Configuration Inspector, IoT Telemetry, RBAC Bouncer, Zero-UI Site
+-          Provisioning, Virtual Readiness, Executive Drafting Mode (Screenshot
+-          Contact Lookup + 10-Min Post-Draft Send Lock), Native 2-Min Gmail
+-          REST Poller, and Field & Shop Swarm Dispatch.
  */
 
 // ====================================================================
@@ -326,9 +326,11 @@ let oracleFileURIs = [];
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const ASSIGNMENTS_CACHE_TTL_MS = 3 * 60 * 1000;
 const UNBOUND_MEDIA_TTL_MS = 10 * 60 * 1000;
+const DRAFT_LOCK_TTL_MS = 10 * 60 * 1000;
 const pendingNewSiteRequests = new Map();
 const pendingUnboundMediaBatches = new Map();
 const processedMessageIds = new Map();
+const processedGmailIds = new Set();
 const DEDUP_TTL_MS = 300 * 1000;
 const draftingSessions = new Map();
 
@@ -728,6 +730,7 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
   let resolvedTable = tableName;
   if (tableName === 'Sites') resolvedTable = airtableSchemaCache.sitesTable;
   else if (tableName === 'Reports 2') resolvedTable = airtableSchemaCache.reportsTable;
+  else if (tableName === 'Daily Assignments') resolvedTable = airtableSchemaCache.assignmentsTable;
 
   const url = recordId
     ? `${CONFIG.airtable.endpoint}/${CONFIG.airtable.baseId}/${encodeURIComponent(resolvedTable)}/${recordId}`
@@ -778,9 +781,86 @@ async function airtableWriteWithAutoDrop(tableName, payload, recordId = null, re
   return { success: false, writtenFields: {}, record: null };
 }
 
+// Expose core helpers on CONFIG for whatsapp.js without circular require('./server')
+CONFIG.getCachedOpenAssignments = getCachedOpenAssignments;
+CONFIG.getCachedContacts = getCachedContacts;
+CONFIG.airtableWriteWithAutoDrop = airtableWriteWithAutoDrop;
+
 // ====================================================================
-// 2B. BILINGUAL FORENSIC PAYLOAD BUILDER & LEDGER NORMALIZER
+// 2B. BILINGUAL FORENSIC PAYLOAD BUILDER, LARGE VIDEO UPLOADER & LEDGER NORMALIZER
 // ====================================================================
+
+async function uploadMediaBufferToGeminiFileApi(config, buffer, mimeType, displayName = 'titan_media') {
+  if (!config?.gemini?.apiKey || !buffer || buffer.length === 0) return null;
+  try {
+    const startRes = await fetchWithExponentialBackoff(
+      `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${config.gemini.apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Goog-Upload-Protocol': 'resumable',
+          'X-Goog-Upload-Command': 'start',
+          'X-Goog-Upload-Header-Content-Length': String(buffer.length),
+          'X-Goog-Upload-Header-Content-Type': mimeType,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ file: { display_name: displayName } })
+      },
+      2
+    );
+
+    if (!startRes || !startRes.ok) {
+      console.warn(`[Gemini File API] Start upload failed: ${startRes ? startRes.status : 'NET'}`);
+      return null;
+    }
+
+    const uploadUrl = startRes.headers.get('x-goog-upload-url');
+    if (!uploadUrl) return null;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Length': String(buffer.length),
+        'X-Goog-Upload-Offset': '0',
+        'X-Goog-Upload-Command': 'upload, finalize'
+      },
+      body: buffer
+    });
+
+    if (!uploadRes || !uploadRes.ok) {
+      console.warn(`[Gemini File API] Finalize upload failed: ${uploadRes ? uploadRes.status : 'NET'}`);
+      return null;
+    }
+
+    const fileData = await uploadRes.json();
+    const fileObj = fileData?.file || fileData;
+    const fileUri = fileObj?.uri;
+    const fileName = fileObj?.name;
+
+    if (!fileUri) return null;
+
+    // Poll until video processing finishes (state === 'ACTIVE')
+    if (fileName && fileObj?.state && fileObj.state !== 'ACTIVE') {
+      for (let i = 0; i < 15; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const pollRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${config.gemini.apiKey}`);
+        if (pollRes && pollRes.ok) {
+          const pollData = await pollRes.json();
+          if (pollData.state === 'ACTIVE') return fileUri;
+          if (pollData.state === 'FAILED') {
+            console.warn(`[Gemini File API] Video processing failed for ${fileName}`);
+            return null;
+          }
+        }
+      }
+    }
+
+    return fileUri;
+  } catch (err) {
+    console.warn('[Gemini File API] Upload exception:', err.message);
+    return null;
+  }
+}
 
 function looksNonEnglish(text) {
   const s = String(text || '').trim();
@@ -843,6 +923,7 @@ function buildForensicLedgerPayloads({
   signedMediaUrls,
   discoveredSchema
 }) {
+  const isMaintenance = siteRecord?.fields?.['Workflow Mode'] === 'MAINTENANCE';
   const progress = computeSiteGateProgress(siteRecord, verifiedGates);
   const namedEnglishSummary = replaceGateNumbersWithNames(englishLedgerSummary, 'en', siteRecord);
   const namedWorkerSummary = replaceGateNumbersWithNames(workerNativeSummary || englishLedgerSummary, 'es', siteRecord);
@@ -853,13 +934,15 @@ function buildForensicLedgerPayloads({
   const sitesTypes = schemaObj.sitesFieldTypes || schemaObj?.Sites?.columnTypes || {};
 
   const siteFields = {
-    'Current Gate': progress.currentGateLabel,
-    'Last Note': `[FORENSIC SWEEP] ${workerName}: ${progress.currentGateLabel}. ${namedEnglishSummary}`
+    'Last Note': `[FORENSIC SWEEP] ${workerName}: ${isMaintenance ? 'Maintenance Sweep' : progress.currentGateLabel}. ${namedEnglishSummary}`
   };
 
-  if (sitesColumns.length === 0 || sitesColumns.includes('Completion %')) {
-    const colType = sitesTypes['Completion %'];
-    siteFields['Completion %'] = colType === 'number' ? progress.percentInt : Number(progress.ratio.toFixed(2));
+  if (!isMaintenance) {
+    siteFields['Current Gate'] = progress.currentGateLabel;
+    if (sitesColumns.length === 0 || sitesColumns.includes('Completion %')) {
+      const colType = sitesTypes['Completion %'];
+      siteFields['Completion %'] = colType === 'number' ? progress.percentInt : Number(progress.ratio.toFixed(2));
+    }
   }
 
   if (primaryVideoUrl && (sitesColumns.length === 0 || sitesColumns.includes('Latest Video Link'))) {
@@ -868,6 +951,7 @@ function buildForensicLedgerPayloads({
   }
 
   if (
+    !isMaintenance &&
     progress.verifiedActiveCount >= 1 &&
     siteRecord?.fields?.['Workflow Mode'] === 'INSTALLATION' &&
     siteRecord?.fields?.['Site Status'] === 'PLANNING'
@@ -885,10 +969,10 @@ function buildForensicLedgerPayloads({
   if (reportsColumns.includes('Worker Summary')) {
     reportFields['Worker Summary'] = namedEnglishSummary;
   }
-  if (reportsColumns.includes('Active Gate')) {
+  if (!isMaintenance && reportsColumns.includes('Active Gate')) {
     reportFields['Active Gate'] = progress.currentGateLabel;
   }
-  if (reportsColumns.includes('Client Milestone Title')) {
+  if (!isMaintenance && reportsColumns.includes('Client Milestone Title')) {
     reportFields['Client Milestone Title'] = progress.milestoneTitleEn;
   }
   if (reportsColumns.includes('Worker')) {
@@ -913,21 +997,24 @@ function buildForensicLedgerPayloads({
     }
   }
 
-  const filledBlocks = Math.round(progress.ratio * 10);
-  const progressBar = `[${'█'.repeat(filledBlocks)}${'░'.repeat(10 - filledBlocks)}] ${progress.percentInt}%`;
+  let joyCannonMessage = '';
+  if (!isMaintenance) {
+    const filledBlocks = Math.round(progress.ratio * 10);
+    const progressBar = `[${'█'.repeat(filledBlocks)}${'░'.repeat(10 - filledBlocks)}] ${progress.percentInt}%`;
 
-  const joyCannonMessage = [
-    `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`,
-    `━━━━━━━━━━━━━━━━━━━━`,
-    `🏟️ *Project:* ${siteRecord ? getSiteDisplayName(siteRecord) : 'Active Site'}`,
-    `🏁 *Milestone:* ${progress.milestoneTitleEn}`,
-    `📊 *Progress:* ${progressBar}`,
-    `━━━━━━━━━━━━━━━━━━━━`,
-    namedEnglishSummary,
-    primaryVideoUrl ? `\n📸 *Latest Site Capture:*\n${primaryVideoUrl}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n');
+    joyCannonMessage = [
+      `🎾 *BOUNCE PADEL | BUILD MILESTONE UPDATE*`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `🏟️ *Project:* ${siteRecord ? getSiteDisplayName(siteRecord) : 'Active Site'}`,
+      `🏁 *Milestone:* ${progress.milestoneTitleEn}`,
+      `📊 *Progress:* ${progressBar}`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      namedEnglishSummary,
+      primaryVideoUrl ? `\n📸 *Latest Site Capture:*\n${primaryVideoUrl}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
 
   return {
     siteFields,
@@ -947,47 +1034,53 @@ function createForensicAirtableWriter(baseWriteFn, batchContext) {
 
     const enrichedPayload = { ...payload };
     const targetSite = batchContext?.site || null;
+    const isMaintenance = targetSite?.fields?.['Workflow Mode'] === 'MAINTENANCE';
 
-    // 1. Enhance Sites updates with Named Milestones, Lights-Aware Completion %, English Last Note, Latest Video Link, and ACTIVE status transition
+    // 1. Enhance Sites updates (preserving Current Gate / Completion % when in Maintenance Mode)
     if (tableName === 'Sites' || tableName === airtableSchemaCache.sitesTable) {
       const gateStr = String(enrichedPayload['Current Gate'] || '');
       const singleGateMatch = gateStr.match(/Gate\s*(\d+)/i);
       const ratioMatch = gateStr.match(/(\d+)\s*\/\s*(\d+)/);
 
-      if (singleGateMatch) {
-        const gNum = parseInt(singleGateMatch[1], 10);
-        const progress = computeSiteGateProgress(targetSite, gNum);
-        const colType = airtableSchemaCache.sitesFieldTypes['Completion %'];
+      if (!isMaintenance) {
+        if (singleGateMatch) {
+          const gNum = parseInt(singleGateMatch[1], 10);
+          const progress = computeSiteGateProgress(targetSite, gNum);
+          const colType = airtableSchemaCache.sitesFieldTypes['Completion %'];
 
-        enrichedPayload['Current Gate'] = progress.currentGateLabel;
-        if (enrichedPayload['Completion %'] === undefined) {
-          enrichedPayload['Completion %'] = colType === 'number'
-            ? progress.percentInt
-            : Number(progress.ratio.toFixed(2));
-        }
+          enrichedPayload['Current Gate'] = progress.currentGateLabel;
+          if (enrichedPayload['Completion %'] === undefined) {
+            enrichedPayload['Completion %'] = colType === 'number'
+              ? progress.percentInt
+              : Number(progress.ratio.toFixed(2));
+          }
 
-        if (
-          progress.verifiedActiveCount >= 1 &&
-          targetSite?.fields?.['Workflow Mode'] === 'INSTALLATION' &&
-          targetSite?.fields?.['Site Status'] === 'PLANNING' &&
-          !enrichedPayload['Site Status']
-        ) {
-          enrichedPayload['Site Status'] = 'ACTIVE';
-        }
-      } else if (ratioMatch) {
-        const verifiedCount = parseInt(ratioMatch[1], 10);
-        const totalCount = parseInt(ratioMatch[2], 10) || 9;
-        const ratio = Math.min(1, Math.max(0, verifiedCount / totalCount));
-        const colType = airtableSchemaCache.sitesFieldTypes['Completion %'];
+          if (
+            progress.verifiedActiveCount >= 1 &&
+            targetSite?.fields?.['Workflow Mode'] === 'INSTALLATION' &&
+            targetSite?.fields?.['Site Status'] === 'PLANNING' &&
+            !enrichedPayload['Site Status']
+          ) {
+            enrichedPayload['Site Status'] = 'ACTIVE';
+          }
+        } else if (ratioMatch) {
+          const verifiedCount = parseInt(ratioMatch[1], 10);
+          const totalCount = parseInt(ratioMatch[2], 10) || 9;
+          const ratio = Math.min(1, Math.max(0, verifiedCount / totalCount));
+          const colType = airtableSchemaCache.sitesFieldTypes['Completion %'];
 
-        enrichedPayload['Current Gate'] = replaceGateNumbersWithNames(gateStr, 'en', targetSite);
-        if (enrichedPayload['Completion %'] === undefined) {
-          enrichedPayload['Completion %'] = colType === 'number'
-            ? Math.round(ratio * 100)
-            : Number(ratio.toFixed(2));
+          enrichedPayload['Current Gate'] = replaceGateNumbersWithNames(gateStr, 'en', targetSite);
+          if (enrichedPayload['Completion %'] === undefined) {
+            enrichedPayload['Completion %'] = colType === 'number'
+              ? Math.round(ratio * 100)
+              : Number(ratio.toFixed(2));
+          }
+        } else if (gateStr) {
+          enrichedPayload['Current Gate'] = replaceGateNumbersWithNames(gateStr, 'en', targetSite);
         }
-      } else if (gateStr) {
-        enrichedPayload['Current Gate'] = replaceGateNumbersWithNames(gateStr, 'en', targetSite);
+      } else {
+        delete enrichedPayload['Current Gate'];
+        delete enrichedPayload['Completion %'];
       }
 
       if (enrichedPayload['Latest Video Link']) {
@@ -1015,18 +1108,24 @@ function createForensicAirtableWriter(baseWriteFn, batchContext) {
       }
     }
 
-    // 2. Dynamically map Reports 2 fields to exact Airtable schema columns (Verified Image, Client Milestone Title, Joy Cannon Update, Worker Summary, Worker)
+    // 2. Dynamically map Reports 2 fields to exact Airtable schema columns
     if (tableName === 'Reports 2' || tableName === airtableSchemaCache.reportsTable) {
       const rCols = airtableSchemaCache.reportsFields || [];
       const rTypes = airtableSchemaCache.reportsFieldTypes || {};
 
       const rawGate = enrichedPayload['Active Gate'] || enrichedPayload['Current Gate'] || enrichedPayload['Last Note'] || '';
       const extractedMilestoneTitle = extractMilestoneTitleFromText(rawGate);
-      if (extractedMilestoneTitle && rCols.includes('Client Milestone Title') && !enrichedPayload['Client Milestone Title']) {
-        enrichedPayload['Client Milestone Title'] = extractedMilestoneTitle;
-      }
-      if (enrichedPayload['Active Gate']) {
-        enrichedPayload['Active Gate'] = replaceGateNumbersWithNames(String(enrichedPayload['Active Gate']), 'en', targetSite);
+
+      if (!isMaintenance) {
+        if (extractedMilestoneTitle && rCols.includes('Client Milestone Title') && !enrichedPayload['Client Milestone Title']) {
+          enrichedPayload['Client Milestone Title'] = extractedMilestoneTitle;
+        }
+        if (enrichedPayload['Active Gate']) {
+          enrichedPayload['Active Gate'] = replaceGateNumbersWithNames(String(enrichedPayload['Active Gate']), 'en', targetSite);
+        }
+      } else {
+        delete enrichedPayload['Active Gate'];
+        delete enrichedPayload['Client Milestone Title'];
       }
 
       const rawNote = enrichedPayload['Last Note'] || enrichedPayload['Joy Cannon Update'] || enrichedPayload['Worker Summary'];
@@ -1085,11 +1184,7 @@ function createForensicAirtableWriter(baseWriteFn, batchContext) {
   };
 }
 
-// Wrap outbound WhatsApp messages so:
-// 1. Joy Cannon broadcasts are always English, show named milestones, include a Milestone header,
-//    and compute progress against the site's Lights Y/N active gate count (excluding passive Gate 5).
-// 2. Installer punch cards replace raw "Gate N" labels with named milestones in the installer's
-//    native language (Spanish for Yeikol, English for English techs) and omit Lighting up if Lights=No.
+// Wrap outbound WhatsApp messages so Joy Cannon & punch cards use named milestones
 if (whatsapp && typeof whatsapp.sendWhatsAppMessage === 'function' && !whatsapp.__milestoneNamingWrapped) {
   const originalSendWhatsAppMessage = whatsapp.sendWhatsAppMessage.bind(whatsapp);
   whatsapp.sendWhatsAppMessage = async function wrappedSendWhatsAppMessage(cfg, target, messageText, ...rest) {
@@ -1274,6 +1369,7 @@ function enrichRecordFields(record, lookupMaps) {
     'Client Whatsapp Group ID',
     'Client WhatsApp Group ID',
     'Subscribed Phones',
+    'Maintenance Subscribers',
     'Summary (Subscribed Phones)',
     'Headline (Subscribed Phones)',
     'Map Cache'
@@ -1632,7 +1728,12 @@ async function fetchDadJoke() {
   return '\n\n🎁 *Morning Bonus:* Keep up the great work!';
 }
 
-async function evaluateWeatherTripwires(lat, lon) {
+async function evaluateWeatherTripwires(lat, lon, siteRecord = null) {
+  // V6.1.0 Indoor Site Weather Guard: skip outdoor holds for indoor courts
+  if (siteRecord && whatsapp && typeof whatsapp.isIndoorSite === 'function' && whatsapp.isIndoorSite(siteRecord)) {
+    return { safe: true, telemetry: null, warnings: [], indoorBypass: true };
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 4000);
   try {
@@ -1648,12 +1749,14 @@ async function evaluateWeatherTripwires(lat, lon) {
     const dewPointDelta = current.temperature_2m - current.dew_point_2m;
     if (dewPointDelta < 3.0 && current.relative_humidity_2m > 85) issues.push(`🔴 CONDENSATION HOLD: Dew point delta is ${dewPointDelta.toFixed(1)}°C (Humidity: ${current.relative_humidity_2m}%). Substrate moisture will ruin turf adhesive bond.`);
     if (current.precipitation > 0 || (current.weather_code >= 51 && current.weather_code <= 99)) issues.push(`🌧️ RAIN HOLD: Active precipitation detected. Silica sand infill and adhesive operations suspended.`);
-    return { safe: issues.length === 0, telemetry: current, warnings: issues };
+    return { safe: issues.length === 0, telemetry: current, warnings: issues, indoorBypass: false };
   } catch (error) {
     clearTimeout(timeoutId);
-    return { safe: true, warnings: ['⚠️ Meteorological telemetry offline. Proceed with visual caution.'] };
+    return { safe: true, warnings: ['⚠️ Meteorological telemetry offline. Proceed with visual caution.'], indoorBypass: false };
   }
 }
+
+CONFIG.evaluateWeatherTripwires = evaluateWeatherTripwires;
 
 async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget) {
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, `⏳ Computing virtual readiness matrix for ${siteNameStr}...`);
@@ -1692,8 +1795,10 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
   let confidenceScore = 100;
 
   let weatherStatus = `❓ Unknown Weather`;
-  if (coords && coords.lat && coords.lon) {
-    const weather = await evaluateWeatherTripwires(coords.lat, coords.lon);
+  if (whatsapp && typeof whatsapp.isIndoorSite === 'function' && whatsapp.isIndoorSite(site)) {
+    weatherStatus = `✅ Indoor Controlled Climate`;
+  } else if (coords && coords.lat && coords.lon) {
+    const weather = await evaluateWeatherTripwires(coords.lat, coords.lon, site);
     weatherStatus = weather.safe ? `✅ Weather Clear` : `❌ Active Weather Holds`;
     if (!weather.safe) confidenceScore -= 20;
   } else {
@@ -1759,7 +1864,7 @@ async function evaluateVirtualSiteReadiness(config, siteNameStr, dispatchTarget)
 }
 
 // ====================================================================
-// 3B. EXECUTIVE DRAFTING MODE & NATIVE GMAIL OAUTH2 DISPATCH
+// 3B. EXECUTIVE DRAFTING MODE & NATIVE GMAIL OAUTH2 DISPATCH + POLLER
 // ====================================================================
 
 async function sendGmailViaOAuth(config, toEmail, subject, bodyText) {
@@ -1837,10 +1942,168 @@ async function sendGmailViaOAuth(config, toEmail, subject, bodyText) {
   }
 }
 
+// Single-Pass Deduplicated Email Router (used by both native Gmail REST Poller & /api/inbound-email)
+async function handleInternalEmailRouting(emailPayload) {
+  const fromAddr = String(emailPayload.from || '').trim();
+  const subjectLine = String(emailPayload.subject || 'Inbound Commercial Inquiry').trim();
+  const cleanText = String(emailPayload.text || '').replace(/<[^>]*>?/gm, '').trim();
+
+  if (cleanText.length < 5 || cleanText === '{}') return;
+
+  const emailMatch = fromAddr.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
+  if (emailMatch && emailMatch[1]) {
+    const targetEmail = emailMatch[1].toLowerCase().trim();
+    draftingSessions.set(CONFIG.meta.targetVerifiedPhone, {
+      active: false,
+      context: `From: ${fromAddr}\nSubject: ${subjectLine}\n\n${cleanText.slice(0, 2000)}`,
+      subject: subjectLine.startsWith('Re:') ? subjectLine : `Re: ${subjectLine}`,
+      targetEmail: targetEmail,
+      salesTicketId: null
+    });
+  }
+
+  if (whatsapp && whatsapp.handleInboundEmail) {
+    await whatsapp.handleInboundEmail(CONFIG, {
+      from: fromAddr,
+      to: emailPayload.to || '',
+      cc: emailPayload.cc || '',
+      subject: subjectLine,
+      text: cleanText,
+      html: emailPayload.html || ''
+    }, getCachedContacts);
+  }
+}
+
+// V6.1.0 Native 2-Minute Gmail REST Background Poller (zero external triggers required)
+async function pollUnreadInboundEmails() {
+  const clientId = CONFIG?.gmail?.clientId || process.env.GMAIL_CLIENT_ID;
+  const clientSecret = CONFIG?.gmail?.clientSecret || process.env.GMAIL_CLIENT_SECRET;
+  const refreshToken = CONFIG?.gmail?.refreshToken || process.env.GMAIL_REFRESH_TOKEN;
+
+  if (!clientId || !clientSecret || !refreshToken) return;
+
+  try {
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token'
+      })
+    });
+
+    if (!tokenRes.ok) {
+      console.warn('[Gmail Poller] OAuth token refresh failed:', tokenRes.status);
+      return;
+    }
+    const tokenData = await tokenRes.json();
+    const accessToken = tokenData.access_token;
+    if (!accessToken) return;
+
+    const listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread%20in:inbox%20newer_than:1d&maxResults=10', {
+      headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    if (!listRes.ok) return;
+
+    const listData = await listRes.json();
+    const messages = listData.messages || [];
+    if (messages.length === 0) return;
+
+    for (const msg of messages) {
+      if (processedGmailIds.has(msg.id)) continue;
+      processedGmailIds.add(msg.id);
+      if (processedGmailIds.size > 500) {
+        const oldest = processedGmailIds.values().next().value;
+        processedGmailIds.delete(oldest);
+      }
+
+      try {
+        const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!msgRes.ok) continue;
+        const msgData = await msgRes.json();
+
+        // Mark as read to avoid reprocessing across Render restarts
+        await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}/modify`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ removeLabelIds: ['UNREAD'] })
+        }).catch(() => {});
+
+        const headers = msgData.payload?.headers || [];
+        const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+        const fromHeader = getHeader('From');
+        const toHeader = getHeader('To');
+        const ccHeader = getHeader('Cc');
+        const subjectHeader = getHeader('Subject') || 'Inbound Commercial Inquiry';
+
+        let bodyText = msgData.snippet || '';
+        const extractPlainPart = (parts) => {
+          if (!Array.isArray(parts)) return null;
+          for (const p of parts) {
+            if (p.mimeType === 'text/plain' && p.body?.data) {
+              return Buffer.from(p.body.data, 'base64').toString('utf-8');
+            }
+            if (p.parts) {
+              const nested = extractPlainPart(p.parts);
+              if (nested) return nested;
+            }
+          }
+          return null;
+        };
+
+        const extracted = extractPlainPart(msgData.payload?.parts);
+        if (extracted) {
+          bodyText = extracted;
+        } else if (msgData.payload?.body?.data) {
+          bodyText = Buffer.from(msgData.payload.body.data, 'base64').toString('utf-8');
+        }
+
+        await handleInternalEmailRouting({
+          from: fromHeader,
+          to: toHeader,
+          cc: ccHeader,
+          subject: subjectHeader,
+          text: bodyText
+        });
+      } catch (innerErr) {
+        console.warn(`[Gmail Poller] Error processing Gmail ID ${msg.id}:`, innerErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('[Gmail Poller] Exception:', err.message);
+  }
+}
+
+async function appendSalesTicketDispatchNote(salesTicketId, targetEmail) {
+  if (!salesTicketId || !targetEmail) return;
+  try {
+    const fetchRes = await fetchAllAirtableRecords(airtableSchemaCache.assignmentsTable, `RECORD_ID()='${salesTicketId}'`);
+    if (fetchRes.length > 0) {
+      const existingNotes = String(fetchRes[0].fields?.['Notes'] || '');
+      const stampLine = `[${new Date().toISOString()}] Executive reply dispatched via Gmail to ${targetEmail}.`;
+      await airtableWriteWithAutoDrop('Daily Assignments', {
+        'Notes': existingNotes ? `${existingNotes}\n\n${stampLine}` : stampLine
+      }, salesTicketId);
+    }
+  } catch (err) {
+    console.warn('[Sales Ticket Note] Could not append dispatch confirmation:', err.message);
+  }
+}
+
 async function executeDraftingMode(config, rawText, audioBuffer, mimeType, existingSession, speakerPhone, dispatchTarget) {
   await whatsapp.sendWhatsAppMessage(config, dispatchTarget, "⏳ Structuring professional executive response...");
 
   const draftContext = existingSession?.context || '';
+  const priorDraft = existingSession?.draftedBody ? `\nPrevious Draft (apply requested edits):\n"""\n${existingSession.draftedBody}\n"""` : '';
+
   const prompt = `You are a professional executive assistant for Bob Burk, Founder of Bounce Padel.
 The user has provided a raw dictation (via voice or text) intended to reply to a specific message or email.
 Your task is to transcribe and meticulously clean it up into a highly professional, decisive reply.
@@ -1852,7 +2115,7 @@ Your task is to transcribe and meticulously clean it up into a highly profession
 Original Context:
 """
 ${draftContext || 'No context provided.'}
-"""
+"""${priorDraft}
 
 ${rawText ? `Raw Text:\n"${rawText}"` : 'Process attached audio dictation.'}`;
 
@@ -1878,11 +2141,16 @@ ${rawText ? `Raw Text:\n"${rawText}"` : 'Process attached audio dictation.'}`;
     const updatedSession = {
       ...(existingSession || {}),
       active: false,
-      draftedBody: draftedText
+      draftedBody: draftedText,
+      lockedUntil: Date.now() + DRAFT_LOCK_TTL_MS
     };
     draftingSessions.set(speakerPhone, updatedSession);
 
-    const finalMsg = `✅ *Drafted Response:*\n──────────────────────────────\n${draftedText}\n──────────────────────────────\n_Ready to review or forward._`;
+    const targetHint = updatedSession.targetEmail
+      ? `_Target: ${updatedSession.targetEmail} — tap Dispatch or reply "Send email"._`
+      : `_Reply "Send to name@domain.com" to dispatch via Gmail, or send edits._`;
+
+    const finalMsg = `✅ *Drafted Response:*\n──────────────────────────────\n${draftedText}\n──────────────────────────────\n${targetHint}`;
 
     if (updatedSession.targetEmail) {
       const buttons = [{ id: `SEND_DRAFTED_EMAIL`, title: 'Dispatch via Email' }];
@@ -1989,7 +2257,6 @@ Only report categories with actual evidence. Be concise. No preamble.`;
     await whatsapp.fanOutToSubscribers(CONFIG, CONFIG.meta.targetVerifiedPhone, msg);
   }
 }
-
 // ====================================================================
 // 4. INGRESS WEBHOOK CONTROLLER (NATIVE META GRAPH API ONLY)
 // ====================================================================
@@ -2016,6 +2283,7 @@ app.get('/webhook', (req, res) => {
   }
   return res.sendStatus(403);
 });
+
 // Single-Threaded Atomic Deduplication Flow
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
@@ -2131,13 +2399,16 @@ app.post('/webhook', async (req, res) => {
           active: true,
           context: existingSession.context || null,
           subject: existingSession.subject || null,
-          targetEmail: replyTargetEmail || existingSession.targetEmail || null
+          targetEmail: replyTargetEmail || existingSession.targetEmail || null,
+          salesTicketId: existingSession.salesTicketId || null,
+          draftedBody: existingSession.draftedBody || null,
+          lockedUntil: null
         });
 
         await whatsapp.sendWhatsAppMessage(
           CONFIG,
           dispatchTarget,
-          `🎙️ *Drafting Mode Active*\nSend a voice note or text message now to draft your reply${replyTargetEmail ? ` to ${replyTargetEmail}` : ''}. I will remove filler words and format it professionally.`
+          `🎙️ *Drafting Mode Active*\nSend a voice note or text message now to draft your reply${(replyTargetEmail || existingSession.targetEmail) ? ` to ${replyTargetEmail || existingSession.targetEmail}` : ''}. I will remove filler words and format it professionally.`
         );
         return;
       }
@@ -2153,6 +2424,7 @@ app.post('/webhook', async (req, res) => {
             session.draftedBody
           );
           if (success) {
+            await appendSalesTicketDispatchNote(session.salesTicketId, session.targetEmail);
             await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Email Dispatched Successfully* to ${session.targetEmail}.`);
             draftingSessions.delete(speakerPhone);
           } else {
@@ -2235,19 +2507,19 @@ app.post('/webhook', async (req, res) => {
 
           const updateMsg = isDone
             ? `✅ *Dispatch Completed*\nTicket for *${targetSiteName}* sealed as Complete by ${callerIdentity.name}. Great job.`
-            : `✅ *Dispatch Claimed*\n${callerIdentity.name} is now assigned to the run for *${targetSiteName}*. Drive safe.${directionsStr}`;
+            : `✅ *Dispatch Claimed*\n${callerIdentity.name} is now assigned to the ticket for *${targetSiteName}*. Drive safe.${directionsStr}`;
 
           await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, updateMsg);
 
           if (requesterPhone && requesterPhone !== dispatchTarget && requesterPhone !== speakerPhone) {
             const requesterNotice = isDone
-              ? `✅ *Logistics Delivered:*\n${callerIdentity.name} has marked your request (*${requestedItemSummary}*) for *${targetSiteName}* as Complete.`
-              : `🚚 *Logistics Update:*\n${callerIdentity.name} has claimed your request (*${requestedItemSummary}*) for *${targetSiteName}* and is en route.`;
+              ? `✅ *Dispatch Completed:*\n${callerIdentity.name} has marked your request (*${requestedItemSummary}*) for *${targetSiteName}* as Complete.`
+              : `🚚 *Dispatch Update:*\n${callerIdentity.name} has claimed your request (*${requestedItemSummary}*) for *${targetSiteName}* and is en route.`;
             await whatsapp.sendWhatsAppMessage(CONFIG, requesterPhone, requesterNotice);
           }
         } catch (e) {
           console.warn('[Swarm Logistics Claim Error]', e.message);
-          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to update logistics ticket status on the ledger.`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to update dispatch ticket status on the ledger.`);
         }
         return;
       }
@@ -2281,10 +2553,10 @@ app.post('/webhook', async (req, res) => {
             }
           }
 
-          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Dispatch Claimed*\n${callerIdentity.name} is now the owner of this logistics ticket for ${targetSiteName}. Drive safe.${directionsStr}`);
+          await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Dispatch Claimed*\n${callerIdentity.name} is now the owner of this ticket for ${targetSiteName}. Drive safe.${directionsStr}`);
 
           if (requesterPhone && requesterPhone !== dispatchTarget) {
-            await whatsapp.sendWhatsAppMessage(CONFIG, requesterPhone, `🚚 *Logistics Update:*\n${callerIdentity.name} has accepted your logistics request and is en route to ${targetSiteName}.`);
+            await whatsapp.sendWhatsAppMessage(CONFIG, requesterPhone, `🚚 *Dispatch Update:*\n${callerIdentity.name} has accepted your request and is en route to ${targetSiteName}.`);
           }
         } catch (e) {
           console.warn('[Logistics Claim Error]', e);
@@ -2315,9 +2587,14 @@ app.post('/webhook', async (req, res) => {
           let weatherStr = '';
           if (userLat && userLon) {
             try {
-              const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
-              if (!weatherCheck.safe) weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}`;
-              else if (weatherCheck.telemetry) weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
+              const weatherCheck = await evaluateWeatherTripwires(userLat, userLon, selectedSite);
+              if (weatherCheck.indoorBypass) {
+                weatherStr = '';
+              } else if (!weatherCheck.safe) {
+                weatherStr = `⚠️ *WEATHER HOLD*\n${weatherCheck.warnings.join('\n')}`;
+              } else if (weatherCheck.telemetry) {
+                weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
+              }
             } catch (wError) {
               console.warn(`[Meteorology Error] Failed to evaluate weather during binding: ${wError.message}`);
             }
@@ -2533,9 +2810,11 @@ app.post('/webhook', async (req, res) => {
 
           let weatherStr = '';
           try {
-            const weatherCheck = await evaluateWeatherTripwires(userLat, userLon);
-            if (!weatherCheck.safe) {
-              weatherStr = `⚠️ *METEOROLOGICAL TRIPWIRE TRIGGERED*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`;
+            const weatherCheck = await evaluateWeatherTripwires(userLat, userLon, nearby[0].site);
+            if (weatherCheck.indoorBypass) {
+              weatherStr = '';
+            } else if (!weatherCheck.safe) {
+              weatherStr = `⚠️ *WEATHER HOLD*\n${weatherCheck.warnings.join('\n')}\n_Certain physical workflows may be suspended._`;
             } else if (weatherCheck.telemetry) {
               weatherStr = `🟢 *Conditions Clear:* Wind (${weatherCheck.telemetry.wind_gusts_10m} mph), Temp (${weatherCheck.telemetry.temperature_2m}°C).`;
             }
@@ -2606,18 +2885,54 @@ app.post('/webhook', async (req, res) => {
       await whatsapp.sendWhatsAppReaction(CONFIG, dispatchTarget, messageId, message.type === 'video' ? '🎥' : '🧾');
 
       let mediaBuffer = null;
+      let mediaUri = null;
+
       if (CONFIG.meta.accessToken && mediaId) {
-        const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-        const metaMediaData = await metaMediaRes.json().catch(() => ({}));
-        if (metaMediaRes.ok && metaMediaData?.url) {
-          const mediaBufferRes = await fetch(metaMediaData.url, { headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` } });
-          if (mediaBufferRes.ok) mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
+        try {
+          const metaMediaRes = await fetch(`${CONFIG.meta.graphApiUrl}/${mediaId}`, {
+            headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` },
+            signal: controller.signal
+          });
+          const metaMediaData = await metaMediaRes.json().catch(() => ({}));
+          if (metaMediaRes.ok && metaMediaData?.url) {
+            const mediaBufferRes = await fetch(metaMediaData.url, {
+              headers: { 'Authorization': `Bearer ${CONFIG.meta.accessToken}` },
+              signal: controller.signal
+            });
+            if (mediaBufferRes.ok) {
+              mediaBuffer = Buffer.from(await mediaBufferRes.arrayBuffer());
+            }
+          }
+        } catch (downloadErr) {
+          console.warn(`[Media Ingress] Download failed/timed out for ${mediaId}:`, downloadErr.message);
+          await whatsapp.sendWhatsAppMessage(
+            CONFIG,
+            dispatchTarget,
+            `⚠️ *Media Download Timed Out*\nMeta's servers took too long to transfer that ${message.type}. Please resend it or try a slightly shorter clip.`
+          );
+          return;
+        } finally {
+          clearTimeout(timeoutId);
         }
       }
 
       if (!mediaBuffer) {
         console.warn(`[Media Ingress] Failed to download media buffer for id: ${mediaId}`);
+        await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Could not retrieve that ${message.type} from WhatsApp. Please resend it.`);
         return;
+      }
+
+      // V6.1.0 Large Video Ingestion: Route >12 MB media via Gemini File API (file_uri) to avoid 20 MB inline Base64 cap
+      if (mediaBuffer.length > 12 * 1024 * 1024) {
+        console.log(`[Media Ingress] Large ${message.type} (${(mediaBuffer.length / (1024 * 1024)).toFixed(1)} MB). Uploading to Gemini File API...`);
+        mediaUri = await uploadMediaBufferToGeminiFileApi(CONFIG, mediaBuffer, mimeType, `titan_${mediaId}`);
+        if (mediaUri) {
+          console.log(`[Media Ingress] Gemini File API ready: ${mediaUri}`);
+        } else {
+          console.warn(`[Media Ingress] Gemini File API upload failed for ${mediaId}; falling back to inline buffer.`);
+        }
       }
 
       const queueKey = `${dispatchTarget}_${site?.id || 'unbound'}`;
@@ -2634,7 +2949,14 @@ app.post('/webhook', async (req, res) => {
       }
 
       const queue = whatsapp.mediaDebounceQueues.get(queueKey);
-      queue.items.push({ buffer: mediaBuffer, mimeType, messageId, type: message.type, caption: mediaObj.caption || '' });
+      queue.items.push({
+        buffer: mediaBuffer,
+        uri: mediaUri,
+        mimeType,
+        messageId,
+        type: message.type,
+        caption: mediaObj.caption || ''
+      });
 
       if (queue.timer) clearTimeout(queue.timer);
       queue.timer = setTimeout(async () => {
@@ -2654,19 +2976,17 @@ app.post('/webhook', async (req, res) => {
           if (!hasVideo && currentBatch.items.length > 0) {
             try {
               const firstImg = currentBatch.items[0];
-              const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "ocr_text": "extracted text if message screenshot, else null"}`;
+              const checkPrompt = `Determine if this image is a paper financial receipt/invoice/store bill, a screenshot of an email/text message, OR a construction/padel court scene. Return JSON strictly: {"is_receipt": boolean, "is_message_screenshot": boolean, "sender_name": "sender's name if visible on message screenshot, else null", "sender_email": "sender's email address if visible on message screenshot, else null", "subject": "email subject if visible, else null", "ocr_text": "extracted text if message screenshot, else null"}`;
+
+              const imgPart = firstImg.uri
+                ? { file_data: { mime_type: firstImg.mimeType, file_uri: firstImg.uri } }
+                : { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } };
 
               const checkRes = await fetchWithExponentialBackoff(`${CONFIG.gemini.endpoint}?key=${CONFIG.gemini.apiKey}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  contents: [{
-                    role: 'user',
-                    parts: [
-                      { text: checkPrompt },
-                      { inline_data: { mime_type: firstImg.mimeType, data: firstImg.buffer.toString('base64') } }
-                    ]
-                  }],
+                  contents: [{ role: 'user', parts: [{ text: checkPrompt }, imgPart] }],
                   generationConfig: { temperature: 0.0, responseMimeType: 'application/json' }
                 })
               }, 2);
@@ -2678,29 +2998,88 @@ app.post('/webhook', async (req, res) => {
                 if (parsedCheck.is_message_screenshot === true) isScreenshot = true;
 
                 if (isScreenshot) {
-                  draftingSessions.set(speakerPhone, { active: false, context: parsedCheck.ocr_text });
+                  const extractedOcr = String(parsedCheck.ocr_text || '');
+                  let resolvedTargetEmail = parsedCheck.sender_email ? String(parsedCheck.sender_email).trim().toLowerCase() : null;
 
-                  // Autonomously create a Daily Assignment for the Sales Lead
+                  // Extract email directly from OCR text if missed
+                  if (!resolvedTargetEmail) {
+                    const ocrEmailMatch = extractedOcr.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
+                    if (ocrEmailMatch) resolvedTargetEmail = ocrEmailMatch[1].toLowerCase();
+                  }
+
+                  // V6.1.0 Automatic Contact Lookup on Screenshot Drafts
+                  let candidateName = parsedCheck.sender_name ? String(parsedCheck.sender_name).trim() : '';
+                  if (!candidateName) {
+                    const greetingMatch = extractedOcr.match(/\b(?:From:|Hi|Hello|Dear|Hey)\s+([A-Z][a-z]{2,20})\b/);
+                    if (greetingMatch) candidateName = greetingMatch[1];
+                  }
+
+                  let matchedContactLabel = null;
+                  if (!resolvedTargetEmail && candidateName && allContacts.length > 0) {
+                    const lowerName = candidateName.toLowerCase();
+                    const matches = allContacts.filter(c => {
+                      const f = c.fields || {};
+                      const full = String(f['Full Name'] || f['Contact Name'] || f['Name'] || f['First Name'] || '').toLowerCase();
+                      const email = String(f['Email'] || '').trim();
+                      return email && (full === lowerName || full.split(/\s+/).includes(lowerName) || full.includes(lowerName));
+                    });
+
+                    if (matches.length >= 1) {
+                      resolvedTargetEmail = String(matches[0].fields['Email']).trim().toLowerCase();
+                      matchedContactLabel = matches[0].fields['Full Name'] || matches[0].fields['First Name'] || candidateName;
+                      console.log(`[Sales Engine] Auto-matched screenshot contact "${candidateName}" -> ${resolvedTargetEmail}`);
+                    }
+                  }
+
+                  // Autonomously create a Daily Assignment for the Sales Lead and retain ticket ID
+                  let salesTicketId = null;
                   try {
                     const assignmentPayload = {
                       'Assignment Type': 'Sales',
                       'Status': 'Open',
                       'Priority': 'High',
-                      'Notes': `[COMMERCIAL LEAD - SCREENSHOT INGESTION] Follow up required.\n\nExtracted Text:\n${String(parsedCheck.ocr_text || '').slice(0, 500)}...`
+                      'Notes': `[COMMERCIAL LEAD - SCREENSHOT INGESTION] Follow up required.${resolvedTargetEmail ? `\nMatched Contact: ${matchedContactLabel || candidateName || ''} (${resolvedTargetEmail})` : ''}\n\nExtracted Text:\n${extractedOcr.slice(0, 500)}...`
                     };
 
                     if (worker && worker.id) {
                       assignmentPayload['Worker'] = [worker.id];
                     }
 
-                    await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
-                    console.log(`[Sales Engine] Autonomous Sales Assignment created from screenshot ingestion by ${speakerPhone}.`);
+                    const createdAssign = await airtableWriteWithAutoDrop('Daily Assignments', assignmentPayload);
+                    salesTicketId = createdAssign?.record?.id || null;
+                    console.log(`[Sales Engine] Autonomous Sales Assignment created (${salesTicketId || 'untracked'}) from screenshot ingestion by ${speakerPhone}.`);
                   } catch (assignErr) {
                     console.error('[Sales Engine] Failed to create Daily Assignment from screenshot:', assignErr.message);
                   }
 
-                  const buttons = [{ id: 'DRAFT_REPLY', title: "Draft Reply" }];
-                  await whatsapp.sendWhatsAppButtons(CONFIG, dispatchTarget, `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?\n\n_Note: A Sales ticket has been autonomously generated on the ledger._`, buttons);
+                  const draftSubject = parsedCheck.subject
+                    ? (String(parsedCheck.subject).startsWith('Re:') ? String(parsedCheck.subject) : `Re: ${parsedCheck.subject}`)
+                    : 'Re: Bounce Padel Commercial Inquiry';
+
+                  draftingSessions.set(speakerPhone, {
+                    active: false,
+                    context: extractedOcr,
+                    subject: draftSubject,
+                    targetEmail: resolvedTargetEmail,
+                    salesTicketId: salesTicketId,
+                    draftedBody: null,
+                    lockedUntil: null
+                  });
+
+                  const buttons = [{
+                    id: resolvedTargetEmail ? `DRAFT_REPLY_${resolvedTargetEmail}` : 'DRAFT_REPLY',
+                    title: 'Draft Reply'
+                  }];
+                  const matchLine = resolvedTargetEmail
+                    ? `\n📇 *Matched Contact:* ${matchedContactLabel ? `${matchedContactLabel} (${resolvedTargetEmail})` : resolvedTargetEmail}`
+                    : '';
+
+                  await whatsapp.sendWhatsAppButtons(
+                    CONFIG,
+                    dispatchTarget,
+                    `📸 *TITAN OS | MESSAGE SCREENSHOT DETECTED*\n──────────────────────────────\nWould you like to draft a professional reply to this message?${matchLine}\n\n_Note: A Sales ticket has been autonomously generated on the ledger._`,
+                    buttons
+                  );
                   return;
                 }
               }
@@ -2793,6 +3172,28 @@ app.post('/webhook', async (req, res) => {
           const transcript = spokenTriage.transcript_en || '';
           const transcriptLower = transcript.toLowerCase();
 
+          // Post-Draft 10-Min Lock Check for Voice Confirmations (e.g., "Please send the email")
+          if (draftingSessions.has(speakerPhone)) {
+            const lockedSession = draftingSessions.get(speakerPhone);
+            if (lockedSession.lockedUntil && Date.now() < lockedSession.lockedUntil && lockedSession.draftedBody) {
+              if (/\b(send|dispatch|forward)\b.*\b(email|it|reply|draft)\b|\bplease send\b/i.test(transcriptLower)) {
+                const inlineEmailMatch = transcript.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
+                const finalTarget = (inlineEmailMatch && inlineEmailMatch[1]) ? inlineEmailMatch[1].toLowerCase() : lockedSession.targetEmail;
+                if (finalTarget) {
+                  await dM(dispatchTarget, `⏳ Dispatching email to ${finalTarget}...`);
+                  const ok = await sendGmailViaOAuth(CONFIG, finalTarget, lockedSession.subject || 'Re: Bounce Padel Commercial Inquiry', lockedSession.draftedBody);
+                  if (ok) {
+                    await appendSalesTicketDispatchNote(lockedSession.salesTicketId, finalTarget);
+                    draftingSessions.delete(speakerPhone);
+                    return await dM(dispatchTarget, `✅ *Email Dispatched Successfully* to ${finalTarget}.`);
+                  }
+                  return await dM(dispatchTarget, `⚠️ Failed to send email via Gmail API. Check GMAIL_CLIENT_ID / GMAIL_REFRESH_TOKEN in Render.`);
+                }
+                return await dM(dispatchTarget, `📧 I have your draft ready, but no email address is attached yet. Reply with *"Send to name@domain.com"* to dispatch it.`);
+              }
+            }
+          }
+
           if (spokenTriage.intent === 'LEDGER_QUERY') {
             return await executeLedgerQuery(CONFIG, transcript, dispatchTarget);
           }
@@ -2821,7 +3222,7 @@ app.post('/webhook', async (req, res) => {
             return await finance.handleConversationalChangeOrder(CONFIG, spokenTriage, dispatchTarget, getActiveOracleURIs(), dM, dB, callerIdentity);
           }
 
-          // VOICE NLP SWARM BROADCASTER (Cross-Restart Pin Recovery + Raw GPS Fallback + Two-Way Alerts)
+          // VOICE NLP SWARM BROADCASTER (Field & Shop Dispatch)
           if (spokenTriage.intent === 'LOGISTICS_DISPATCH') {
             const requestedItem = spokenTriage.structured_payload?.item || spokenTriage.transcript_en || transcript || 'Logistics Items';
             const explicitSiteHint = spokenTriage.referenced_site_name && !/^(none|null|n\/a|unknown)$/i.test(String(spokenTriage.referenced_site_name).trim())
@@ -2849,7 +3250,7 @@ app.post('/webhook', async (req, res) => {
             const assignment = await airtableWriteWithAutoDrop('Daily Assignments', ticketPayload);
 
             if (!assignment.success || !assignment.record?.id) {
-              return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
+              return await dM(dispatchTarget, `⚠️ Failed to log dispatch request to the ledger.`);
             }
             if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
@@ -2881,11 +3282,11 @@ app.post('/webhook', async (req, res) => {
               mapLink = `https://www.google.com/maps/dir/?api=1&destination=${rawPin.lat},${rawPin.lon}`;
             }
 
-            const broadcastMsg = `🚚 *LOCAL LOGISTICS DISPATCH*\n━━━━━━━━━━━━━━━━━━━━\n📍 *Site:* ${targetSiteName}\n🗺️ *Routing:* ${mapLink}\n\n🗣️ *Requested By:* ${callerIdentity.name}\n📦 *Items:* "${requestedItem}"\n━━━━━━━━━━━━━━━━━━━━\nTap below to claim this run:`;
+            const broadcastMsg = `🚚 *FIELD & SHOP DISPATCH*\n━━━━━━━━━━━━━━━━━━━━\n📍 *Site:* ${targetSiteName}\n🗺️ *Routing:* ${mapLink}\n\n🗣️ *Requested By:* ${callerIdentity.name}\n📦 *Items:* "${requestedItem}"\n━━━━━━━━━━━━━━━━━━━━\nTap below to claim this ticket:`;
 
             const buttons = [
-              { id: `CLAIM_LOG_${ticketId}`, title: 'Claim Run' },
-              { id: `DONE_LOG_${ticketId}`, title: 'Mark Completed' }
+              { id: `CLAIM_LOG_${ticketId}`, title: 'Claim Ticket' },
+              { id: `DONE_LOG_${ticketId}`, title: 'Mark Complete' }
             ];
 
             const recipientNames = [];
@@ -2900,7 +3301,7 @@ app.post('/webhook', async (req, res) => {
             }
 
             const pinReminder = (!resolvedSite && !rawPin) ? `\n\n_Tip: Drop a 📍 Location Pin so future tickets automatically bind to your court._` : '';
-            await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged for *${targetSiteName}*.\n📣 *Swarm Notified:* ${recipientNames.join(', ') || 'Fleet'}${pinReminder}`);
+            await dM(dispatchTarget, `✅ *TITAN OS | FIELD & SHOP DISPATCH*\nTicket logged for *${targetSiteName}*.\n📣 *Swarm Notified:* ${recipientNames.join(', ') || 'Fleet'}${pinReminder}`);
 
             for (const runnerPhone of uniqueTargets) {
               await whatsapp.sendWhatsAppButtons(CONFIG, runnerPhone, broadcastMsg, buttons);
@@ -2997,7 +3398,7 @@ app.post('/webhook', async (req, res) => {
             return await executeLedgerQuery(CONFIG, transcript, dispatchTarget);
           }
 
-          const isUpdate = /\b(update site|change site|set site|update)\b/i.test(transcriptLower) || spokenTriage?.intent === 'DYNAMIC_SITE_UPDATE';
+          const isUpdate = /\b(update site|change site|set site|set maintenance subscribers|update)\b/i.test(transcriptLower) || spokenTriage?.intent === 'DYNAMIC_SITE_UPDATE';
           const isQuestion = /\b(what|who|when|where|which|how|does|do|is|are|tell me|details|config|lights?)\b/i.test(transcriptLower) || transcript.includes('?');
 
           if (isUpdate) {
@@ -3019,7 +3420,7 @@ app.post('/webhook', async (req, res) => {
                 'Milestone Timestamps JSON', 'Reports 2', 'Reports 2 (2)', 'Inbound Messages 2',
                 'Technical Docs', 'Latest Video Link', 'ToolKit URL', 'Finance & AR'
               ];
-              const knownColumns = new Set();
+              const knownColumns = new Set(['Maintenance Subscribers']);
               allSites.forEach(s => {
                 if (s.fields) {
                   Object.keys(s.fields).forEach(k => {
@@ -3132,20 +3533,63 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
         }
       }
 
-      // Active Executive Drafting Mode Interceptor
-      if (draftingSessions.has(speakerPhone) && draftingSessions.get(speakerPhone).active && !interactiveButtonId) {
-        const activeDraftSession = draftingSessions.get(speakerPhone);
-        await executeDraftingMode(CONFIG, txt, null, null, activeDraftSession, speakerPhone, dispatchTarget);
-        return;
+      // Active Executive Drafting Mode + V6.1.0 10-Minute Post-Draft Conversational Lock
+      if (draftingSessions.has(speakerPhone) && !interactiveButtonId) {
+        const session = draftingSessions.get(speakerPhone);
+
+        if (session.active) {
+          await executeDraftingMode(CONFIG, txt, null, null, session, speakerPhone, dispatchTarget);
+          return;
+        }
+
+        if (session.lockedUntil && Date.now() < session.lockedUntil && session.draftedBody) {
+          if (/^(cancel|discard|nevermind|stop)$/i.test(lTxt)) {
+            draftingSessions.delete(speakerPhone);
+            return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `🗑️ Draft cleared.`);
+          }
+
+          const inlineEmailMatch = txt.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
+          const isSendCommand = /^(?:please\s+)?(?:send|forward|dispatch|email)(?:\s+(?:it|this|the|my|email|draft|reply|now))?(?:\s+to\s+\S+)?[.!]?$/i.test(lTxt) ||
+                                (inlineEmailMatch && /\b(send|forward|dispatch|email|to)\b/i.test(lTxt));
+
+          if (isSendCommand) {
+            const finalTarget = (inlineEmailMatch && inlineEmailMatch[1]) ? inlineEmailMatch[1].toLowerCase() : session.targetEmail;
+            if (!finalTarget) {
+              return await whatsapp.sendWhatsAppMessage(
+                CONFIG,
+                dispatchTarget,
+                `📧 I don't have an email address on file for this draft yet. Reply with *"Send to name@domain.com"* and I'll dispatch it immediately.`
+              );
+            }
+            await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⏳ Dispatching email to ${finalTarget}...`);
+            const success = await sendGmailViaOAuth(
+              CONFIG,
+              finalTarget,
+              session.subject || 'Re: Bounce Padel Commercial Inquiry',
+              session.draftedBody
+            );
+            if (success) {
+              await appendSalesTicketDispatchNote(session.salesTicketId, finalTarget);
+              draftingSessions.delete(speakerPhone);
+              return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `✅ *Email Dispatched Successfully* to ${finalTarget}.`);
+            }
+            return await whatsapp.sendWhatsAppMessage(CONFIG, dispatchTarget, `⚠️ Failed to send email via Gmail API. Check GMAIL_CLIENT_ID / GMAIL_REFRESH_TOKEN in Render.`);
+          }
+
+          if (/^(change|edit|revise|update|make it|add|remove|replace)\b/i.test(lTxt)) {
+            await executeDraftingMode(CONFIG, txt, null, null, session, speakerPhone, dispatchTarget);
+            return;
+          }
+        }
       }
 
       if (lTxt === '/help' || lTxt === 'help' || lTxt === '?') {
         const helpMenu = `🛠️ *TITAN OS | COMMAND CENTER*\n` +
                          `━━━━━━━━━━━━━━━━━━━━\n` +
-                         `*👷 Field Installation*\n` +
+                         `*👷 Field Installation & Maintenance*\n` +
                          `• Drop a 📍 Pin to check in.\n` +
-                         `• Send photos/videos/receipts to log expenses or build milestones.\n` +
-                         `• Send voice notes to dynamically update court specs.\n\n` +
+                         `• Send photos/videos/receipts to log expenses, build milestones, or maintenance sweeps.\n` +
+                         `• Send voice notes to dynamically update court specs or maintenance subscribers.\n\n` +
                          `*🏟️ Court Specs & Airtable Analytics*\n` +
                          `• "What court configuration does Weiss have?"\n` +
                          `• "Does Rosenberg's court have lights?"\n` +
@@ -3287,7 +3731,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           return await finance.handleConversationalChangeOrder(CONFIG, triage, dispatchTarget, getActiveOracleURIs(), dM, dB, callerIdentity);
         }
 
-        // TEXT NLP SWARM BROADCASTER (Cross-Restart Pin Recovery + Raw GPS Fallback + Two-Way Alerts)
+        // TEXT NLP SWARM BROADCASTER (Field & Shop Dispatch)
         if (triage.intent === 'LOGISTICS_DISPATCH') {
           const requestedItem = triage.structured_payload?.item || triage.transcript_en || txt || 'Logistics Items';
           const explicitSiteHint = triage.referenced_site_name && !/^(none|null|n\/a|unknown)$/i.test(String(triage.referenced_site_name).trim())
@@ -3315,7 +3759,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           const assignment = await airtableWriteWithAutoDrop('Daily Assignments', ticketPayload);
 
           if (!assignment.success || !assignment.record?.id) {
-            return await dM(dispatchTarget, `⚠️ Failed to log logistics request to the ledger.`);
+            return await dM(dispatchTarget, `⚠️ Failed to log dispatch request to the ledger.`);
           }
           if (metrics && metrics.incrementMetric) metrics.incrementMetric('logistics_dispatches');
 
@@ -3347,11 +3791,11 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             mapLink = `https://www.google.com/maps/dir/?api=1&destination=${rawPin.lat},${rawPin.lon}`;
           }
 
-          const broadcastMsg = `🚚 *LOCAL LOGISTICS DISPATCH*\n━━━━━━━━━━━━━━━━━━━━\n📍 *Site:* ${targetSiteName}\n🗺️ *Routing:* ${mapLink}\n\n🗣️ *Requested By:* ${callerIdentity.name}\n📦 *Items:* "${requestedItem}"\n━━━━━━━━━━━━━━━━━━━━\nTap below to claim this run:`;
+          const broadcastMsg = `🚚 *FIELD & SHOP DISPATCH*\n━━━━━━━━━━━━━━━━━━━━\n📍 *Site:* ${targetSiteName}\n🗺️ *Routing:* ${mapLink}\n\n🗣️ *Requested By:* ${callerIdentity.name}\n📦 *Items:* "${requestedItem}"\n━━━━━━━━━━━━━━━━━━━━\nTap below to claim this ticket:`;
 
           const buttons = [
-            { id: `CLAIM_LOG_${ticketId}`, title: 'Claim Run' },
-            { id: `DONE_LOG_${ticketId}`, title: 'Mark Completed' }
+            { id: `CLAIM_LOG_${ticketId}`, title: 'Claim Ticket' },
+            { id: `DONE_LOG_${ticketId}`, title: 'Mark Complete' }
           ];
 
           const recipientNames = [];
@@ -3366,7 +3810,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           }
 
           const pinReminder = (!resolvedSite && !rawPin) ? `\n\n_Tip: Drop a 📍 Location Pin so future tickets automatically bind to your court._` : '';
-          await dM(dispatchTarget, `✅ *TITAN OS | LOGISTICS*\nTicket logged for *${targetSiteName}*.\n📣 *Swarm Notified:* ${recipientNames.join(', ') || 'Fleet'}${pinReminder}`);
+          await dM(dispatchTarget, `✅ *TITAN OS | FIELD & SHOP DISPATCH*\nTicket logged for *${targetSiteName}*.\n📣 *Swarm Notified:* ${recipientNames.join(', ') || 'Fleet'}${pinReminder}`);
 
           for (const runnerPhone of uniqueTargets) {
             await whatsapp.sendWhatsAppButtons(CONFIG, runnerPhone, broadcastMsg, buttons);
@@ -3464,7 +3908,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
           return await executeLedgerQuery(CONFIG, txt, dispatchTarget);
         }
 
-        const isUpdate = /\b(update site|change site|set site)\b/i.test(lTxt) || triage?.intent === 'DYNAMIC_SITE_UPDATE';
+        const isUpdate = /\b(update site|change site|set site|set maintenance subscribers)\b/i.test(lTxt) || triage?.intent === 'DYNAMIC_SITE_UPDATE';
         const isQuestion = /\b(what|who|when|where|which|how|does|do|is|are|tell me|details|config|lights?)\b/i.test(lTxt) || txt.endsWith('?');
 
         if (isUpdate) {
@@ -3484,7 +3928,7 @@ Do not wrap in markdown quotes. Return empty JSON {} if no columns identified.`;
             'Milestone Timestamps JSON', 'Reports 2', 'Reports 2 (2)', 'Inbound Messages 2',
             'Technical Docs', 'Latest Video Link', 'ToolKit URL', 'Finance & AR'
           ];
-          const knownColumns = new Set();
+          const knownColumns = new Set(['Maintenance Subscribers']);
           allSites.forEach(s => {
             if (s.fields) {
               Object.keys(s.fields).forEach(k => {
@@ -3620,14 +4064,14 @@ app.post('/api/telemetry/iot', async (req, res) => {
 });
 
 // ====================================================================
-// 6. COMMERCIAL EMAIL INGRESS (AIRTABLE / MAKE / PUBSUB WEBHOOKS)
+// 6. COMMERCIAL EMAIL INGRESS (DEDUPLICATED SINGLE-PASS WEBHOOK)
 // ====================================================================
 async function processInboundEmailWebhook(req, res) {
   res.sendStatus(200);
 
   try {
     const b = req.body || {};
-    const fromAddr = b.from || b.sender || b.From || b.email || b.Email || 'Airtable Lead System';
+    const fromAddr = b.from || b.sender || b.From || b.email || b.Email || '';
     const subjectLine = b.subject || b.Subject || b.title || 'Inbound Commercial Inquiry';
 
     let rawText = '';
@@ -3644,54 +4088,16 @@ async function processInboundEmailWebhook(req, res) {
       return;
     }
 
-    console.log(`[Email Ingress] Processing email from ${fromAddr}: "${subjectLine}"`);
+    console.log(`[Email Ingress] Processing webhook email from ${fromAddr || 'Unknown'}: "${subjectLine}"`);
 
-    const emailMatch = String(fromAddr).match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
-    if (emailMatch && emailMatch[1]) {
-      const targetEmail = emailMatch[1].toLowerCase().trim();
-      draftingSessions.set(CONFIG.meta.targetVerifiedPhone, {
-        active: false,
-        context: `From: ${fromAddr}\nSubject: ${subjectLine}\n\n${cleanText.slice(0, 2000)}`,
-        subject: subjectLine.startsWith('Re:') ? subjectLine : `Re: ${subjectLine}`,
-        targetEmail: targetEmail
-      });
-
-      // TITAN OS DIRECT DISPATCH NOTIFICATION
-      try {
-        const buttons = [{ id: `DRAFT_REPLY_${targetEmail}`, title: "Draft Reply" }];
-        const leadCard = `📧 *TITAN OS | COMMERCIAL LEAD DETECTED*\n──────────────────────────────\n*From:* ${fromAddr}\n*Subject:* ${subjectLine}\n\n${cleanText.slice(0, 300)}...\n──────────────────────────────\nWould you like to draft a professional reply?`;
-
-        if (whatsapp && whatsapp.sendWhatsAppButtons) {
-          await whatsapp.sendWhatsAppButtons(CONFIG, CONFIG.meta.targetVerifiedPhone, leadCard, buttons);
-        }
-      } catch(e) {
-        console.error('[Email Ingress] Failed to alert admin:', e);
-      }
-
-      // AUTONOMOUS DAILY ASSIGNMENT FOR EMAIL LEAD
-      try {
-        await airtableWriteWithAutoDrop('Daily Assignments', {
-          'Assignment Type': 'Sales',
-          'Status': 'Open',
-          'Priority': 'High',
-          'Notes': `[COMMERCIAL LEAD - EMAIL] Follow up required with ${fromAddr}.\n\nSubject: ${subjectLine}\n\n${cleanText.slice(0, 500)}...`
-        });
-      } catch(e) {
-        console.error('[Email Ingress] Failed to create assignment:', e);
-      }
-    }
-
-    if (whatsapp && whatsapp.handleInboundEmail) {
-      const emailPayload = {
-        from: fromAddr,
-        to: b.to || '',
-        cc: b.cc || '',
-        subject: subjectLine,
-        text: cleanText,
-        html: b.html || ''
-      };
-      await whatsapp.handleInboundEmail(CONFIG, emailPayload, getCachedContacts);
-    }
+    await handleInternalEmailRouting({
+      from: fromAddr,
+      to: b.to || '',
+      cc: b.cc || '',
+      subject: subjectLine,
+      text: cleanText,
+      html: b.html || ''
+    });
   } catch (err) {
     console.error('[Runtime Exception in Inbound Email Webhook]:', err.message);
   }
@@ -3721,7 +4127,7 @@ app.post('/api/sync-oracle', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    version: '6.0.45',
+    version: '6.1.0',
     oracleDocsLoaded: getActiveOracleURIs().length,
     sitesCached: Array.isArray(memoryCache.sites) ? memoryCache.sites.length : 0,
     sitesTableResolved: airtableSchemaCache.sitesTable,
@@ -3772,7 +4178,7 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
     : 'MISSING';
 
   console.log(`====================================================================`);
-  console.log(`🚀 TITAN OS V6.0.45 SINGLE-THREADED ORCHESTRATOR RUNNING`);
+  console.log(`🚀 TITAN OS V6.1.0 SINGLE-THREADED ORCHESTRATOR RUNNING`);
   console.log(`🔑 Airtable Auth: ${keyFingerprint} | Base: ${CONFIG.airtable.baseId}`);
   console.log(`====================================================================`);
 
@@ -3792,6 +4198,11 @@ if (!globalThis.__TITAN_SERVER_INITIALIZED__) {
       await hydrateQBOCache();
 
       startFridayNewsletterCron();
+
+      // V6.1.0 Native 2-Minute Gmail REST Background Poller
+      setTimeout(() => { pollUnreadInboundEmails(); }, 15000);
+      setInterval(() => { pollUnreadInboundEmails(); }, 120000);
+
       if (oracle && oracle.syncOracleDocs) {
         oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; });
         setInterval(() => { oracle.syncOracleDocs(CONFIG, (uris) => { oracleFileURIs = uris; }); }, 24 * 60 * 60 * 1000);
